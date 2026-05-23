@@ -270,7 +270,7 @@ impl BridgeManager {
 
     async fn ble_reader_task(
         addr: Address,
-        mut reader: bluer::gatt::local::CharacteristicReader,
+        mut reader: bluer::gatt::CharacteristicReader,
         tx: mpsc::Sender<BleEvent>,
     ) {
         let mut buf = vec![0u8; 512];
