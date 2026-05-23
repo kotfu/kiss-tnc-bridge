@@ -1,0 +1,13 @@
+[Unit]
+Description=KISS TNC BLE-to-TCP Bridge
+After=bluetooth.target network.target
+Requires=bluetooth.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/kiss-tnc-bridge
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
