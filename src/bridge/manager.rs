@@ -147,6 +147,34 @@ impl BridgeManager {
                                 "BLE client subscribed (notify)"
                             );
                             writers.insert(addr, notifier);
+
+                            // Establish the TCP connection on subscribe too,
+                            // not only on write — the phone may subscribe for
+                            // RX notifications before it ever sends a frame.
+                            if tcp.is_none() {
+                                match TcpKissConnection::connect(
+                                    &self.config.host,
+                                    self.config.port,
+                                ).await {
+                                    Ok(conn) => {
+                                        tracing::info!(
+                                            tnc = tnc_name,
+                                            host = self.config.host,
+                                            port = self.config.port,
+                                            "TCP connected"
+                                        );
+                                        tcp = Some(conn);
+                                        tcp_reconnect_delay = Duration::from_secs(1);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(
+                                            tnc = tnc_name,
+                                            error = %e,
+                                            "TCP connection failed"
+                                        );
+                                    }
+                                }
+                            }
                         }
                         Some(_) => {}
                         None => {
