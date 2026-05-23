@@ -113,7 +113,19 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         let adapter = session.adapter(adapter_name)?;
         adapter.set_powered(true).await?;
 
-        tracing::info!(adapter = adapter_name, "BLE adapter powered on");
+        // Set the adapter alias so connected clients see the TNC name
+        // instead of the system hostname. With multiple TNCs on one adapter,
+        // use the first TNC's name.
+        if let Some(first_tnc) = _cfg.tncs.first() {
+            adapter.set_alias(first_tnc.name.clone()).await?;
+            tracing::info!(
+                adapter = adapter_name,
+                alias = first_tnc.name,
+                "BLE adapter powered on"
+            );
+        } else {
+            tracing::info!(adapter = adapter_name, "BLE adapter powered on");
+        }
 
         let (app, tnc_handles) = gatt::build_application(&_cfg.tncs);
         let _app_handle = adapter.serve_gatt_application(app).await?;
