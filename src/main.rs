@@ -112,6 +112,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         let adapter_name = _cfg.global.adapter.as_deref().unwrap_or("hci0");
         let adapter = session.adapter(adapter_name)?;
         adapter.set_powered(true).await?;
+        adapter.set_pairable(false).await?;
 
         // Set the adapter alias so connected clients see the TNC name
         // instead of the system hostname. With multiple TNCs on one adapter,
