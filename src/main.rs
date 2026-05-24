@@ -104,7 +104,6 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
     #[cfg(target_os = "linux")]
     {
-        use bluer::adv::Advertisement;
         use crate::ble::gatt;
         use crate::bridge::manager::BridgeManager;
 
@@ -132,25 +131,10 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         let _app_handle = adapter.serve_gatt_application(app).await?;
         tracing::info!("GATT application registered");
 
-        let mut adv_handles = Vec::new();
         let mut tasks = Vec::new();
 
         for handle in tnc_handles {
             let tnc_name = handle.tnc_config.name.clone();
-
-            let adv = Advertisement {
-                advertisement_type: bluer::adv::Type::Peripheral,
-                service_uuids: vec![
-                    uuid::Uuid::from_u128(0x00000001_ba2a_46c9_ae49_01b0961f68bb)
-                ].into_iter().collect(),
-                local_name: Some(tnc_name.clone()),
-                discoverable: Some(true),
-                ..Default::default()
-            };
-
-            let adv_handle = adapter.advertise(adv).await?;
-            tracing::info!(tnc = tnc_name, "advertising BLE service");
-            adv_handles.push(adv_handle);
 
             let manager = BridgeManager::new(
                 handle.tnc_config,
@@ -169,7 +153,6 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         tokio::signal::ctrl_c().await?;
         tracing::info!("shutting down");
 
-        drop(adv_handles);
         drop(_app_handle);
 
         Ok(())

@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
+use bluer::adv::{Advertisement, AdvertisementHandle};
 use bluer::gatt::local::{CharacteristicControl, CharacteristicControlEvent};
 use bluer::gatt::CharacteristicWriter;
 use bluer::Address;
@@ -79,11 +80,30 @@ impl BridgeManager {
         }
     }
 
+    async fn start_advertising(&self) -> Result<AdvertisementHandle, Error> {
+        let adv = Advertisement {
+            advertisement_type: bluer::adv::Type::Peripheral,
+            service_uuids: vec![
+                uuid::Uuid::from_u128(0x00000001_ba2a_46c9_ae49_01b0961f68bb),
+            ]
+            .into_iter()
+            .collect(),
+            local_name: Some(self.config.name.clone()),
+            discoverable: Some(true),
+            ..Default::default()
+        };
+        let handle = self.adapter.advertise(adv).await?;
+        tracing::info!(tnc = self.config.name, "advertising BLE service");
+        Ok(handle)
+    }
+
     pub async fn run(mut self) -> Result<(), Error> {
         let mut clients: HashMap<Address, BleClientSession> = HashMap::new();
         let mut writers: HashMap<Address, mpsc::Sender<Vec<u8>>> = HashMap::new();
         let mut tcp: Option<TcpKissConnection> = None;
         let mut tcp_reconnect_delay = Duration::from_secs(1);
+        let mut adv_handle: Option<AdvertisementHandle> =
+            Some(self.start_advertising().await?);
 
         let (ble_event_tx, mut ble_event_rx) = mpsc::channel::<BleEvent>(64);
 
@@ -225,6 +245,18 @@ impl BridgeManager {
                                     }
                                 }
                             }
+
+                            // Stop advertising when full so new devices
+                            // don't see us and try to connect.
+                            if writers.len() >= self.config.max_clients
+                                && adv_handle.is_some()
+                            {
+                                tracing::info!(
+                                    tnc = tnc_name,
+                                    "max clients reached, stopping advertisement"
+                                );
+                                adv_handle = None;
+                            }
                         }
                         Some(_) => {}
                         None => {
@@ -280,6 +312,19 @@ impl BridgeManager {
                                     tcp = None;
                                 }
                             }
+                            // Resume advertising if we now have capacity.
+                            if writers.len() < self.config.max_clients
+                                && adv_handle.is_none()
+                            {
+                                match self.start_advertising().await {
+                                    Ok(h) => adv_handle = Some(h),
+                                    Err(e) => tracing::error!(
+                                        tnc = tnc_name,
+                                        error = %e,
+                                        "failed to resume advertising"
+                                    ),
+                                }
+                            }
                         }
                     }
                 }
@@ -293,11 +338,24 @@ impl BridgeManager {
                     match frame_result {
                         Ok(raw_frame) => {
                             let encoded = Self::wrap_with_fend(&raw_frame);
-                            Self::dispatch_to_clients(
+                            let removed_any = Self::dispatch_to_clients(
                                 &mut writers,
                                 encoded,
                                 tnc_name,
                             );
+                            if removed_any
+                                && writers.len() < self.config.max_clients
+                                && adv_handle.is_none()
+                            {
+                                match self.start_advertising().await {
+                                    Ok(h) => adv_handle = Some(h),
+                                    Err(e) => tracing::error!(
+                                        tnc = tnc_name,
+                                        error = %e,
+                                        "failed to resume advertising"
+                                    ),
+                                }
+                            }
                         }
                         Err(e) => {
                             tracing::error!(
@@ -379,12 +437,12 @@ impl BridgeManager {
     /// Non-blocking dispatch: sends the frame into each client's channel.
     /// Removes clients whose channels are closed (writer task exited) or
     /// full (client can't keep up). Never awaits, never blocks the select
-    /// loop.
+    /// loop. Returns true if any clients were removed.
     fn dispatch_to_clients(
         writers: &mut HashMap<Address, mpsc::Sender<Vec<u8>>>,
         frame_bytes: Vec<u8>,
         tnc_name: &str,
-    ) {
+    ) -> bool {
         let mut to_remove = Vec::new();
         for (&addr, sender) in writers.iter() {
             if let Err(e) = sender.try_send(frame_bytes.clone()) {
@@ -397,9 +455,11 @@ impl BridgeManager {
                 to_remove.push(addr);
             }
         }
+        let removed = !to_remove.is_empty();
         for addr in to_remove {
             writers.remove(&addr);
         }
+        removed
     }
 
     /// Per-client task: owns the CharacteristicWriter and drains the
