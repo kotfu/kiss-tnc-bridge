@@ -18,9 +18,15 @@ jobs:
           - target: x86_64-unknown-linux-gnu
             arch: amd64
             use_cross: false
+            build_rpm: true
           - target: aarch64-unknown-linux-gnu
             arch: arm64
             use_cross: true
+            build_rpm: true
+          - target: arm-unknown-linux-gnueabihf
+            arch: armhf
+            use_cross: true
+            build_rpm: false
 
     steps:
       - uses: actions/checkout@v4
@@ -53,9 +59,11 @@ jobs:
         run: cargo deb --no-build --target ${{ matrix.target }}
 
       - name: Install cargo-generate-rpm
+        if: matrix.build_rpm
         run: cargo install cargo-generate-rpm
 
       - name: Build rpm package
+        if: matrix.build_rpm
         run: cargo generate-rpm --target ${{ matrix.target }}
 
       - name: Create tarball
