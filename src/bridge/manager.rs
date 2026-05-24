@@ -54,7 +54,7 @@ impl BridgeManager {
 
     pub async fn run(mut self) -> Result<(), Error> {
         let mut clients: HashMap<Address, BleClientSession> = HashMap::new();
-        let mut writers: HashMap<Address, CharacteristicWriter> = HashMap::new();
+        let mut writers: HashMap<Address, mpsc::Sender<Vec<u8>>> = HashMap::new();
         let mut tcp: Option<TcpKissConnection> = None;
         let mut tcp_reconnect_delay = Duration::from_secs(1);
 
@@ -146,7 +146,12 @@ impl BridgeManager {
                                 addr = %addr,
                                 "BLE client subscribed (notify)"
                             );
-                            writers.insert(addr, notifier);
+                            let (send_tx, send_rx) = mpsc::channel::<Vec<u8>>(32);
+                            writers.insert(addr, send_tx);
+                            let name = tnc_name.to_string();
+                            tokio::spawn(Self::ble_writer_task(
+                                addr, notifier, send_rx, name,
+                            ));
 
                             // Establish the TCP connection on subscribe too,
                             // not only on write — the phone may subscribe for
@@ -243,11 +248,11 @@ impl BridgeManager {
                     match frame_result {
                         Ok(raw_frame) => {
                             let encoded = Self::wrap_with_fend(&raw_frame);
-                            Self::notify_all_clients(
+                            Self::dispatch_to_clients(
                                 &mut writers,
-                                &encoded,
+                                encoded,
                                 tnc_name,
-                            ).await;
+                            );
                         }
                         Err(e) => {
                             tracing::error!(
@@ -326,30 +331,72 @@ impl BridgeManager {
         out
     }
 
-    async fn notify_all_clients(
-        writers: &mut HashMap<Address, CharacteristicWriter>,
-        frame_bytes: &[u8],
+    /// Non-blocking dispatch: sends the frame into each client's channel.
+    /// Removes clients whose channels are closed (writer task exited) or
+    /// full (client can't keep up). Never awaits, never blocks the select
+    /// loop.
+    fn dispatch_to_clients(
+        writers: &mut HashMap<Address, mpsc::Sender<Vec<u8>>>,
+        frame_bytes: Vec<u8>,
         tnc_name: &str,
     ) {
         let mut to_remove = Vec::new();
-        for (&addr, writer) in writers.iter_mut() {
-            let mtu = writer.mtu();
-            let chunk_size = if mtu > 0 { mtu as usize } else { 20 };
-            for chunk in frame_bytes.chunks(chunk_size) {
-                if let Err(e) = writer.send(chunk).await {
-                    tracing::warn!(
-                        tnc = tnc_name,
-                        addr = %addr,
-                        error = %e,
-                        "BLE notify failed"
-                    );
-                    to_remove.push(addr);
-                    break;
-                }
+        for (&addr, sender) in writers.iter() {
+            if let Err(e) = sender.try_send(frame_bytes.clone()) {
+                tracing::warn!(
+                    tnc = tnc_name,
+                    addr = %addr,
+                    error = %e,
+                    "BLE client send channel failed, removing"
+                );
+                to_remove.push(addr);
             }
         }
         for addr in to_remove {
             writers.remove(&addr);
+        }
+    }
+
+    /// Per-client task: owns the CharacteristicWriter and drains the
+    /// channel, writing BLE notifications with a timeout. Exits on
+    /// write error, timeout, or channel close — the Receiver is dropped,
+    /// causing the next dispatch_to_clients try_send to fail and clean
+    /// up the map entry.
+    async fn ble_writer_task(
+        addr: Address,
+        mut writer: CharacteristicWriter,
+        mut rx: mpsc::Receiver<Vec<u8>>,
+        tnc_name: String,
+    ) {
+        let mtu = writer.mtu();
+        let chunk_size = if mtu > 0 { mtu as usize } else { 20 };
+
+        while let Some(frame_bytes) = rx.recv().await {
+            for chunk in frame_bytes.chunks(chunk_size) {
+                match tokio::time::timeout(
+                    Duration::from_secs(2),
+                    writer.send(chunk),
+                ).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => {
+                        tracing::warn!(
+                            tnc = &tnc_name,
+                            addr = %addr,
+                            error = %e,
+                            "BLE notify failed"
+                        );
+                        return;
+                    }
+                    Err(_) => {
+                        tracing::warn!(
+                            tnc = &tnc_name,
+                            addr = %addr,
+                            "BLE notify timed out, removing stale client"
+                        );
+                        return;
+                    }
+                }
+            }
         }
     }
 }
