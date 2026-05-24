@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Daemon to bridge Bluetooth KISS TNCs to TCP KISS TNCs"
+publish = false
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

@@ -22,26 +22,28 @@ This project uses [Semantic Versioning](https://semver.org/). Applied to this pr
 
 ## Creating a release
 
-1. Update the `version` field in `Cargo.toml`:
+Releases are created using [cargo-release](https://github.com/crate-ci/cargo-release).
+Install it once with:
 
-   ```toml
-   [package]
-   version = "0.2.0"
-   ```
+```
+$ cargo install cargo-release
+```
 
-2. Commit the version bump:
+Before creating a release:
 
-   ```
-   git add Cargo.toml Cargo.lock
-   git commit -m "Bump version to 0.2.0"
-   ```
+1. Update `CHANGELOG.md` with the changes for the new version.
+2. Commit the changelog update.
+3. Run `cargo release` with the appropriate bump level:
 
-3. Tag the commit and push:
+```
+$ cargo release patch   # 0.1.0 → 0.1.1
+$ cargo release minor   # 0.1.0 → 0.2.0
+$ cargo release major   # 0.1.0 → 1.0.0
+```
 
-   ```
-   git tag v0.2.0
-   git push && git push --tags
-   ```
+This will bump the version in `Cargo.toml`, commit, tag with a `v` prefix (e.g.,
+`v0.2.0`), and push. Add `--execute` to actually perform the release — without it,
+`cargo release` does a dry run.
 
 The tag **must** start with `v` and the version after the `v` **must** match the
 version in `Cargo.toml`. The CI workflow verifies this and will fail if they don't
