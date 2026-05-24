@@ -221,7 +221,7 @@ impl BridgeManager {
                             );
                             clients.remove(&addr);
                             writers.remove(&addr);
-                            if clients.is_empty() {
+                            if clients.is_empty() && writers.is_empty() {
                                 if tcp.is_some() {
                                     tracing::info!(
                                         tnc = tnc_name,
