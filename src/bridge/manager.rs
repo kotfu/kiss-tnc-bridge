@@ -215,7 +215,12 @@ impl BridgeManager {
                             writers.insert(addr, send_tx);
                             let name = tnc_name.to_string();
                             tokio::spawn(Self::ble_writer_task(
-                                addr, notifier, send_rx, name,
+                                self.adapter.clone(),
+                                addr,
+                                notifier,
+                                send_rx,
+                                ble_event_tx.clone(),
+                                name,
                             ));
 
                             // Establish the TCP connection on subscribe too,
@@ -302,7 +307,15 @@ impl BridgeManager {
                                 "BLE client disconnected"
                             );
                             clients.remove(&addr);
-                            writers.remove(&addr);
+                            // Only remove the writer if the channel is
+                            // actually dead — guards against a reconnect
+                            // that already replaced the sender.
+                            let writer_dead = writers
+                                .get(&addr)
+                                .map_or(true, |s| s.is_closed());
+                            if writer_dead {
+                                writers.remove(&addr);
+                            }
                             if clients.is_empty() && writers.is_empty() {
                                 if tcp.is_some() {
                                     tracing::info!(
@@ -463,44 +476,87 @@ impl BridgeManager {
     }
 
     /// Per-client task: owns the CharacteristicWriter and drains the
-    /// channel, writing BLE notifications with a timeout. Exits on
-    /// write error, timeout, or channel close — the Receiver is dropped,
-    /// causing the next dispatch_to_clients try_send to fail and clean
-    /// up the map entry.
+    /// channel, writing BLE notifications with a timeout. Also monitors
+    /// the BLE connection state so we detect disconnects promptly even
+    /// when no TCP data is flowing. On exit (for any reason), sends a
+    /// disconnect event to the main loop.
     async fn ble_writer_task(
+        adapter: bluer::Adapter,
         addr: Address,
         mut writer: CharacteristicWriter,
         mut rx: mpsc::Receiver<Vec<u8>>,
+        ble_event_tx: mpsc::Sender<BleEvent>,
         tnc_name: String,
     ) {
         let mtu = writer.mtu();
         let chunk_size = if mtu > 0 { mtu as usize } else { 20 };
 
-        while let Some(frame_bytes) = rx.recv().await {
-            for chunk in frame_bytes.chunks(chunk_size) {
-                match tokio::time::timeout(
-                    Duration::from_secs(2),
-                    writer.send(chunk),
-                ).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(e)) => {
-                        tracing::warn!(
-                            tnc = &tnc_name,
-                            addr = %addr,
-                            error = %e,
-                            "BLE notify failed"
-                        );
-                        return;
-                    }
-                    Err(_) => {
-                        tracing::warn!(
-                            tnc = &tnc_name,
-                            addr = %addr,
-                            "BLE notify timed out, removing stale client"
-                        );
-                        return;
+        let exit_reason = loop {
+            tokio::select! {
+                frame = rx.recv() => {
+                    match frame {
+                        Some(frame_bytes) => {
+                            let mut failed = false;
+                            for chunk in frame_bytes.chunks(chunk_size) {
+                                match tokio::time::timeout(
+                                    Duration::from_secs(2),
+                                    writer.send(chunk),
+                                ).await {
+                                    Ok(Ok(())) => {}
+                                    Ok(Err(e)) => {
+                                        tracing::warn!(
+                                            tnc = &tnc_name,
+                                            addr = %addr,
+                                            error = %e,
+                                            "BLE notify failed"
+                                        );
+                                        failed = true;
+                                        break;
+                                    }
+                                    Err(_) => {
+                                        tracing::warn!(
+                                            tnc = &tnc_name,
+                                            addr = %addr,
+                                            "BLE notify timed out, removing stale client"
+                                        );
+                                        failed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if failed {
+                                break "write failed";
+                            }
+                        }
+                        None => break "channel closed",
                     }
                 }
+                _ = Self::wait_for_disconnect(&adapter, addr) => {
+                    break "BLE disconnected";
+                }
+            }
+        };
+
+        tracing::info!(
+            tnc = &tnc_name,
+            addr = %addr,
+            reason = exit_reason,
+            "BLE writer task exiting"
+        );
+        let _ = ble_event_tx.send(BleEvent::Disconnected(addr)).await;
+    }
+
+    /// Polls the BLE connection state and returns when the device is no
+    /// longer connected. Checks once per second.
+    async fn wait_for_disconnect(adapter: &bluer::Adapter, addr: Address) {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            match adapter.device(addr) {
+                Ok(device) => match device.is_connected().await {
+                    Ok(true) => continue,
+                    _ => return,
+                },
+                Err(_) => return,
             }
         }
     }
