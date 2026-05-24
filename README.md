@@ -96,9 +96,9 @@ The config file is `/etc/kiss-tnc-bridge.conf` (INI format):
 log_level = info
 # adapter = hci0
 
-[APRS iGate]
+[Graywolf TNC]
 host = 127.0.0.1
-port = 8001
+port = 6700
 max_clients = 3
 
 [Winlink TNC]
@@ -107,7 +107,8 @@ port = 8001
 max_clients = 2
 ```
 
-Each section (other than `[global]`) defines a KISS TNC TCP server to bridge. The section name is used as the BLE advertised name.
+Each section (other than `[global]`) defines a KISS TNC TCP server to bridge. The section
+name is used as the BLE advertised name.
 
 ### Configuration keys
 
@@ -164,6 +165,14 @@ should be aware of.
   device is disconnected. This only matters if you have the maximum number of
   clients connected and are antsy to get another one connected.
 - So far, I haven't done much testing with multiple TNCs and BLE GATT advertisements
+- A typical APRS TNC doesn't generate that much traffic or load. However, many single
+  board computers have made design choices that can impact performance. For example,
+  on a Raspberry Pi 4, there is a single chip supporting WiFi and Bluetooth, on a
+  single internal antenna. If either WiFi or Bluetooth have meaningful load and/or
+  the CPU is under load, you may see bluetooth performance problems or unreliable
+  connections. One possible fix is to move WiFi to a 5GHz network to reduce the RF
+  interference. Another possible fix is to add a USB Bluetooth dongle with an
+  external antenna.
 
 
 ## Supported Hardware

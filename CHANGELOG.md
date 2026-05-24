@@ -9,8 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release with the following features:
 
-- Bridging a TCP KISS TNC to Bluetooth Low Energy device
+- Bridges a TCP KISS TNC to a Bluetooth Low Energy device
+- Multiple TCP servers
 - Multiple bluetooth clients per TCP server
-- Multiple TCP serverse
 - Runs on Linux
-
