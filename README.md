@@ -2,7 +2,27 @@
 
 Daemon to bridge Bluetooth KISS TNCs to TCP KISS TNCs.
 
-Advertises BLE GATT services following the [BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md), allowing APRS apps on phones to connect via Bluetooth and have their KISS frames forwarded to a TCP KISS TNC server (e.g., Direwolf).
+Advertises Bluetooth Low Energy (BLE) General Attribute Profile (GATT) following
+the [BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
+This allows APRS apps to connect via Bluetooth and have their KISS frames
+forwarded to a TCP KISS TNC server like [Dire Wolf](https://github.com/wb2osz/direwolf)
+or [Graywolf](https://github.com/chrissnell/graywolf).
+
+## Why does this exist?
+
+If you already have a KISS TNC server running on TCP, why would you want it to work via
+Bluetooth?
+
+1. In a scenario where power consumption matters more than range, Bluetooth Low Energy
+   uses less power than WiFi.
+2. On Apple's iOS, the [aprs.fi](https://apps.apple.com/us/app/aprs-fi/id922155038) app
+   can not use WiFi when it's not the foreground app. But it can use bluetooth, allowing
+   it to remain connected in the background
+3. I created a portable APRS station using [Graywolf](https://github.com/chrissnell/graywolf)
+   on a Raspberry Pi. Graywolf can be configured to create a TCP KISS TNC so multiple
+   apps can use the radio set up in Graywolf. `kiss-tnc-bridge` let's a mobile device use
+   Graywolf's TNC without having to have any WiFi available.
+
 
 ## Features
 
@@ -11,7 +31,8 @@ Advertises BLE GATT services following the [BLE KISS API spec](https://github.co
 - Per-client KISS frame reassembly across BLE MTU boundaries
 - Bidirectional bridging: BLE clients receive all frames from the TNC
 - Automatic TCP reconnection with exponential backoff
-- Runs as a systemd service
+- Runs from the command line or as a `systemd` service
+
 
 ## Installation
 
@@ -28,10 +49,35 @@ Download the latest release from the [Releases](../../releases) page:
 Requires Rust toolchain and `libdbus-1-dev` (Debian/Ubuntu) or `dbus-devel` (RHEL/Fedora):
 
 ```
-sudo apt-get install libdbus-1-dev pkg-config   # Debian/Ubuntu
-cargo build --release
-sudo cp target/release/kiss-tnc-bridge /usr/bin/
+$ sudo apt-get install libdbus-1-dev pkg-config   # Debian/Ubuntu
+$ cargo build --release
+$ sudo cp target/release/kiss-tnc-bridge /usr/bin/
 ```
+
+
+## Usage
+
+```
+kiss-tnc-bridge [OPTIONS]
+
+Options:
+  -c, --config <FILE>   Path to config file [default: /etc/kiss-tnc-bridge.conf]
+  -t, --test-config     Parse the config file and exit (0 = valid, 1 = error)
+  -d, --debug           Increase log verbosity (-d = debug, -dd = trace)
+  -v, --version         Show version and exit
+  -h, --help            Show help and exit
+```
+
+### Running as a systemd service
+
+```
+sudo cp kiss-tnc-bridge.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kiss-tnc-bridge
+```
+
+View logs: `journalctl -u kiss-tnc-bridge -f`
+
 
 ## Configuration
 
@@ -80,28 +126,7 @@ kiss-tnc-bridge -t -c /etc/kiss-tnc-bridge.conf
 
 Exits 0 if valid, 1 if there are errors.
 
-## Usage
 
-```
-kiss-tnc-bridge [OPTIONS]
-
-Options:
-  -c, --config <FILE>   Path to config file [default: /etc/kiss-tnc-bridge.conf]
-  -t, --test-config     Parse the config file and exit (0 = valid, 1 = error)
-  -d, --debug           Increase log verbosity (-d = debug, -dd = trace)
-  -v, --version         Show version and exit
-  -h, --help            Show help and exit
-```
-
-### Running as a systemd service
-
-```
-sudo cp kiss-tnc-bridge.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now kiss-tnc-bridge
-```
-
-View logs: `journalctl -u kiss-tnc-bridge -f`
 
 ## Releasing
 
