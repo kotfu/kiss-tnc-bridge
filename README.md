@@ -17,10 +17,10 @@ Bluetooth?
    uses less power than WiFi.
 2. On Apple's iOS, the [aprs.fi](https://apps.apple.com/us/app/aprs-fi/id922155038) app
    can not use WiFi when it's not the foreground app. But it can use bluetooth, allowing
-   it to remain connected in the background
+   it to remain connected in the background.
 3. I created a portable APRS station using [Graywolf](https://github.com/chrissnell/graywolf)
    on a Raspberry Pi. Graywolf can be configured to create a TCP KISS TNC so multiple
-   apps can use the radio set up in Graywolf. `kiss-tnc-bridge` let's a mobile device use
+   apps can use the radio set up in Graywolf. `kiss-tnc-bridge` lets a mobile device use
    Graywolf's TNC without having to have any WiFi available.
 
 
@@ -38,11 +38,24 @@ Bluetooth?
 
 ### From release packages
 
-Download the latest release from the [Releases](../../releases) page:
+Download the latest release from the [Releases](../../releases) page. Releases are
+available in amd64 (x86_64), arm64 (aarch64), and armhf (ARMv6) architectures.
 
 - **Debian/Ubuntu**: `sudo dpkg -i kiss-tnc-bridge_*.deb`
 - **RHEL/Fedora**: `sudo rpm -i kiss-tnc-bridge-*.rpm`
 - **Generic Linux**: extract the tarball and copy `kiss-tnc-bridge` to `/usr/bin/`
+
+Most Raspberry Pi models run a 64-bit OS and should use the **arm64** packages. The
+**armhf** packages are for older 32-bit-only Raspberry Pi models:
+
+- Raspberry Pi 1 Model A/A+/B/B+
+- Raspberry Pi Zero and Zero W
+- Raspberry Pi Compute Module 1
+
+These older boards require 32-bit Raspberry Pi OS (Bullseye or later). If you're
+running one of these boards, download the `armhf` `.deb` or tarball. Note that
+none of these boards have built-in Bluetooth Low Energy, so you'll need a USB
+Bluetooth adapter — see [Supported Hardware](#supported-hardware) for recommendations.
 
 ### From source
 
@@ -69,7 +82,7 @@ Options:
 ```
 
 When running from the command line, `kiss-tnc-bridge` will show the log
-of events to standard output. Type `Control-C` to quit.
+of events in the terminal. Type `Control-C` to quit.
 
 The `-d` option overrides the log level in the configuration file.
 
@@ -79,9 +92,9 @@ You probably want `kiss-tnc-bridge` to run in the background when the system
 starts. Use the included service file:
 
 ```
-sudo cp kiss-tnc-bridge.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now kiss-tnc-bridge
+$ sudo cp kiss-tnc-bridge.service /etc/systemd/system/
+$ sudo systemctl daemon-reload
+$ sudo systemctl enable --now kiss-tnc-bridge
 ```
 
 View logs: `journalctl -u kiss-tnc-bridge -f`
@@ -119,7 +132,7 @@ name is used as the BLE advertised name.
 | `log_level` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
 | `adapter` | system default | BlueZ adapter name (e.g., `hci0`) |
 
-Most device only have a single bluetooth adapter, and `kiss-tnc-server` can reliably
+Most devices only have a single bluetooth adapter, and `kiss-tnc-bridge` can reliably
 find it. That means you can usually just not specify the adapter. If you have multiple
 or want to specify it, you can get a list of adapters by:
 ```
@@ -140,13 +153,14 @@ consumers will see in their applications when scanning for services.
 
 When the maximum number of clients are connected, `kiss-tnc-bridge` will
 stop advertising the service and not allow any additional clients to connect
-until one of the existing clients has disconnected. See `Limitations and Caveats`
-below for more info about maximum clients.
+until one of the existing clients has disconnected. See
+[Limitations and Caveats](#limitations-and-caveats) below for more info about
+maximum clients.
 
 ### Validate config
 
 ```
-kiss-tnc-bridge -t -c /etc/kiss-tnc-bridge.conf
+$ kiss-tnc-bridge -t -c /etc/kiss-tnc-bridge.conf
 ```
 
 Exits 0 if valid, 1 if there are errors.
@@ -160,11 +174,11 @@ should be aware of.
 - Most bluetooth chips have a practical limit to the number of concurrent
   connections, often in the 5-7 range. If you wanna run a dozen clients, best to
   connect to your TNC directly via TCP instead of BLE.
-- It may take 5-10 seconds from the time a connected bluetooth devices moves out
+- It may take 5-10 seconds from the time a connected bluetooth device moves out
   of RF range before the operating system notifies `kiss-tnc-bridge` that the
   device is disconnected. This only matters if you have the maximum number of
   clients connected and are antsy to get another one connected.
-- So far, I haven't done much testing with multiple TNCs and BLE GATT advertisements
+- So far, I haven't done much testing with multiple TNCs and BLE GATT advertisements.
 - A typical APRS TNC doesn't generate that much traffic or load. However, many single
   board computers have made design choices that can impact performance. For example,
   on a Raspberry Pi 4, there is a single chip supporting WiFi and Bluetooth, on a
@@ -180,16 +194,16 @@ should be aware of.
 Bluetooth Low Energy (BLE) appeared in version 4.0 of the bluetooth specifications. It is
 available in all hardware supporting bluetooth 4.0 or higher (eg 4.2, 5.0, etc). It is
 not supported by earlier hardware. You'll need a bluetooth chip or usb adapter which
-supports Bluetooch 4.0 or higher in the computer you run `kiss-tnc-bridge` on.
+supports Bluetooth 4.0 or higher in the computer you run `kiss-tnc-bridge` on.
 
 You may also need ethernet or WiFi if you want to connect to KISS TNCs that run on other
 servers.
 
 Here's some popular devices which `kiss-tnc-bridge` works with:
 
-- Most Raspberry Pi models. Original Pi Zero and Model 1/2 boards do not have built-in
-  BLE, but it can be added with a USB Bluetooth Adapter. Pi Zero W and Pi Zero 2 W have
-  built-in BLE, so do models 3, 4, and 5.
+- Most Raspberry Pi models. Original Pi Zero and Pi 1 boards do not have built-in
+  BLE, but it can be added with a USB Bluetooth adapter. Pi Zero W, Pi Zero 2 W,
+  and models 3, 4, and 5 have built-in BLE.
 - Most Orange Pi models
 
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive USB
@@ -201,7 +215,7 @@ higher it should work. Here's some popular adapters that are known to work:
 - EDUP EP-B3536
 - Plugable USB Bluetooth 5 Adapter
 
-If you plug in one of these USB bluetooth adapters to a computer that already as a built-in
+If you plug in one of these USB bluetooth adapters to a computer that already has a built-in
 adapter, you will want to use `hciconfig -a` to find the device of your new adapter and add
 that to the `kiss-tnc-bridge.conf` file to ensure that it uses the USB bluetooth device
 instead of the built-in device.
@@ -209,30 +223,11 @@ instead of the built-in device.
 
 ## Releases
 
-This project uses [Semantic Versioning](https://semver.org/). Applied to this project, it means:
+This project uses [Semantic Versioning](https://semver.org/). See
+[CONTRIBUTING.md](CONTRIBUTING.md) for how to create a release.
 
-- if we release a new version that won't work the same way using an older config file, we will
-  increment the major version
-- new operating system platform support will increment the major version
-- new features are usually added in minor versions, but could be added in major versions too
-- bug fixes are usually in patch versions
-
-Releases are built automatically by GitHub Actions when a tag starting with `v` is pushed:
-
-```
-git tag v0.1.0
-git push --tags
-```
-
-This produces:
-
-- Generic Linux binaries (x86_64 and arm64) as `.tar.gz`
-- Debian packages (`.deb`) for amd64 and arm64
-- RPM packages (`.rpm`) for x86_64 and aarch64
-
-All artifacts are attached to the GitHub Release. Release notes for each release are
-in the GitHub release. We also [keep a changelog](https://keepachangelog.com/) in
-[CHANGELOG.md](CHANGELOG.md).
+Release notes for each release are in the GitHub release. We also
+[keep a changelog](https://keepachangelog.com/) in [CHANGELOG.md](CHANGELOG.md).
 
 
 ## License
