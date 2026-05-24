@@ -69,7 +69,9 @@ impl BridgeManager {
                     match evt {
                         Some(CharacteristicControlEvent::Write(req)) => {
                             let addr = req.device_address();
-                            if clients.len() >= self.config.max_clients {
+                            if !clients.contains_key(&addr)
+                                && writers.len() >= self.config.max_clients
+                            {
                                 tracing::warn!(
                                     tnc = tnc_name,
                                     addr = %addr,
@@ -141,6 +143,20 @@ impl BridgeManager {
                     match evt {
                         Some(CharacteristicControlEvent::Notify(notifier)) => {
                             let addr = notifier.device_address();
+                            // Reconnects from the same address don't count
+                            // against the limit — only genuinely new devices.
+                            if !writers.contains_key(&addr)
+                                && writers.len() >= self.config.max_clients
+                            {
+                                tracing::warn!(
+                                    tnc = tnc_name,
+                                    addr = %addr,
+                                    max = self.config.max_clients,
+                                    "rejecting BLE client: max clients reached"
+                                );
+                                drop(notifier);
+                                continue;
+                            }
                             tracing::info!(
                                 tnc = tnc_name,
                                 addr = %addr,
