@@ -35,6 +35,7 @@ enum BleEvent {
 
 pub struct BridgeManager {
     config: TncConfig,
+    adapter: bluer::Adapter,
     tx_control: CharacteristicControl,
     rx_control: CharacteristicControl,
 }
@@ -42,13 +43,39 @@ pub struct BridgeManager {
 impl BridgeManager {
     pub fn new(
         config: TncConfig,
+        adapter: bluer::Adapter,
         tx_control: CharacteristicControl,
         rx_control: CharacteristicControl,
     ) -> Self {
         Self {
             config,
+            adapter,
             tx_control,
             rx_control,
+        }
+    }
+
+    /// Forcibly disconnect a BLE device at the link layer.
+    async fn disconnect_device(&self, addr: Address, tnc_name: &str) {
+        match self.adapter.device(addr) {
+            Ok(device) => {
+                if let Err(e) = device.disconnect().await {
+                    tracing::debug!(
+                        tnc = tnc_name,
+                        addr = %addr,
+                        error = %e,
+                        "failed to disconnect rejected BLE client"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::debug!(
+                    tnc = tnc_name,
+                    addr = %addr,
+                    error = %e,
+                    "could not get device handle to disconnect"
+                );
+            }
         }
     }
 
@@ -79,6 +106,7 @@ impl BridgeManager {
                                     "rejecting BLE client: max clients reached"
                                 );
                                 drop(req);
+                                self.disconnect_device(addr, tnc_name).await;
                                 continue;
                             }
 
@@ -155,6 +183,7 @@ impl BridgeManager {
                                     "rejecting BLE client: max clients reached"
                                 );
                                 drop(notifier);
+                                self.disconnect_device(addr, tnc_name).await;
                                 continue;
                             }
                             tracing::info!(

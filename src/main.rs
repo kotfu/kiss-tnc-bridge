@@ -154,6 +154,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
             let manager = BridgeManager::new(
                 handle.tnc_config,
+                adapter.clone(),
                 handle.tx_control,
                 handle.rx_control,
             );
