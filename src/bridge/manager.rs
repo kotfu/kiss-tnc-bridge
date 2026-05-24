@@ -546,17 +546,25 @@ impl BridgeManager {
         let _ = ble_event_tx.send(BleEvent::Disconnected(addr)).await;
     }
 
-    /// Polls the BLE connection state and returns when the device is no
-    /// longer connected. Checks once per second.
+    /// Listens for the BlueZ `Connected` property to flip to `false`
+    /// on the given device. Returns immediately if the device is already
+    /// gone or we cannot subscribe to its events.
     async fn wait_for_disconnect(adapter: &bluer::Adapter, addr: Address) {
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            match adapter.device(addr) {
-                Ok(device) => match device.is_connected().await {
-                    Ok(true) => continue,
-                    _ => return,
-                },
-                Err(_) => return,
+        let device = match adapter.device(addr) {
+            Ok(d) => d,
+            Err(_) => return,
+        };
+        let mut events = match device.events().await {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        use bluer::{DeviceEvent, DeviceProperty};
+        while let Some(evt) = events.next().await {
+            if matches!(
+                evt,
+                DeviceEvent::PropertyChanged(DeviceProperty::Connected(false))
+            ) {
+                return;
             }
         }
     }
