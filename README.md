@@ -89,7 +89,9 @@ The `-d` option overrides the log level in the configuration file.
 ### Running as a systemd service
 
 You probably want `kiss-tnc-bridge` to run in the background when the system
-starts. Use the included service file:
+starts. If you install from deb or rpm packages, this will be automatically set
+up for you. If you build from source or install a tarball, you'll need to
+manually install the included service file:
 
 ```
 $ sudo cp kiss-tnc-bridge.service /etc/systemd/system/
