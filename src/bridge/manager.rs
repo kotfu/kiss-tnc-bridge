@@ -129,7 +129,9 @@ impl BridgeManager {
                     match evt {
                         Some(CharacteristicControlEvent::Write(req)) => {
                             let addr = req.device_address();
-                            if !clients.contains_key(&addr)
+                            let is_known = clients.contains_key(&addr)
+                                || writers.contains_key(&addr);
+                            if !is_known
                                 && writers.len() >= self.config.max_clients
                             {
                                 tracing::warn!(
@@ -206,7 +208,9 @@ impl BridgeManager {
                             let addr = notifier.device_address();
                             // Reconnects from the same address don't count
                             // against the limit — only genuinely new devices.
-                            if !writers.contains_key(&addr)
+                            let is_known = writers.contains_key(&addr)
+                                || clients.contains_key(&addr);
+                            if !is_known
                                 && writers.len() >= self.config.max_clients
                             {
                                 tracing::warn!(
