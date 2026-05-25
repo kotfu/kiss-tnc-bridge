@@ -132,9 +132,9 @@ name is used as the BLE advertised name.
 | `log_level` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
 | `adapter` | system default | BlueZ adapter name (e.g., `hci0`) |
 
-Most devices only have a single bluetooth adapter, and `kiss-tnc-bridge` can reliably
-find it. That means you can usually just not specify the adapter. If you have multiple
-or want to specify it, you can get a list of adapters by:
+Most computers only have a single bluetooth adapter, and `kiss-tnc-bridge` can reliably
+find it. In most scenarios, you can just omit the adapter and everything will work great.
+If you have multiple adapters, or want to specify it, you can get a list:
 ```
 $ hciconfig -a
 ```
@@ -150,12 +150,14 @@ consumers will see in their applications when scanning for services.
 | `host` | yes | — | TCP host of the KISS TNC server |
 | `port` | yes | — | TCP port of the KISS TNC server |
 | `max_clients` | no | `3` | Maximum concurrent BLE clients |
+| `adapter` | no | global setting | BlueZ adapter for this TNC (overrides `[global]` adapter) |
 
 When the maximum number of clients are connected, `kiss-tnc-bridge` will
 stop advertising the service and not allow any additional clients to connect
 until one of the existing clients has disconnected. See
 [Limitations and Caveats](#limitations-and-caveats) below for more info about
 maximum clients.
+
 
 ### Validate config
 

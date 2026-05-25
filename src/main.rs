@@ -104,85 +104,106 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
     #[cfg(target_os = "linux")]
     {
+        use std::collections::HashMap;
+
         use crate::ble::gatt;
         use crate::bridge::manager::BridgeManager;
 
         let session = bluer::Session::new().await?;
 
         // Discover available Bluetooth adapters
-        let adapter_names = session.adapter_names().await?;
-        if adapter_names.is_empty() {
+        let available = session.adapter_names().await?;
+        if available.is_empty() {
             return Err(error::Error::Config(
                 "no Bluetooth adapters found — is a Bluetooth device connected and is BlueZ running?".into(),
             ));
         }
 
-        let adapter = if let Some(ref name) = _cfg.global.adapter {
-            if !adapter_names.contains(name) {
-                return Err(error::Error::Config(
-                    format!(
-                        "Bluetooth adapter '{}' not found (available: {})",
-                        name,
-                        adapter_names.join(", ")
-                    ),
-                ));
+        // Resolve the default adapter (global config or first available)
+        let default_adapter = if let Some(ref name) = _cfg.global.adapter {
+            if !available.contains(name) {
+                return Err(error::Error::Config(format!(
+                    "Bluetooth adapter '{}' not found (available: {})",
+                    name,
+                    available.join(", ")
+                )));
             }
-            session.adapter(name)?
+            name.clone()
         } else {
-            let name = &adapter_names[0];
-            tracing::debug!(adapter = %name, "using default Bluetooth adapter");
-            session.adapter(name)?
+            tracing::debug!(adapter = %available[0], "using default Bluetooth adapter");
+            available[0].clone()
         };
 
-        adapter.set_powered(true).await.map_err(|e| {
-            error::Error::Config(format!(
-                "failed to power on Bluetooth adapter '{}': {e}",
-                adapter.name()
-            ))
-        })?;
-        adapter.set_pairable(false).await?;
-
-        // Set the adapter alias so connected clients see the TNC name
-        // instead of the system hostname. With multiple TNCs on one adapter,
-        // use the first TNC's name.
-        if let Some(first_tnc) = _cfg.tncs.first() {
-            adapter.set_alias(first_tnc.name.clone()).await?;
-            tracing::info!(
-                adapter = %adapter.name(),
-                alias = first_tnc.name,
-                "BLE adapter powered on"
-            );
-        } else {
-            tracing::info!(adapter = %adapter.name(), "BLE adapter powered on");
+        // Group TNCs by their effective adapter (per-TNC overrides global)
+        let mut tncs_by_adapter: HashMap<String, Vec<config::TncConfig>> = HashMap::new();
+        for tnc in &_cfg.tncs {
+            let effective = tnc.adapter.as_ref().unwrap_or(&default_adapter);
+            if !available.contains(effective) {
+                return Err(error::Error::Config(format!(
+                    "[{}]: Bluetooth adapter '{}' not found (available: {})",
+                    tnc.name,
+                    effective,
+                    available.join(", ")
+                )));
+            }
+            tncs_by_adapter
+                .entry(effective.clone())
+                .or_default()
+                .push(tnc.clone());
         }
 
-        let (app, tnc_handles) = gatt::build_application(&_cfg.tncs);
-        let _app_handle = adapter.serve_gatt_application(app).await?;
-        tracing::info!("GATT application registered");
-
+        // Set up each adapter with its TNCs
         let mut tasks = Vec::new();
+        let mut app_handles = Vec::new();
 
-        for handle in tnc_handles {
-            let tnc_name = handle.tnc_config.name.clone();
+        for (adapter_name, tncs) in &tncs_by_adapter {
+            let adapter = session.adapter(adapter_name)?;
+            adapter.set_powered(true).await.map_err(|e| {
+                error::Error::Config(format!(
+                    "failed to power on Bluetooth adapter '{}': {e}",
+                    adapter_name
+                ))
+            })?;
+            adapter.set_pairable(false).await?;
 
-            let manager = BridgeManager::new(
-                handle.tnc_config,
-                adapter.clone(),
-                handle.tx_control,
-                handle.rx_control,
-            );
-            tasks.push(tokio::spawn(async move {
-                if let Err(e) = manager.run().await {
-                    tracing::error!(tnc = tnc_name, error = %e, "bridge manager failed");
-                }
-            }));
+            // Set the adapter alias so connected clients see a TNC name
+            // instead of the system hostname.
+            if let Some(first_tnc) = tncs.first() {
+                adapter.set_alias(first_tnc.name.clone()).await?;
+                tracing::info!(
+                    adapter = %adapter_name,
+                    alias = first_tnc.name,
+                    tnc_count = tncs.len(),
+                    "BLE adapter powered on"
+                );
+            }
+
+            let (app, tnc_handles) = gatt::build_application(tncs);
+            let app_handle = adapter.serve_gatt_application(app).await?;
+            app_handles.push(app_handle);
+            tracing::info!(adapter = %adapter_name, "GATT application registered");
+
+            for handle in tnc_handles {
+                let tnc_name = handle.tnc_config.name.clone();
+                let manager = BridgeManager::new(
+                    handle.tnc_config,
+                    adapter.clone(),
+                    handle.tx_control,
+                    handle.rx_control,
+                );
+                tasks.push(tokio::spawn(async move {
+                    if let Err(e) = manager.run().await {
+                        tracing::error!(tnc = tnc_name, error = %e, "bridge manager failed");
+                    }
+                }));
+            }
         }
 
         tracing::info!("daemon ready");
         tokio::signal::ctrl_c().await?;
         tracing::info!("shutting down");
 
-        drop(_app_handle);
+        drop(app_handles);
 
         Ok(())
     }

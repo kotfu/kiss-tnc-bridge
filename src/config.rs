@@ -34,6 +34,7 @@ pub struct TncConfig {
     pub host: String,
     pub port: u16,
     pub max_clients: usize,
+    pub adapter: Option<String>,
 }
 
 impl Config {
@@ -91,11 +92,14 @@ impl Config {
                 )));
             }
 
+            let adapter = ini.get(&section, "adapter");
+
             tncs.push(TncConfig {
                 name: section,
                 host,
                 port,
                 max_clients,
+                adapter,
             });
         }
 
@@ -193,6 +197,28 @@ log_level = info
         );
         let err = Config::load(f.path().to_str().unwrap()).unwrap_err();
         assert!(err.to_string().contains("no TNC sections"));
+    }
+
+    #[test]
+    fn parse_per_tnc_adapter() {
+        let f = write_config(
+            "\
+[global]
+adapter = hci0
+
+[APRS iGate]
+host = 127.0.0.1
+port = 8001
+
+[Winlink TNC]
+host = 192.168.1.50
+port = 8100
+adapter = hci1
+",
+        );
+        let cfg = Config::load(f.path().to_str().unwrap()).unwrap();
+        assert!(cfg.tncs[0].adapter.is_none());
+        assert_eq!(cfg.tncs[1].adapter.as_deref(), Some("hci1"));
     }
 
     #[test]
