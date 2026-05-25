@@ -25,6 +25,7 @@ pub struct Config {
 #[derive(Debug, Clone)]
 pub struct GlobalConfig {
     pub log_level: String,
+    #[allow(dead_code)]
     pub adapter: Option<String>,
 }
 
@@ -34,6 +35,7 @@ pub struct TncConfig {
     pub host: String,
     pub port: u16,
     pub max_clients: usize,
+    #[allow(dead_code)]
     pub adapter: Option<String>,
 }
 
@@ -217,8 +219,10 @@ adapter = hci1
 ",
         );
         let cfg = Config::load(f.path().to_str().unwrap()).unwrap();
-        assert!(cfg.tncs[0].adapter.is_none());
-        assert_eq!(cfg.tncs[1].adapter.as_deref(), Some("hci1"));
+        let aprs = cfg.tncs.iter().find(|t| t.name == "APRS iGate").unwrap();
+        let winlink = cfg.tncs.iter().find(|t| t.name == "Winlink TNC").unwrap();
+        assert!(aprs.adapter.is_none());
+        assert_eq!(winlink.adapter.as_deref(), Some("hci1"));
     }
 
     #[test]

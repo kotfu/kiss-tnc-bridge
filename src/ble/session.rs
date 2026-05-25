@@ -18,6 +18,7 @@ use bluer::Address;
 use crate::kiss::buffer::KissReassemblyBuffer;
 
 pub struct BleClientSession {
+    #[allow(dead_code)]
     pub address: Address,
     pub kiss_buffer: KissReassemblyBuffer,
 }

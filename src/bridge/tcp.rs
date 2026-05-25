@@ -13,6 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+// Used by Linux-only bridge manager and tests; appears unused on other platforms.
+#![allow(dead_code)]
+
 use crate::error::Error;
 use crate::kiss::buffer::KissReassemblyBuffer;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

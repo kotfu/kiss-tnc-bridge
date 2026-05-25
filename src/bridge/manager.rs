@@ -483,7 +483,7 @@ impl BridgeManager {
     async fn ble_writer_task(
         adapter: bluer::Adapter,
         addr: Address,
-        mut writer: CharacteristicWriter,
+        writer: CharacteristicWriter,
         mut rx: mpsc::Receiver<Vec<u8>>,
         ble_event_tx: mpsc::Sender<BleEvent>,
         tnc_name: String,

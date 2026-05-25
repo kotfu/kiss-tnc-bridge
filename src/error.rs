@@ -25,7 +25,9 @@ pub enum Error {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("TCP connection failed: {0}")]
+    #[allow(dead_code)]
     TcpConnect(String),
     #[error("KISS frame error: {0}")]
+    #[allow(dead_code)]
     KissFrame(String),
 }
