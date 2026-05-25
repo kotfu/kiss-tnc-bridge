@@ -30,6 +30,7 @@ lto = true
 [package.metadata.deb]
 maintainer = "kotfu"
 copyright = "2026"
+revision = ""
 depends = "$auto, bluez"
 section = "net"
 assets = [
@@ -39,6 +40,7 @@ assets = [
 ]
 
 [package.metadata.generate-rpm]
+release = ""
 assets = [
     { source = "target/release/kiss-tnc-bridge", dest = "/usr/bin/kiss-tnc-bridge", mode = "755" },
     { source = "kiss-tnc-bridge.example.conf", dest = "/etc/kiss-tnc-bridge.conf", mode = "644", config = true },

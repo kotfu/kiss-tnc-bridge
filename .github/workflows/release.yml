@@ -113,6 +113,17 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v6
+
+      - name: Extract changelog for this release
+        id: changelog
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          # Extract the section between this version's header and the next ## header
+          NOTES=$(awk "/^## ${VERSION} /{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
+          # Write to a file to preserve formatting
+          echo "$NOTES" > /tmp/release-notes.md
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
@@ -121,7 +132,7 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v3
         with:
-          generate_release_notes: true
+          body_path: /tmp/release-notes.md
           files: |
             *.tar.gz
             **/*.deb
