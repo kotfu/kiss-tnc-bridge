@@ -29,6 +29,19 @@ use crate::config::TncConfig;
 use crate::error::Error;
 use crate::kiss::frame::FEND;
 
+struct Hex<'a>(&'a [u8]);
+impl std::fmt::Display for Hex<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, b) in self.0.iter().enumerate() {
+            if i > 0 {
+                f.write_str(" ")?;
+            }
+            write!(f, "{b:02x}")?;
+        }
+        Ok(())
+    }
+}
+
 enum BleEvent {
     Data(Address, Vec<u8>),
     Disconnected(Address),
@@ -285,17 +298,43 @@ impl BridgeManager {
                                     continue;
                                 }
                                 let frames = session.kiss_buffer.drain_frames();
+                                for raw_frame in &frames {
+                                    tracing::trace!(
+                                        tnc = tnc_name,
+                                        addr = %addr,
+                                        len = raw_frame.len(),
+                                        hex = %Hex(raw_frame),
+                                        "KISS frame assembled from BLE fragments"
+                                    );
+                                }
                                 for raw_frame in frames {
                                     let encoded = Self::wrap_with_fend(&raw_frame);
                                     if let Some(ref mut conn) = tcp {
-                                        if let Err(e) = conn.write_frame(&encoded).await {
-                                            tracing::error!(
-                                                tnc = tnc_name,
-                                                error = %e,
-                                                "TCP write failed"
-                                            );
-                                            tcp = None;
+                                        match conn.write_frame(&encoded).await {
+                                            Ok(()) => {
+                                                tracing::trace!(
+                                                    tnc = tnc_name,
+                                                    addr = %addr,
+                                                    len = encoded.len(),
+                                                    hex = %Hex(&encoded),
+                                                    "KISS frame written to TCP"
+                                                );
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    tnc = tnc_name,
+                                                    error = %e,
+                                                    "TCP write failed"
+                                                );
+                                                tcp = None;
+                                            }
                                         }
+                                    } else {
+                                        tracing::warn!(
+                                            tnc = tnc_name,
+                                            addr = %addr,
+                                            "KISS frame dropped, no TCP connection"
+                                        );
                                     }
                                 }
                             }
@@ -350,6 +389,12 @@ impl BridgeManager {
                 } => {
                     match frame_result {
                         Ok(raw_frame) => {
+                            tracing::trace!(
+                                tnc = tnc_name,
+                                len = raw_frame.len(),
+                                hex = %Hex(&raw_frame),
+                                "KISS frame received from TCP"
+                            );
                             let encoded = Self::wrap_with_fend(&raw_frame);
                             let removed_any = Self::dispatch_to_clients(
                                 &mut writers,
@@ -431,6 +476,12 @@ impl BridgeManager {
                     break;
                 }
                 Ok(n) => {
+                    tracing::trace!(
+                        addr = %addr,
+                        len = n,
+                        hex = %Hex(&buf[..n]),
+                        "BLE fragment received"
+                    );
                     if tx.send(BleEvent::Data(addr, buf[..n].to_vec())).await.is_err() {
                         break;
                     }
@@ -458,6 +509,12 @@ impl BridgeManager {
     ) -> bool {
         let mut to_remove = Vec::new();
         for (&addr, sender) in writers.iter() {
+            tracing::trace!(
+                tnc = tnc_name,
+                addr = %addr,
+                len = frame_bytes.len(),
+                "dispatching TCP frame to BLE client"
+            );
             if let Err(e) = sender.try_send(frame_bytes.clone()) {
                 tracing::warn!(
                     tnc = tnc_name,
@@ -496,13 +553,30 @@ impl BridgeManager {
                 frame = rx.recv() => {
                     match frame {
                         Some(frame_bytes) => {
+                            tracing::trace!(
+                                tnc = &tnc_name,
+                                addr = %addr,
+                                len = frame_bytes.len(),
+                                mtu = chunk_size,
+                                chunks = (frame_bytes.len() + chunk_size - 1) / chunk_size,
+                                "BLE TX: sending frame to client"
+                            );
                             let mut failed = false;
-                            for chunk in frame_bytes.chunks(chunk_size) {
+                            for (chunk_idx, chunk) in frame_bytes.chunks(chunk_size).enumerate() {
                                 match tokio::time::timeout(
                                     Duration::from_secs(2),
                                     writer.send(chunk),
                                 ).await {
-                                    Ok(Ok(())) => {}
+                                    Ok(Ok(())) => {
+                                        tracing::trace!(
+                                            tnc = &tnc_name,
+                                            addr = %addr,
+                                            chunk = chunk_idx,
+                                            len = chunk.len(),
+                                            hex = %Hex(chunk),
+                                            "BLE TX chunk sent"
+                                        );
+                                    }
                                     Ok(Err(e)) => {
                                         tracing::warn!(
                                             tnc = &tnc_name,
