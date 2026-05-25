@@ -62,7 +62,7 @@ jobs:
 
       - name: Install system dependencies
         if: "!matrix.use_cross"
-        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install -y cmake pkg-config
 
       - name: Build release binary
         run: |
