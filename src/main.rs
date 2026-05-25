@@ -68,6 +68,7 @@ fn main() {
     };
 
     tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .with_env_filter(
             EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
         )
