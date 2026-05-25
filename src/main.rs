@@ -108,9 +108,38 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         use crate::bridge::manager::BridgeManager;
 
         let session = bluer::Session::new().await?;
-        let adapter_name = _cfg.global.adapter.as_deref().unwrap_or("hci0");
-        let adapter = session.adapter(adapter_name)?;
-        adapter.set_powered(true).await?;
+
+        // Discover available Bluetooth adapters
+        let adapter_names = session.adapter_names().await?;
+        if adapter_names.is_empty() {
+            return Err(error::Error::Config(
+                "no Bluetooth adapters found — is a Bluetooth device connected and is BlueZ running?".into(),
+            ));
+        }
+
+        let adapter = if let Some(ref name) = _cfg.global.adapter {
+            if !adapter_names.contains(name) {
+                return Err(error::Error::Config(
+                    format!(
+                        "Bluetooth adapter '{}' not found (available: {})",
+                        name,
+                        adapter_names.join(", ")
+                    ),
+                ));
+            }
+            session.adapter(name)?
+        } else {
+            let name = &adapter_names[0];
+            tracing::debug!(adapter = %name, "using default Bluetooth adapter");
+            session.adapter(name)?
+        };
+
+        adapter.set_powered(true).await.map_err(|e| {
+            error::Error::Config(format!(
+                "failed to power on Bluetooth adapter '{}': {e}",
+                adapter.name()
+            ))
+        })?;
         adapter.set_pairable(false).await?;
 
         // Set the adapter alias so connected clients see the TNC name
@@ -119,12 +148,12 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         if let Some(first_tnc) = _cfg.tncs.first() {
             adapter.set_alias(first_tnc.name.clone()).await?;
             tracing::info!(
-                adapter = adapter_name,
+                adapter = %adapter.name(),
                 alias = first_tnc.name,
                 "BLE adapter powered on"
             );
         } else {
-            tracing::info!(adapter = adapter_name, "BLE adapter powered on");
+            tracing::info!(adapter = %adapter.name(), "BLE adapter powered on");
         }
 
         let (app, tnc_handles) = gatt::build_application(&_cfg.tncs);
