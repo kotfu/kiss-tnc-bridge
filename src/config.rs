@@ -84,7 +84,7 @@ impl Config {
 
             let max_clients: usize = ini
                 .get(&section, "max_clients")
-                .unwrap_or_else(|| "3".into())
+                .unwrap_or_else(|| "1".into())
                 .parse()
                 .map_err(|_| Error::Config(format!("[{section}]: invalid max_clients")))?;
 
@@ -135,7 +135,7 @@ port = 8001
         assert_eq!(cfg.tncs[0].name, "APRS iGate");
         assert_eq!(cfg.tncs[0].host, "127.0.0.1");
         assert_eq!(cfg.tncs[0].port, 8001);
-        assert_eq!(cfg.tncs[0].max_clients, 3);
+        assert_eq!(cfg.tncs[0].max_clients, 1);
         assert_eq!(cfg.global.log_level, "info");
         assert!(cfg.global.adapter.is_none());
     }

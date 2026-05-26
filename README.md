@@ -119,7 +119,6 @@ max_clients = 3
 [Winlink TNC]
 host = 192.168.1.50
 port = 8001
-max_clients = 2
 ```
 
 Each section (other than `[global]`) defines a KISS TNC TCP server to bridge. The section
@@ -151,12 +150,13 @@ consumers will see in their applications when scanning for services.
 |-----|----------|---------|-------------|
 | `host` | yes | — | TCP host of the KISS TNC server |
 | `port` | yes | — | TCP port of the KISS TNC server |
-| `max_clients` | no | `3` | Maximum concurrent BLE clients |
+| `max_clients` | no | `1` | Maximum concurrent BLE clients |
 | `adapter` | no | global setting | BlueZ adapter for this TNC (overrides `[global]` adapter) |
 
 When the maximum number of clients are connected, `kiss-tnc-bridge` will
 stop advertising the service and not allow any additional clients to connect
-until one of the existing clients has disconnected. See
+until one of the existing clients has disconnected. Some bluetooth chips do
+not allow multiple clients to connect. See
 [Limitations and Caveats](#limitations-and-caveats) below for more info about
 maximum clients.
 
@@ -203,6 +203,11 @@ should be aware of.
   the config file to change the TNC name and restart `kiss-tnc-bridge`. It also seems
   that connecting to the "old" TNC name and disconnecting will update the operating
   system cache name.
+- some Bluetooth chipsets have limited extended advertising support, meaning that when
+  a client connects, they sometimes stop advertising until that client disconnects.
+  The RTL8761B seems to have issues with this. The TP-Link UB500 Plus I have for
+  testing stops advertising after the first client connects, even if you have
+  `max_clients` set at 2 in `kiss-tnc-bridge.conf`.
 
 
 ## Supported Hardware
@@ -220,13 +225,16 @@ Here's some popular devices which `kiss-tnc-bridge` works with:
 - Most Raspberry Pi models. Original Pi Zero and Pi 1 boards do not have built-in
   BLE, but it can be added with a USB Bluetooth adapter. Pi Zero W, Pi Zero 2 W,
   and models 3, 4, and 5 have built-in BLE.
-- Most Orange Pi models
+- The Raspberry Pi 4 builtin bluetooth uses a Cypress chip, which allows multiple
+  clients to simultaneously connect.
 
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive USB
 adapter. If the adapter is supported in Linux and supports Bluetooth version 4.0 or
-higher it should work. Here's some popular adapters that are known to work:
+higher it should work. Many USB adapters use the Realtek 8761B chipset or one of it's
+variants. This chipset does not allow multiple clients to simultaneously connect.
+As best I can tell, all these common adapters use that chipset:
 
-- TP-Link UB500 Plus
+- TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
 - ASUS USB-BT500
 - EDUP EP-B3536
 - Plugable USB Bluetooth 5 Adapter
