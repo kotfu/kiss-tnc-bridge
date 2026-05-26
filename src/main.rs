@@ -106,58 +106,44 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
     #[cfg(target_os = "linux")]
     {
         use std::collections::HashMap;
+        use std::time::Duration;
 
         use crate::ble::gatt;
         use crate::bridge::manager::BridgeManager;
+        use futures::StreamExt;
+        use tokio::sync::mpsc;
 
-        let session = bluer::Session::new().await?;
-
-        // Discover available Bluetooth adapters
-        let available = session.adapter_names().await?;
-        if available.is_empty() {
-            return Err(error::Error::Config(
-                "no Bluetooth adapters found — is a Bluetooth device connected and is BlueZ running?".into(),
-            ));
+        // Events flowing from adapter monitors and session watcher into
+        // the supervisor loop.
+        enum SupervisorEvent {
+            AdapterAdded(String),
+            AdapterRemoved(String),
+            AdapterPoweredOff(String),
+            AdapterPoweredOn(String),
         }
 
-        // Resolve the default adapter (global config or first available)
-        let default_adapter = if let Some(ref name) = _cfg.global.adapter {
-            if !available.contains(name) {
-                return Err(error::Error::Config(format!(
-                    "Bluetooth adapter '{}' not found (available: {})",
-                    name,
-                    available.join(", ")
-                )));
-            }
-            name.clone()
-        } else {
-            tracing::debug!(adapter = %available[0], "using default Bluetooth adapter");
-            available[0].clone()
-        };
-
-        // Group TNCs by their effective adapter (per-TNC overrides global)
-        let mut tncs_by_adapter: HashMap<String, Vec<config::TncConfig>> = HashMap::new();
-        for tnc in &_cfg.tncs {
-            let effective = tnc.adapter.as_ref().unwrap_or(&default_adapter);
-            if !available.contains(effective) {
-                return Err(error::Error::Config(format!(
-                    "[{}]: Bluetooth adapter '{}' not found (available: {})",
-                    tnc.name,
-                    effective,
-                    available.join(", ")
-                )));
-            }
-            tncs_by_adapter
-                .entry(effective.clone())
-                .or_default()
-                .push(tnc.clone());
+        // GATT application + bridge manager tasks for one adapter.
+        struct BridgeState {
+            _app_handle: bluer::gatt::local::ApplicationHandle,
+            tasks: Vec<tokio::task::JoinHandle<()>>,
         }
 
-        // Set up each adapter with its TNCs
-        let mut tasks = Vec::new();
-        let mut app_handles = Vec::new();
+        impl BridgeState {
+            fn shutdown(self) {
+                drop(self._app_handle);
+                for task in self.tasks {
+                    task.abort();
+                }
+            }
+        }
 
-        for (adapter_name, tncs) in &tncs_by_adapter {
+        // Power on an adapter, register the GATT application, and spawn
+        // a BridgeManager task for each TNC.
+        async fn setup_bridge(
+            session: &bluer::Session,
+            adapter_name: &str,
+            tncs: &[config::TncConfig],
+        ) -> Result<BridgeState, error::Error> {
             let adapter = session.adapter(adapter_name)?;
             adapter.set_powered(true).await.map_err(|e| {
                 error::Error::Config(format!(
@@ -167,12 +153,10 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
             })?;
             adapter.set_pairable(false).await?;
 
-            // Set the adapter alias so connected clients see a TNC name
-            // instead of the system hostname.
             if let Some(first_tnc) = tncs.first() {
                 adapter.set_alias(first_tnc.name.clone()).await?;
                 tracing::info!(
-                    adapter = %adapter_name,
+                    adapter = adapter_name,
                     alias = first_tnc.name,
                     tnc_count = tncs.len(),
                     "BLE adapter powered on"
@@ -181,9 +165,9 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
             let (app, tnc_handles) = gatt::build_application(tncs);
             let app_handle = adapter.serve_gatt_application(app).await?;
-            app_handles.push(app_handle);
-            tracing::info!(adapter = %adapter_name, "GATT application registered");
+            tracing::info!(adapter = adapter_name, "GATT application registered");
 
+            let mut tasks = Vec::new();
             for handle in tnc_handles {
                 let tnc_name = handle.tnc_config.name.clone();
                 let manager = BridgeManager::new(
@@ -198,13 +182,277 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                     }
                 }));
             }
+
+            Ok(BridgeState {
+                _app_handle: app_handle,
+                tasks,
+            })
+        }
+
+        // Watch an adapter's Powered property and forward changes to the
+        // supervisor.  The stream ends naturally when the D-Bus object
+        // disappears (USB unplug), so this task is self-cleaning.
+        fn spawn_adapter_monitor(
+            adapter: bluer::Adapter,
+            adapter_name: String,
+            tx: mpsc::Sender<SupervisorEvent>,
+        ) -> tokio::task::JoinHandle<()> {
+            tokio::spawn(async move {
+                use bluer::{AdapterEvent, AdapterProperty};
+                use futures::StreamExt as _;
+                let Ok(mut events) = adapter.events().await else {
+                    return;
+                };
+                while let Some(evt) = events.next().await {
+                    let msg = match evt {
+                        AdapterEvent::PropertyChanged(AdapterProperty::Powered(false)) => {
+                            Some(SupervisorEvent::AdapterPoweredOff(adapter_name.clone()))
+                        }
+                        AdapterEvent::PropertyChanged(AdapterProperty::Powered(true)) => {
+                            Some(SupervisorEvent::AdapterPoweredOn(adapter_name.clone()))
+                        }
+                        _ => None,
+                    };
+                    if let Some(msg) = msg {
+                        if tx.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            })
+        }
+
+        // ── Session and event channel ────────────────────────────────
+
+        let session = bluer::Session::new().await?;
+        let (sv_tx, mut sv_rx) = mpsc::channel::<SupervisorEvent>(32);
+
+        // Forward session-level adapter add/remove events.
+        let mut session_events = session.events().await?;
+        let tx = sv_tx.clone();
+        tokio::spawn(async move {
+            use bluer::SessionEvent;
+            while let Some(evt) = session_events.next().await {
+                let msg = match evt {
+                    SessionEvent::AdapterAdded(name) => SupervisorEvent::AdapterAdded(name),
+                    SessionEvent::AdapterRemoved(name) => SupervisorEvent::AdapterRemoved(name),
+                };
+                if tx.send(msg).await.is_err() {
+                    break;
+                }
+            }
+        });
+
+        // ── Resolve adapter names ────────────────────────────────────
+
+        let available = session.adapter_names().await.unwrap_or_default();
+
+        let resolved_default: Option<String> = if let Some(ref name) = _cfg.global.adapter {
+            if !available.is_empty() && !available.contains(name) {
+                tracing::warn!(
+                    adapter = %name,
+                    available = ?available,
+                    "configured Bluetooth adapter not found, waiting for it to appear"
+                );
+            }
+            Some(name.clone())
+        } else if !available.is_empty() {
+            tracing::debug!(adapter = %available[0], "using default Bluetooth adapter");
+            Some(available[0].clone())
+        } else {
+            None
+        };
+
+        // Group TNCs by their effective adapter.  TNCs whose adapter
+        // cannot be resolved yet (no adapter configured and none
+        // available) go into a pending list and get assigned to the
+        // first adapter that appears.
+        let mut tncs_by_adapter: HashMap<String, Vec<config::TncConfig>> = HashMap::new();
+        let mut unresolved_tncs: Vec<config::TncConfig> = Vec::new();
+
+        for tnc in &_cfg.tncs {
+            match tnc.adapter.as_ref().or(resolved_default.as_ref()) {
+                Some(name) => {
+                    tncs_by_adapter
+                        .entry(name.clone())
+                        .or_default()
+                        .push(tnc.clone());
+                }
+                None => {
+                    unresolved_tncs.push(tnc.clone());
+                }
+            }
+        }
+
+        if !unresolved_tncs.is_empty() {
+            tracing::warn!(
+                "no Bluetooth adapter configured and none available, \
+                 waiting for one to appear"
+            );
+        }
+
+        // ── Initial setup ────────────────────────────────────────────
+
+        let mut active_bridges: HashMap<String, BridgeState> = HashMap::new();
+        let mut active_monitors: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
+
+        for adapter_name in tncs_by_adapter.keys().cloned().collect::<Vec<_>>() {
+            if !available.contains(&adapter_name) {
+                tracing::warn!(
+                    adapter = %adapter_name,
+                    "Bluetooth adapter not available, waiting for it to appear"
+                );
+                continue;
+            }
+
+            // Spawn a power-state monitor for this adapter.
+            if let Ok(adapter) = session.adapter(&adapter_name) {
+                let monitor =
+                    spawn_adapter_monitor(adapter, adapter_name.clone(), sv_tx.clone());
+                active_monitors.insert(adapter_name.clone(), monitor);
+            }
+
+            match setup_bridge(&session, &adapter_name, &tncs_by_adapter[&adapter_name])
+                .await
+            {
+                Ok(state) => {
+                    active_bridges.insert(adapter_name, state);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        adapter = %adapter_name,
+                        error = %e,
+                        "failed to set up adapter, will retry when available"
+                    );
+                }
+            }
         }
 
         tracing::info!("daemon ready");
-        tokio::signal::ctrl_c().await?;
-        tracing::info!("shutting down");
 
-        drop(app_handles);
+        // ── Supervisor loop ──────────────────────────────────────────
+
+        loop {
+            tokio::select! {
+                event = sv_rx.recv() => {
+                    match event {
+                        Some(SupervisorEvent::AdapterAdded(name)) => {
+                            // Assign any unresolved TNCs to this adapter.
+                            if !unresolved_tncs.is_empty()
+                                && !tncs_by_adapter.contains_key(&name)
+                            {
+                                tracing::debug!(
+                                    adapter = %name,
+                                    "assigning TNCs to newly available adapter"
+                                );
+                                tncs_by_adapter
+                                    .entry(name.clone())
+                                    .or_default()
+                                    .extend(unresolved_tncs.drain(..));
+                            }
+
+                            if let Some(tncs) = tncs_by_adapter.get(&name) {
+                                // Start a power monitor if we don't have one.
+                                if !active_monitors.contains_key(&name) {
+                                    if let Ok(adapter) = session.adapter(&name) {
+                                        let monitor = spawn_adapter_monitor(
+                                            adapter,
+                                            name.clone(),
+                                            sv_tx.clone(),
+                                        );
+                                        active_monitors.insert(name.clone(), monitor);
+                                    }
+                                }
+
+                                if !active_bridges.contains_key(&name) {
+                                    tracing::warn!(
+                                        adapter = %name,
+                                        "Bluetooth adapter appeared, resuming"
+                                    );
+                                    // Give BlueZ a moment to finish initialising.
+                                    tokio::time::sleep(Duration::from_secs(1)).await;
+                                    match setup_bridge(&session, &name, tncs).await {
+                                        Ok(state) => {
+                                            active_bridges.insert(name, state);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                adapter = %name,
+                                                error = %e,
+                                                "failed to set up adapter"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Some(SupervisorEvent::AdapterRemoved(name)) => {
+                            if let Some(state) = active_bridges.remove(&name) {
+                                tracing::warn!(
+                                    adapter = %name,
+                                    "Bluetooth adapter removed, waiting for it to return"
+                                );
+                                state.shutdown();
+                            }
+                            // The monitor's event stream will end because the
+                            // D-Bus object is gone, so the task exits on its
+                            // own.
+                            active_monitors.remove(&name);
+                        }
+
+                        Some(SupervisorEvent::AdapterPoweredOff(name)) => {
+                            if let Some(state) = active_bridges.remove(&name) {
+                                tracing::warn!(
+                                    adapter = %name,
+                                    "Bluetooth adapter powered off, \
+                                     waiting for it to be re-enabled"
+                                );
+                                state.shutdown();
+                            }
+                            // Keep the monitor alive — it will tell us when
+                            // the adapter powers back on.
+                        }
+
+                        Some(SupervisorEvent::AdapterPoweredOn(name)) => {
+                            if let Some(tncs) = tncs_by_adapter.get(&name) {
+                                if !active_bridges.contains_key(&name) {
+                                    tracing::warn!(
+                                        adapter = %name,
+                                        "Bluetooth adapter powered on, resuming"
+                                    );
+                                    tokio::time::sleep(Duration::from_secs(1)).await;
+                                    match setup_bridge(&session, &name, tncs).await {
+                                        Ok(state) => {
+                                            active_bridges.insert(name, state);
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                adapter = %name,
+                                                error = %e,
+                                                "failed to set up adapter after power on"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        None => {
+                            tracing::error!(
+                                "D-Bus event stream closed, shutting down"
+                            );
+                            break;
+                        }
+                    }
+                }
+
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("shutting down");
+                    break;
+                }
+            }
+        }
 
         Ok(())
     }
