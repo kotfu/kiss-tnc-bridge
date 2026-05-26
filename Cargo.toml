@@ -1,6 +1,6 @@
 [package]
 name = "kiss-tnc-bridge"
-version = "0.4.3"
+version = "0.4.4"
 edition = "2024"
 license = "GPL-3.0-or-later"
 description = "Daemon to bridge Bluetooth KISS TNCs to TCP KISS TNCs"
