@@ -200,9 +200,10 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
             tokio::spawn(async move {
                 use bluer::{AdapterEvent, AdapterProperty};
                 use futures::StreamExt as _;
-                let Ok(mut events) = adapter.events().await else {
+                let Ok(events) = adapter.events().await else {
                     return;
                 };
+                tokio::pin!(events);
                 while let Some(evt) = events.next().await {
                     let msg = match evt {
                         AdapterEvent::PropertyChanged(AdapterProperty::Powered(false)) => {
@@ -228,10 +229,11 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         let (sv_tx, mut sv_rx) = mpsc::channel::<SupervisorEvent>(32);
 
         // Forward session-level adapter add/remove events.
-        let mut session_events = session.events().await?;
+        let session_events = session.events().await?;
         let tx = sv_tx.clone();
         tokio::spawn(async move {
             use bluer::SessionEvent;
+            tokio::pin!(session_events);
             while let Some(evt) = session_events.next().await {
                 let msg = match evt {
                     SessionEvent::AdapterAdded(name) => SupervisorEvent::AdapterAdded(name),
