@@ -39,24 +39,27 @@ struct Cli {
     debug: u8,
 }
 
-/// Try to acquire an exclusive advisory lock on the config file.
+/// Try to acquire a global exclusive lock to prevent multiple instances.
 /// Returns the open `File` handle (which must be kept alive to hold
-/// the lock) or an error message if another instance already holds it.
-fn lock_config_file(path: &str) -> Result<std::fs::File, String> {
+/// the lock) or an error message if another instance is already running.
+fn acquire_instance_lock() -> Result<std::fs::File, String> {
     use std::fs::File;
 
-    let file = File::open(path).map_err(|e| format!("cannot open config file '{path}': {e}"))?;
+    const LOCK_PATH: &str = "/run/kiss-tnc-bridge.lock";
+
+    let file = File::create(LOCK_PATH)
+        .map_err(|e| format!("cannot create lock file '{LOCK_PATH}': {e}"))?;
 
     // LOCK_EX = exclusive, LOCK_NB = non-blocking (fail immediately)
     let rc = unsafe { libc::flock(std::os::unix::io::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         if err.kind() == std::io::ErrorKind::WouldBlock {
-            return Err(format!(
-                "another kiss-tnc-bridge instance is already running with config '{path}'"
-            ));
+            return Err(
+                "another kiss-tnc-bridge instance is already running".into()
+            );
         }
-        return Err(format!("failed to lock config file '{path}': {err}"));
+        return Err(format!("failed to acquire lock '{LOCK_PATH}': {err}"));
     }
 
     Ok(file)
@@ -88,7 +91,7 @@ fn main() {
     // instances from running with the same configuration.  The lock is
     // held for the lifetime of the process and released automatically
     // on exit (including crashes and SIGKILL).
-    let _lock_file = match lock_config_file(&cli.config) {
+    let _lock_file = match acquire_instance_lock() {
         Ok(f) => f,
         Err(e) => {
             eprintln!("error: {e}");
