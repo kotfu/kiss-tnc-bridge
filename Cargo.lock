@@ -519,6 +519,7 @@ dependencies = [
  "clap",
  "configparser",
  "futures",
+ "libc",
  "libdbus-sys",
  "tempfile",
  "thiserror",
