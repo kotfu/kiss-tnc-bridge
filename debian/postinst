@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+
+if [ ! -f /etc/kiss-tnc-bridge.conf ]; then
+    cp /usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.conf /etc/kiss-tnc-bridge.conf
+fi

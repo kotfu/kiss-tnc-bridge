@@ -35,15 +35,16 @@ depends = "$auto, bluez"
 section = "net"
 assets = [
     ["target/release/kiss-tnc-bridge", "usr/bin/", "755"],
-    ["kiss-tnc-bridge.example.conf", "etc/kiss-tnc-bridge.conf", "644"],
+    ["kiss-tnc-bridge.example.conf", "usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.conf", "644"],
     ["kiss-tnc-bridge.service", "lib/systemd/system/", "644"],
 ]
+maintainer-scripts = "debian/"
 
 [package.metadata.generate-rpm]
 release = "1"
 assets = [
     { source = "target/release/kiss-tnc-bridge", dest = "/usr/bin/kiss-tnc-bridge", mode = "755" },
-    { source = "kiss-tnc-bridge.example.conf", dest = "/etc/kiss-tnc-bridge.conf", mode = "644", config = true },
+    { source = "kiss-tnc-bridge.example.conf", dest = "/etc/kiss-tnc-bridge.conf", mode = "644", config = "noreplace" },
     { source = "kiss-tnc-bridge.service", dest = "/lib/systemd/system/kiss-tnc-bridge.service", mode = "644" },
 ]
 requires = { bluez = "*" }
