@@ -191,6 +191,18 @@ should be aware of.
   connections. One possible fix is to move WiFi to a 5GHz network to reduce the RF
   interference. Another possible fix is to add a USB Bluetooth dongle with an
   external antenna.
+- Both iOS and Android cache BLE peripheral data using the devices Bluetooth MAC
+  address. This can cause all kinds of confusing behavior. For example, connect a
+  USB Bluetooth dongle to computer A with a `kiss-tnc-bridge`
+  which advertises a bluetooth TNC called "TNC 1" Then move the dongle to computer
+  B, which hass a `kiss-tnc-bridge` configuration which advertises a bluetooth TNC
+  called "TNC 2". When you scan in `aprs.fi` or another client program, iOS or Android
+  will still show the cached value as "TNC 1". On iOS, the only way to flush the cache
+  is to toggel bluetooth off and on in Settings (it doesn't seem that the Control Center
+  toggle always works). This could also show up if you have a single computer and edit
+  the config file to change the TNC name and restart `kiss-tnc-bridge`. It also seems
+  that connecting to the "old" TNC name and disconnecting will update the operating
+  system cache name.
 
 
 ## Supported Hardware
