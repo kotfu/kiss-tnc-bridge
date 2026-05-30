@@ -1,12 +1,17 @@
 # kiss-tnc-bridge
 
-Daemon to bridge Bluetooth KISS TNCs to TCP KISS TNCs.
+Daemon to bridge and multiplex Bluetooth KISS TNCs to TCP KISS TNCs.
 
 Advertises Bluetooth Low Energy (BLE) General Attribute Profile (GATT) following
 the [BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
-This allows APRS apps to connect via Bluetooth and have their KISS frames
-forwarded to a TCP KISS TNC server like [Dire Wolf](https://github.com/wb2osz/direwolf)
-or [Graywolf](https://github.com/chrissnell/graywolf).
+This allows APRS apps to connect via Bluetooth and utilize a TCP KISS TNC server
+provided by applications like:
+
+- [Dire Wolf](https://github.com/wb2osz/direwolf)
+- [Graywolf](https://github.com/chrissnell/graywolf)
+- [Soundmodem](https://uz7.ho.ua/packetradio.htm)
+- [QtSoundModem](https://www.cantab.net/users/john.wiseman/Documents/QtSoundModem.html)
+
 
 ## Why does this exist?
 
@@ -19,14 +24,15 @@ Bluetooth?
    can not use Wi-Fi when it's not the foreground app. But it can use Bluetooth, allowing
    it to remain connected in the background.
 3. I created a portable APRS station using [Graywolf](https://github.com/chrissnell/graywolf)
-   on a Raspberry Pi. Graywolf can be configured to create a TCP KISS TNC so multiple
-   apps can use the radio set up in Graywolf. `kiss-tnc-bridge` lets a mobile device use
-   Graywolf's TNC without having to have any Wi-Fi available.
+   on a Raspberry Pi. Graywolf can be configured to provide a multiplexed TCP KISS TNC
+   allowing many apps to use the radio. `kiss-tnc-bridge` lets mobile devices use
+   Graywolf's TNC without requiring Wi-Fi.
 
 
 ## Features
 
-- "Just Works" BLE pairing (no pairing code prompts) for headless operation
+- "Just Works" BLE pairing: client devices don't require a code to pair and
+  only prompt to pair one time.
 - Multiple TNC definitions, each advertised as a separate BLE GATT service
 - Multiple concurrent BLE clients (if hardware supports it) per TNC
 - Per-client KISS frame reassembly across BLE MTU boundaries
@@ -39,6 +45,9 @@ Bluetooth?
 - Runs on a range of operating systems and CPU architectures, including 32-bit
   ARMv6 processors like the original Raspberry Pi
 - Runs from the command line or as a `systemd` service
+- Minimal resource consumption. Uses 5MB of memory and negligible CPU
+  on a Raspberry Pi Model B+ from 2014 while bridging a moderate suburban
+  APRS feed (10 packets per minute).
 
 
 ## Installation
