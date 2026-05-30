@@ -14,23 +14,30 @@ If you already have a KISS TNC server running on TCP, why would you want it to w
 Bluetooth?
 
 1. In a scenario where power consumption matters more than range, Bluetooth Low Energy
-   uses less power than WiFi.
+   uses less power than Wi-Fi.
 2. On Apple's iOS, the [aprs.fi](https://apps.apple.com/us/app/aprs-fi/id922155038) app
-   can not use WiFi when it's not the foreground app. But it can use bluetooth, allowing
+   can not use Wi-Fi when it's not the foreground app. But it can use Bluetooth, allowing
    it to remain connected in the background.
 3. I created a portable APRS station using [Graywolf](https://github.com/chrissnell/graywolf)
    on a Raspberry Pi. Graywolf can be configured to create a TCP KISS TNC so multiple
    apps can use the radio set up in Graywolf. `kiss-tnc-bridge` lets a mobile device use
-   Graywolf's TNC without having to have any WiFi available.
+   Graywolf's TNC without having to have any Wi-Fi available.
 
 
 ## Features
 
+- "Just Works" BLE pairing (no pairing code prompts) for headless operation
 - Multiple TNC definitions, each advertised as a separate BLE GATT service
-- Multiple concurrent BLE clients per TNC (configurable limit)
+- Multiple concurrent BLE clients (if hardware supports it) per TNC
 - Per-client KISS frame reassembly across BLE MTU boundaries
 - Bidirectional bridging: BLE clients receive all frames from the TNC
 - Automatic TCP reconnection with exponential backoff
+- Resilient to adapters going away: if a USB Bluetooth dongle is unplugged or a
+  built-in adapter is powered off, the daemon keeps running and automatically
+  resumes when the adapter becomes available again
+- Works with any Bluetooth 4.0 (or higher) hardware supported by Linux
+- Runs on a range of operating systems and CPU architectures, including 32-bit
+  ARMv6 processors like the original Raspberry Pi
 - Runs from the command line or as a `systemd` service
 
 
@@ -53,9 +60,10 @@ Most Raspberry Pi models run a 64-bit OS and should use the **arm64** packages. 
 - Raspberry Pi Compute Module 1
 
 These older boards require 32-bit Raspberry Pi OS (Bullseye or later). If you're
-running one of these boards, download the `armhf` `.deb` or tarball. Note that
-none of these boards have built-in Bluetooth Low Energy, so you'll need a USB
-Bluetooth adapter — see [Supported Hardware](#supported-hardware) for recommendations.
+running one of these boards, download the package or tarball for the `armhf`
+architecture. Note that none of these boards have built-in Bluetooth Low Energy,
+so you'll need a USB Bluetooth adapter — see [Recommended Hardware](#recommended-hardware).
+
 
 ### From source
 
@@ -133,7 +141,7 @@ name is used as the BLE advertised name.
 | `log_level` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
 | `adapter` | system default | BlueZ adapter name (e.g., `hci0`) |
 
-Most computers only have a single bluetooth adapter, and `kiss-tnc-bridge` can reliably
+Most computers only have a single Bluetooth adapter, and `kiss-tnc-bridge` can reliably
 find it. In most scenarios, you can just omit the adapter and everything will work great.
 If you have multiple adapters, or want to specify it, you can get a list:
 ```
@@ -155,7 +163,7 @@ consumers will see in their applications when scanning for services.
 
 When the maximum number of clients are connected, `kiss-tnc-bridge` will
 stop advertising the service and not allow any additional clients to connect
-until one of the existing clients has disconnected. Some bluetooth chips do
+until one of the existing clients has disconnected. Some Bluetooth chips do
 not allow multiple clients to connect. See
 [Limitations and Caveats](#limitations-and-caveats) below for more info about
 maximum clients.
@@ -175,74 +183,91 @@ Exits 0 if valid, 1 if there are errors.
 Bluetooth Low Energy is great, but it does have some caveats and limitations you
 should be aware of.
 
-- Most bluetooth chips have a practical limit to the number of concurrent
-  connections, often in the 5-7 range. If you wanna run a dozen clients, best to
-  connect to your TNC directly via TCP instead of BLE.
-- It may take 5-10 seconds from the time a connected bluetooth device moves out
+- Most Bluetooth chips have a practical limit to the number of concurrent
+  connections, often in the 5-7 range. If you want to run a dozen clients, it's best
+  to connect to your TNC directly via TCP instead of BLE.
+- It may take 5-10 seconds from the time a connected Bluetooth device moves out
   of RF range before the operating system notifies `kiss-tnc-bridge` that the
   device is disconnected. This only matters if you have the maximum number of
   clients connected and are antsy to get another one connected.
 - So far, I haven't done much testing with multiple TNCs and BLE GATT advertisements.
 - A typical APRS TNC doesn't generate that much traffic or load. However, many single
   board computers have made design choices that can impact performance. For example,
-  on a Raspberry Pi 4, there is a single chip supporting WiFi and Bluetooth, on a
-  single internal antenna. If either WiFi or Bluetooth have meaningful load and/or
-  the CPU is under load, you may see bluetooth performance problems or unreliable
-  connections. One possible fix is to move WiFi to a 5GHz network to reduce the RF
+  on a Raspberry Pi 4, there is a single chip supporting Wi-Fi and Bluetooth, on a
+  single internal antenna. If either Wi-Fi or Bluetooth have meaningful load and/or
+  the CPU is under load, you may see Bluetooth performance problems or unreliable
+  connections. One possible fix is to move Wi-Fi to a 5GHz network to reduce the RF
   interference. Another possible fix is to add a USB Bluetooth dongle with an
   external antenna.
-- Both iOS and Android cache BLE peripheral data using the devices Bluetooth MAC
+- Both iOS and Android cache BLE peripheral data using the device's Bluetooth MAC
   address. This can cause all kinds of confusing behavior. For example, connect a
   USB Bluetooth dongle to computer A with a `kiss-tnc-bridge`
-  which advertises a bluetooth TNC called "TNC 1" Then move the dongle to computer
-  B, which hass a `kiss-tnc-bridge` configuration which advertises a bluetooth TNC
+  which advertises a Bluetooth TNC called "TNC 1". Then move the dongle to computer
+  B, which has a `kiss-tnc-bridge` configuration which advertises a Bluetooth TNC
   called "TNC 2". When you scan in `aprs.fi` or another client program, iOS or Android
   will still show the cached value as "TNC 1". On iOS, the only way to flush the cache
-  is to toggel bluetooth off and on in Settings (it doesn't seem that the Control Center
+  is to toggle Bluetooth off and on in Settings (it doesn't seem that the Control Center
   toggle always works). This could also show up if you have a single computer and edit
   the config file to change the TNC name and restart `kiss-tnc-bridge`. It also seems
   that connecting to the "old" TNC name and disconnecting will update the operating
   system cache name.
-- some Bluetooth chipsets have limited extended advertising support, meaning that when
+- Some Bluetooth chipsets have limited extended advertising support, meaning that when
   a client connects, they sometimes stop advertising until that client disconnects.
-  The RTL8761B seems to have issues with this. The TP-Link UB500 Plus I have for
+  The RTL8761B has limited extended advertising. The TP-Link UB500 Plus I have for
   testing stops advertising after the first client connects, even if you have
   `max_clients` set at 2 in `kiss-tnc-bridge.conf`.
 
 
-## Supported Hardware
+## Recommended Hardware
 
-Bluetooth Low Energy (BLE) appeared in version 4.0 of the bluetooth specifications. It is
-available in all hardware supporting bluetooth 4.0 or higher (eg 4.2, 5.0, etc). It is
-not supported by earlier hardware. You'll need a bluetooth chip or usb adapter which
+Bluetooth Low Energy (BLE) appeared in version 4.0 of the Bluetooth specifications. It is
+available in all hardware supporting Bluetooth 4.0 or higher (e.g. 4.2, 5.0, etc.). It is
+not supported by earlier hardware. You'll need a Bluetooth chip or USB adapter which
 supports Bluetooth 4.0 or higher in the computer you run `kiss-tnc-bridge` on.
 
-You may also need ethernet or WiFi if you want to connect to KISS TNCs that run on other
-servers.
+You also need Ethernet or Wi-Fi if you want to connect to KISS TNCs that run on other
+devices.
 
 Here's some popular devices which `kiss-tnc-bridge` works with:
 
-- Most Raspberry Pi models. Original Pi Zero and Pi 1 boards do not have built-in
-  BLE, but it can be added with a USB Bluetooth adapter. Pi Zero W, Pi Zero 2 W,
-  and models 3, 4, and 5 have built-in BLE.
-- The Raspberry Pi 4 builtin bluetooth uses a Cypress chip, which allows multiple
+- Original Raspberry Pi Zero and Pi 1 boards do not have built-in BLE, but it can be
+  added with a USB Bluetooth adapter. Use the `armhf` platform builds, which are
+  compiled for armv6 architecture, which is 32 bit, and have been verified to work
+  on old Pi hardware.
+- Raspberry Pi Zero W, Pi Zero 2 W, and models 3, 4, and 5 have built-in BLE and
+  work out of the box
+- The Raspberry Pi 4 built-in Bluetooth uses a Cypress chip, which allows multiple
   clients to simultaneously connect.
 
-If your computer doesn't have a BLE compatible chip, you can buy an inexpensive USB
-adapter. If the adapter is supported in Linux and supports Bluetooth version 4.0 or
-higher it should work. Many USB adapters use the Realtek 8761B chipset or one of it's
-variants. This chipset does not allow multiple clients to simultaneously connect.
-As best I can tell, all these common adapters use that chipset:
+If your computer doesn't have a BLE compatible chip, you can buy an inexpensive
+USB adapter. If the adapter is supported in Linux and supports Bluetooth version
+4.0 or higher it should work. Many USB adapters use the Realtek 8761B chipset or
+one of its variants. This chipset works great, but does not allow multiple
+clients to simultaneously connect. As best I can tell, all these common adapters
+use that chipset:
 
 - TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
 - ASUS USB-BT500
 - EDUP EP-B3536
 - Plugable USB Bluetooth 5 Adapter
 
-If you plug in one of these USB bluetooth adapters to a computer that already has a built-in
+If you plug in one of these USB Bluetooth adapters to a computer that already has a built-in
 adapter, you will want to use `hciconfig -a` to find the device of your new adapter and add
-that to the `kiss-tnc-bridge.conf` file to ensure that it uses the USB bluetooth device
+that to the `kiss-tnc-bridge.conf` file to ensure that it uses the USB Bluetooth device
 instead of the built-in device.
+
+If you find hardware that works or doesn't work, please open an issue and I'll be happy
+to add it to this list.
+
+
+## Interoperable Software
+
+I've tested these software applications and they work great through this bridge:
+
+- [aprs.fi](https://apps.apple.com/us/app/aprs-fi/id922155038) iOS app
+- Beta of RadioMessenger - more details coming when it's released
+
+Open an issue if you find software that should work, but doesn't.
 
 
 ## Releases
