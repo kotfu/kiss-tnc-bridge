@@ -46,7 +46,7 @@ Bluetooth?
 ### From release packages
 
 Download the latest release from the [Releases](../../releases) page. Releases are
-available in amd64 (x86_64), arm64 (aarch64), and armhf (ARMv6) architectures.
+available for amd64 (x86_64), arm64 (aarch64), and armhf (ARMv6) architectures.
 
 - **Debian/Ubuntu**: `sudo dpkg -i kiss-tnc-bridge_*.deb`
 - **RHEL/Fedora**: `sudo rpm -i kiss-tnc-bridge-*.rpm`
@@ -268,6 +268,163 @@ I've tested these software applications and they work great through this bridge:
 - Beta of RadioMessenger - more details coming when it's released
 
 Open an issue if you find software that should work, but doesn't.
+
+
+## Technical Architecture
+
+`kiss-tnc-bridge` is an asynchronous daemon written in Rust on top of the
+[Tokio](https://tokio.rs/) runtime. It talks to the Linux Bluetooth stack
+(BlueZ) over D-Bus using the [`bluer`](https://crates.io/crates/bluer) crate,
+acting as a BLE GATT **peripheral** that APRS apps connect to.
+
+### Process and adapter supervision
+
+At startup the daemon acquires an exclusive `flock` on `/run/kiss-tnc-bridge.lock`
+and exits if another instance already holds it, so only one instance runs at a
+time. It then opens a BlueZ session, registers a `NoInputNoOutput` pairing agent
+(for "Just Works" pairing), and enters a **supervisor loop**.
+
+The supervisor watches adapter lifecycle events and owns the bridge for each
+adapter:
+
+- BlueZ session events (`AdapterAdded` / `AdapterRemoved`) detect USB Bluetooth
+  dongles being plugged in or unplugged.
+- Per-adapter events (`Powered` on/off) detect a built-in adapter being toggled,
+  e.g. via `rfkill`.
+
+When an adapter is available, the supervisor powers it on, makes it pairable,
+sets its alias, registers the GATT application, and spawns a `BridgeManager`
+task per configured TNC. When an adapter disappears or is powered off, the
+supervisor tears down that adapter's GATT application and bridge tasks but keeps
+running, then re-establishes everything automatically when the adapter returns.
+
+### GATT layer
+
+Each configured TNC is advertised as one primary GATT service following the
+[BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md),
+with two characteristics:
+
+| UUID | Role | Properties | Direction |
+|------|------|------------|-----------|
+| `00000001-ba2a-46c9-ae49-01b0961f68bb` | KISS service | primary service | — |
+| `00000002-ba2a-46c9-ae49-01b0961f68bb` | TX characteristic | write, write-without-response | client → bridge |
+| `00000003-ba2a-46c9-ae49-01b0961f68bb` | RX characteristic | notify | bridge → client |
+
+Both characteristics use BlueZ's I/O (file-descriptor) method, so reads and
+writes are streamed over sockets rather than per-attribute D-Bus calls.
+
+### The bridge manager
+
+Each `BridgeManager` runs a single `tokio::select!` loop and owns:
+
+- **one** TCP connection to the TNC server (shared by all BLE clients),
+- a map of connected clients (each with its own KISS reassembly buffer),
+- a map of subscribed clients (each with its own notification channel and
+  writer task).
+
+The TCP connection is opened lazily when the first client connects or
+subscribes, and closed when the last client disconnects. If the TCP read or
+write fails while clients are still connected, the manager reconnects with
+exponential backoff (1s, doubling up to 30s).
+
+### Data flow
+
+Multiple BLE clients are multiplexed onto the single shared TCP socket:
+
+```
+  Uplink (BLE -> TCP), multiplexed onto one socket:
+
+    BLE client A --TX--> reader task --> per-client KISS reassembly --+
+                                                                      +--> complete frames --> TCP socket
+    BLE client B --TX--> reader task --> per-client KISS reassembly --+
+
+  Downlink (TCP -> BLE), broadcast to every client:
+
+    BLE client A <--RX-- writer task <--+
+                                        +-- broadcast <-- KISS reassembly <-- TCP socket
+    BLE client B <--RX-- writer task <--+
+```
+
+- **Uplink (BLE → TCP):** each client has its own reader task and its own KISS
+  reassembly buffer, so fragments from different clients are never mixed. Once a
+  complete KISS frame is reassembled it is written to the shared TCP socket.
+  Because writes happen inside the single select loop, frames are serialized and
+  never interleaved mid-frame.
+- **Downlink (TCP → BLE):** frames read from the TCP socket are reassembled and
+  **broadcast** to every subscribed client via its notification channel. A
+  per-client writer task chunks each frame to the negotiated MTU and sends it as
+  GATT notifications. This matches KISS/APRS shared-channel semantics — every
+  client hears everything the radio receives.
+
+**Note:** the bridge never relays frames directly between BLE clients. If
+client A sends a message intended for client B, `kiss-tnc-bridge` forwards it
+only to the TNC. Client B will receive it only if the TNC re-broadcasts it
+back over the TCP connection (for example, if the radio digipeats the frame
+or the message is heard and repeated). In other words, BLE clients
+communicate through the radio channel, not through the bridge itself.
+
+### Multiple TNCs and adapters
+
+Everything above describes a single TNC. Each TNC section in the config file is
+**fully independent**: it gets its own GATT service (advertised under the section
+name), its own `BridgeManager` task, and its own TCP connection to its own
+configured `host:port`. The managers run concurrently as separate Tokio tasks
+and share no client lists or sockets.
+
+So the data flow scales cleanly, and the isolation extends across TNCs as well
+as across clients. A client connected to one TNC's service only ever exchanges
+frames with that TNC's TCP socket — there is no cross-TNC routing. A frame from
+a client on "TNC 1" goes only to TNC 1's server; a client on "TNC 2" never sees
+it. The two share nothing but the daemon process and the radio hardware.
+
+TNCs are grouped onto Bluetooth adapters. By default every TNC uses the global
+adapter, but each TNC can override this with its own `adapter` key. The
+supervisor registers one GATT application per adapter (containing a service for
+each TNC assigned to it) and spawns one `BridgeManager` per TNC. A single adapter
+can therefore host several TNC services at once, or you can dedicate a separate
+adapter — for example a USB dongle — to each TNC.
+
+```
+    BLE clients         One kiss-tnc-bridge process          TCP KISS TNCs
+
+    A --+
+        +-- "TNC 1" --> BridgeManager 1 (hci0) -- socket --> 127.0.0.1:6700
+    B --+
+
+    C --+
+        +-- "TNC 2" --> BridgeManager 2 (hci0) -- socket --> 192.168.1.50:8001
+    D --+
+
+    E --+
+        +-- "TNC 3" --> BridgeManager 3 (hci1) -- socket --> 10.0.0.5:8001
+    F --+
+```
+
+In this example a single daemon advertises three TNC services. "TNC 1" and
+"TNC 2" share adapter `hci0`, while "TNC 3" runs on a second adapter `hci1`.
+Each `BridgeManager` multiplexes its own clients onto its own TCP socket exactly
+as described in [Data flow](#data-flow) above; the three are otherwise completely
+separate.
+
+### KISS framing
+
+KISS frames are delimited by `FEND` (`0xC0`) bytes with the standard byte
+stuffing (`FESC`/`TFEND`/`TFESC`). Both the BLE and TCP sides use a reassembly
+buffer that accumulates bytes and extracts complete frames, so frames split
+across BLE MTU boundaries or TCP segments are handled transparently.
+
+### Client admission and advertising
+
+A configurable `max_clients` limit caps concurrent connections per TNC. When the
+limit is reached the daemon stops advertising so new devices don't discover it,
+and resumes advertising once a client disconnects and capacity frees up.
+Reconnections from an already-known device address don't count against the limit.
+
+Note that some Bluetooth chipsets have limited extended advertising support and
+stop advertising on their own once a single client connects, regardless of the
+`max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
+On that hardware a TNC is effectively limited to one client at a time even if
+`max_clients` is higher.
 
 
 ## Releases
