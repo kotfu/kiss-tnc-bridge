@@ -189,7 +189,14 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                     adapter_name
                 ))
             })?;
-            adapter.set_pairable(false).await?;
+            // The adapter must be pairable so that the "Just Works" bond
+            // triggered when BlueZ probes a connected client's protected
+            // characteristics can complete.  Combined with the
+            // NoInputNoOutput agent, this pairs silently with no code
+            // prompt.  If the adapter is not pairable, BlueZ rejects the
+            // pairing with "Pairing not supported" and the client is
+            // disconnected.
+            adapter.set_pairable(true).await?;
 
             if let Some(first_tnc) = tncs.first() {
                 adapter.set_alias(first_tnc.name.clone()).await?;

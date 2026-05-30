@@ -5,15 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## 0.4.6 (30 May 2026)
+## 0.5.1 (30 May 2026)
 
 ### Fixed
 
-- Add a `NoInputNoOutput` pairing agent so BLE pairing uses the "Just
-  Works" model. Previously, when BlueZ probed a connected client's protected
-  characteristics it would trigger a numeric-comparison pairing, prompting for
-  a pairing code that the headless daemon could not confirm — causing some
-  clients to fail to connect.
+- logic bug in the just works pairing code
+
+
+## 0.5.0 (30 May 2026)
+
+### Fixed
+
+- Add a `NoInputNoOutput` pairing agent and make the adapter pairable so BLE
+  pairing uses the "Just Works" model. Previously, when BlueZ probed a connected
+  client's protected characteristics it would trigger a numeric-comparison
+  pairing, prompting for a pairing code that the headless daemon could not
+  confirm — causing some clients to fail to connect.
 
 
 ## 0.4.5 (26 May 2026)
