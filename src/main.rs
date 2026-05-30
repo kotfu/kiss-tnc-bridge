@@ -264,6 +264,24 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         // ── Session and event channel ────────────────────────────────
 
         let session = bluer::Session::new().await?;
+
+        // Register a NoInputNoOutput pairing agent so that any pairing
+        // triggered by BlueZ (e.g. when it probes a connected central's
+        // protected characteristics) uses the "Just Works" model instead
+        // of numeric comparison.  Without this, BlueZ falls back to a
+        // DisplayYesNo capability that prompts for a pairing code the
+        // headless daemon can never confirm, causing clients to fail to
+        // connect.  An Agent with no interaction callbacks advertises the
+        // NoInputNoOutput capability.  The handle must be held for the
+        // lifetime of the process.
+        let _agent_handle = session
+            .register_agent(bluer::agent::Agent {
+                request_default: true,
+                ..Default::default()
+            })
+            .await?;
+        tracing::debug!("registered NoInputNoOutput pairing agent");
+
         let (sv_tx, mut sv_rx) = mpsc::channel::<SupervisorEvent>(32);
 
         // Forward session-level adapter add/remove events.
