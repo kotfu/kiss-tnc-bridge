@@ -910,6 +910,11 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 - **Framing:** newline-delimited JSON. Every message carries `"v": 1`.
   Requests have an `id`, responses echo it with `ok`/`error`, and events have
   no `id`.
+- **Errors** carry a stable machine-readable `code` (e.g.
+  `tnc_in_use`, `reference_not_found`, `static_object_readonly`), a
+  human-readable `message` that says what to do next, and the config path or
+  object involved. `ktbctl` shows the message; scripts, the gateway and any
+  future LLM tooling match on the code.
 - **Types** live in `control/protocol.rs` with serde, shared by the daemon,
   `ktbctl` and `ktb-gateway`, so they can't drift. A **JSON Schema** generated
   from them (`schemars`) is published so Swift and Kotlin apps can generate
@@ -1411,3 +1416,38 @@ announcing on the same Pi.
   are already static are left out, or included with `--all`.
 - **App-to-app echo:** an opt-in per-bridge setting that copies each app's
   transmitted frames to the other app sessions, if apps turn out to need it.
+- **An LLM skill for configuring and troubleshooting.** A packaged skill
+  (instructions, the config reference, worked examples) that lets an AI
+  assistant set up and diagnose bridges from plain requests: "share my D75
+  with my phone", "switch to the home setup", "why can't aprs.fi see the
+  bridge?". Design points:
+  - **Act through `ktbctl --json`, never by writing files.** Every change
+    goes through the control API, so it gets the same validation, reference
+    checks and static/dynamic rules as a human. `config.validate` gives the
+    model a propose → validate → fix loop, with errors it can read.
+  - **Make it small enough for on-device models.** Small models are weak at
+    free-form TOML but good at filling in structured output. The JSON Schema
+    already published for the control protocol can drive constrained
+    generation: Apple's on-device Foundation Models framework on macOS has
+    guided generation and tool calling, and llama.cpp grammars work for a
+    small model on a Pi 5 or the Flipper One (whose RK3576 also has an NPU).
+    Exposing a handful of task-level tools (list TNCs, create bridge, add
+    port, switch, pair, status) rather than the whole protocol keeps the
+    surface small enough for a 1–3B model.
+  - **Where the model runs vs. where the daemon runs.** On a Pi or Flipper
+    One, the model can call `ktbctl` locally. A model on a Mac or phone
+    reaches the device through `ktbctl` over SSH, or through `ktb-gateway`.
+    An MCP server wrapping the control protocol would be another way to
+    package the same tools for desktop assistants.
+  - **Guardrails for a transmitter.** The skill has to confirm with the user
+    before anything that widens who can transmit: binding a `tcp-server`
+    beyond loopback, removing an `allow` list, or turning on gateway access.
+    It also needs to explain the steps a model can't do: putting the radio in
+    pairing mode, turning on KISS, plugging in cables.
+  - **Diagnostics are the bigger win.** Most questions will be "why isn't it
+    working?". A structured `ktbctl doctor` (adapter present and powered, TNC
+    paired, serial device present, interface up, DNS-SD announced, recent
+    errors) would help humans as much as models, and could come first.
+  - **What 1.0 should get right so this is easy later:** complete and stable
+    `--json` output, stable error codes with actionable messages, and the
+    published schema. All three are already in the plan.
