@@ -175,7 +175,30 @@ max_clients = 2            # BLE client limit (unchanged meaning)
 
 tcp_listen = 8001          # port alone binds 127.0.0.1; use 0.0.0.0:8001 to expose
 tcp_max_clients = 4
+
+# Optional: put each Bluetooth role on its own adapter
+# source_adapter = hci0    # talks Classic/SPP to the radio
+# ble_adapter = hci1       # serves the BLE KISS front-end to phones
 ```
+
+### Adapter selection per role
+
+In 0.5 a TNC uses one adapter because it only has one Bluetooth role. A hub
+with an `rfcomm` source and a `ble` front-end has two roles, and they may
+belong on different adapters. For example, a Flipper One or Pi could use its
+built-in chip for the radio and a USB dongle for the phones, or the reverse.
+
+| Key | Applies to | Falls back to |
+|---|---|---|
+| `source_adapter` | the `rfcomm` source | `adapter`, then `[global] adapter`, then the default adapter |
+| `ble_adapter` | the `ble` front-end | `adapter`, then `[global] adapter`, then the default adapter |
+| `adapter` | both roles (0.5 meaning, unchanged) | `[global] adapter`, then the default adapter |
+
+Splitting roles gets around the possible trouble with one controller running
+Classic and BLE at once. It also gets around a weak onboard chip: if the
+built-in Bluetooth turns out to be unreliable, plugging in a dongle and
+setting one key fixes it without other config changes. `source_adapter` on a
+`tcp` source is a config error.
 
 Validation rules:
 
@@ -243,8 +266,14 @@ TCP Dire Wolf connection never needed:
 - **Both radios on one adapter:** BLE peripheral advertising and BR/EDR
   connections at the same time are normal for dual-mode controllers. Classic
   *inquiry* (scanning) can disturb live links, so `scan` warns when clients are
-  connected. Per-TNC `adapter` remains the escape hatch: a USB dongle for BLE,
-  built-in for Classic, or the reverse.
+  connected. If one controller can't handle both roles reliably,
+  `source_adapter` and `ble_adapter` split them across two adapters (see
+  [Adapter selection per role](#adapter-selection-per-role)).
+- The RFCOMM profile is registered per BlueZ session, not per adapter.
+  `connect_profile` runs on the device object under `source_adapter`, so the
+  radio must be paired with *that* adapter. `pair` and `setup` take an
+  adapter, defaulting to the hub's `source_adapter`. Pairing a radio with
+  `hci0` and then moving `source_adapter` to `hci1` means pairing again.
 
 ### Pairing agent
 
@@ -322,6 +351,12 @@ or restarts only the hubs that differ. To make that cheap:
   allows multiple applications per adapter.
 - Adapter add/remove and power on/off handling (today's supervisor loop) stays
   the same, but now feeds the reconciler.
+- **Adapters are tracked per role, not per hub.** Today the supervisor groups
+  TNCs by adapter and tears down everything on an adapter when it goes away.
+  With split roles, losing `ble_adapter` stops only that hub's BLE front-end;
+  the source and any TCP front-end keep running. Losing `source_adapter` puts
+  the source into `Backoff` while the clients stay connected. When the adapter
+  returns, only the affected role is restarted.
 
 ---
 
@@ -384,6 +419,8 @@ plan:
       behavior, D74 vs D75 differences, license.
 - [ ] Measure RFCOMM connect time and behavior when the radio is off or out of
       range (page timeout).
+- [ ] Repeat the coexistence run with the roles split across two adapters
+      (built-in + RTL8761B dongle), to confirm the fallback works.
 
 **Exit:** a short findings section appended to this doc. If pairing or
 coexistence is a dead end on Pi hardware, stop here.
@@ -419,6 +456,8 @@ before Bluetooth Classic is involved.
       (`bluetoothctl`) in this release.
 - [ ] `radio_init` for th-d74/th-d75, the KISS policy filter, and
       `idle_timeout`.
+- [ ] `source_adapter` / `ble_adapter` keys, and per-role adapter tracking in
+      the supervisor.
 - [ ] README: TH-D75 walkthrough, hardware notes, and the TCP exposure warning.
 - [ ] Manual hardware test matrix (below).
 
@@ -464,7 +503,10 @@ shares the radio over TCP.
       snapshots.
 - [ ] Check the MT7921 Bluetooth under load (MediaTek btusb firmware has had
       quirks on Linux): BLE peripheral and RFCOMM at the same time, and
-      extended advertising with multiple hubs.
+      extended advertising with multiple hubs. If it falls short, the
+      fallback is a USB Bluetooth dongle in one of the Flipper One's USB
+      ports, with `source_adapter`/`ble_adapter` splitting the roles. Test that
+      setup too, and document a recommended dongle.
 - [ ] Check for conflicts with Flipper OS's own Bluetooth services (a default
       agent, or its own GATT apps).
 - [ ] Power: measure the battery cost of `connect = always` against
@@ -490,6 +532,7 @@ control API is the integration point.
 | Pi 4 (built-in) | TH-D75 | aprs.fi iOS, RadioMail | Pat, Xastir |
 | Pi Zero 2 W (built-in) | TH-D75 | aprs.fi iOS | — |
 | Pi 1 + RTL8761B | TH-D75 | aprs.fi iOS (1 client) | YAAC |
+| Pi 4: built-in for radio, RTL8761B dongle for BLE (split roles) | TH-D75 | aprs.fi iOS | — |
 | x86_64 + dongle | TH-D74 (if available) | aprs.fi iOS | Dire Wolf-style client |
 | Flipper One | TH-D75 | aprs.fi iOS | Pat over Ethernet |
 
