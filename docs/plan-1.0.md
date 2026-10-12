@@ -7,8 +7,9 @@ Status: draft, October 2026
 Turn `kiss-tnc-bridge` from a one-way "TCP TNC → BLE" bridge into a small
 **KISS switchboard**, modeled on the virtual networks in VMware Workstation or
 Linux bridges. You define **bridges** (`ktbr0`, `ktbr1`, …). Each bridge
-connects one KISS modem (a radio's built-in TNC over Bluetooth Classic SPP, or
-a TCP KISS server such as Dire Wolf) to any number of apps, over BLE and over
+connects one KISS TNC (a radio's built-in TNC over Bluetooth Classic SPP or
+USB, a standalone TNC, or a software TNC like Dire Wolf over TCP) to any
+number of apps, over BLE and over
 TCP. Bridges are managed from a CLI and a full-screen TUI, and the management
 protocol is designed so a web UI and phone apps can be added later.
 
@@ -40,9 +41,9 @@ hardware you already carry.
 
 ### Decisions so far
 
-- **One modem per bridge** in 1.0. Bridges with several modems, presented as a
-  multi-port KISS TNC, come after 1.0.
-- **No app-to-app echo** in 1.0. Apps only hear what the modem sends.
+- **One TNC port per bridge** in 1.0. Bridges with several TNC ports,
+  presented as a multi-channel KISS TNC, come after 1.0.
+- **No app-to-app echo** in 1.0. Apps only hear what the TNC sends.
 - **New TOML config in a new directory, `/etc/kiss-tnc-bridge/`.** 0.5 INI
   configs aren't read or migrated. There are very few users, and the old file
   at `/etc/kiss-tnc-bridge.conf` is left untouched.
@@ -60,14 +61,19 @@ hardware you already carry.
   entirely inline.
 - **The object is a TNC, not a radio.** "Radio" would imply receiving audio
   that still needs demodulating, and this project will never include a
-  software modem. Every modem it talks to is a TNC: a hardware one
-  (`[[tnc]]`), or a software one reached over TCP (`tcp-client`).
+  software modem. Everything on that side of a bridge is a TNC: a hardware
+  one (`[[tnc]]`), or a software one reached over TCP (`tcp-client`).
+- **Port roles are `tnc` and `app`** (not "modem"), for the same reason.
 - **Serial TNCs are in 1.0**, including the TH-D75's TNC over USB.
 - **`tcp-server` ports are announced with DNS-SD in 1.0**, following the
   [TCP KISS DNS-SD spec](https://github.com/hessu/aprs-specs/blob/master/TCP-KISS-DNS-SD.md)
   (`_kiss-tnc._tcp`), so apps like aprs.fi on iOS can pick a bridge from a
   list. A bridge has one public name, used for both BLE and DNS-SD, as the
   spec requires.
+- **Port type names use the transport users know:** `tcp-`, `spp-` and `ble-`
+  prefixes with `-client`/`-server`, plus `serial`. No RFCOMM or BLE
+  central/peripheral jargon in anything users type (see
+  [Port types](#port-types)).
 - **Bridges have an id (`ktbr0`) and a human-friendly name, and can be
   disabled.** You can keep a bridge for each physical setup and enable the one
   that matches what you have with you.
@@ -82,10 +88,10 @@ hardware you already carry.
 
 ### Non-goals for 1.0
 
-- More than one modem per bridge, and any modem-to-modem forwarding
+- More than one TNC port per bridge, and any TNC-to-TNC forwarding
   (digipeating or cross-band gating).
-- Acting as a BLE *central* to BLE TNCs (Mobilinkd TNC4, etc.). The port model
-  leaves room for it; see [After 1.0](#after-10).
+- `ble-client` ports, connecting out to BLE TNCs (Mobilinkd TNC4, etc.). The
+  port model leaves room for them; see [After 1.0](#after-10).
 - Any non-Linux daemon. `ktbctl` and TCP-only bridges should still build and
   run on macOS for development.
 - AX.25 or APRS awareness in the data path. Bridges move KISS frames. Decoding
@@ -111,20 +117,24 @@ hardware you already carry.
 - **Session**: one live connection on a port. A client port has at most one
   session. A server port has one per connected client
   (`ktbr0/phones/7C:2A:…`, `ktbr0/lan/192.168.4.20:51515`).
-- **TNC**: a top-level object for a hardware KISS TNC: the TNC built into a
-  TH-D74/D75, or a standalone one like a NinoTNC, TNC-Pi or Mobilinkd. It has
+- **TNC**: a top-level object for a hardware KISS TNC. A TNC can be built
+  into a radio like the ICOM ID-5200, TH-D75, BTech UV-PRO, VGC VR-N76. It
+  could also be a standalone one like a NinoTNC, OpenTNC, or Mobilinkd. It has
   an id, name and model (which selects the KISS init sequence), plus a
-  section for each way to reach it: `bluetooth` (address, and the adapter
-  it's paired on) and/or `serial` (device path). `rfcomm-client` and `serial`
+  section for each way to reach it: `spp` (Bluetooth address, and the
+  adapter it's paired on) and/or `serial` (device path). `spp-client` and `serial`
   ports reference a TNC by id. The Bluetooth pairing belongs to the TNC, so a
   TNC is `paired` or `unpaired` regardless of which bridges use it. See
   [TNCs](#tncs).
 - **Adapter**: a top-level object that gives a Bluetooth adapter's MAC a
   readable id (`builtin`, `dongle`). Anywhere an adapter is accepted, the
   value can be an adapter id, a MAC, or an `hciN` name.
-- **Role**: each port is either **modem**-side (a frame sent to it means
-  "transmit this on the air") or **app**-side (an app that uses the TNC).
-  Users almost never set this; it defaults from the port type.
+- **Role**: each port is either a **TNC** port (a frame sent to it means
+  "transmit this on the air") or an **app** port (where apps that use the TNC
+  connect). Users almost never set this; it defaults from the port type.
+  Role and transport are independent: a `tcp-client` is normally a TNC
+  client, a `tcp-server` an app server, and a `serial` port a TNC serial
+  device, but the `role` override can change that.
 
 ### Naming conventions
 
@@ -135,7 +145,7 @@ hardware you already carry.
   `host:port` in `address` and `listen` keys, and the docs say "TCP port
   number".
 - The KISS command byte's high nibble, which the KISS spec calls a "port", is
-  a **KISS channel** in our docs and in the post-1.0 multi-modem spec. Dire
+  a **KISS channel** in our docs and in the post-1.0 multi-TNC spec. Dire
   Wolf uses "channel" for the same thing. The KISS spec's term only appears
   when quoting it.
 
@@ -144,20 +154,43 @@ hardware you already carry.
 Types are named for what the daemon does: a `-client` port connects out, and
 a `-server` port accepts connections. `serial` has no direction, so it's just
 `serial`. `tcp-client` connects to a KISS TCP
-server like Dire Wolf's; `tcp-server` runs one. BLE keeps the Bluetooth terms
-`peripheral` and `central`, which is what BLE documentation and apps use.
+server like Dire Wolf's; `tcp-server` runs one.
+
+The prefix is the transport as users meet it in radio manuals and app
+settings, not the protocol layer underneath, and it matches the `[[tnc]]`
+section names:
+
+| Transport | Port types | TNC section |
+|---|---|---|
+| TCP | `tcp-client`, `tcp-server` | none (TCP is always inline) |
+| Bluetooth Classic, Serial Port Profile | `spp-client`, `spp-server` | `[tnc.spp]` |
+| Bluetooth Low Energy | `ble-client`, `ble-server` | `[tnc.ble]` (after 1.0) |
+| USB or UART serial | `serial` | `[tnc.serial]` |
+
+- **SPP, not RFCOMM.** RFCOMM is the protocol layer underneath; SPP is what
+  radio spec sheets, B.B. Link's docs, and Android apps call it.
+- **BLE client/server, not central/peripheral.** In general BLE these are
+  separate ideas: central/peripheral is about who connects, GATT
+  client/server about who holds the data, and they can be mixed. The [BLE
+  KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+  fixes both: the TNC side is a peripheral *and* a GATT server, and the app
+  is a central *and* a GATT client. So `ble-server` (today's behavior)
+  accepts connections and serves the KISS characteristics, and `ble-client`
+  connects out to a BLE TNC, exactly like their TCP counterparts.
+- **Section names are per transport, not "bluetooth".** "Bluetooth" would
+  cover both Classic and LE, and BLE TNCs get their own section after 1.0.
 
 | Type | Default role | Connects to / accepts | 1.0? |
 |---|---|---|---|
-| `rfcomm-client` | modem | A TNC's Bluetooth SPP link (TH-D74/D75, other SPP KISS TNCs), via a `[[tnc]]` with a `bluetooth` section | yes |
-| `serial` | modem | A TNC's USB or UART serial link (TH-D75 over USB, NinoTNC, TNC-Pi), via a `[[tnc]]` with a `serial` section | yes |
-| `tcp-client` | modem | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge's `tcp-server` | yes |
-| `ble-peripheral` | app | Phones and tablets via the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) (today's behavior) | yes |
+| `spp-client` | tnc | A TNC's Bluetooth SPP link (TH-D74/D75, other SPP KISS TNCs), via a `[[tnc]]` with an `spp` section | yes |
+| `serial` | tnc | A TNC's USB or UART serial link (TH-D75 over USB, NinoTNC, TNC-Pi), via a `[[tnc]]` with a `serial` section | yes |
+| `tcp-client` | tnc | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge's `tcp-server` | yes |
+| `ble-server` | app | Phones and tablets via the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) (today's behavior) | yes |
 | `tcp-server` | app | Apps connecting in over the network: Pat, Xastir, YAAC, and aprs.fi on iOS over Wi-Fi. Announced with DNS-SD | yes |
-| `rfcomm-server` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
-| `ble-central` | modem | BLE KISS TNCs | after 1.0 |
+| `spp-server` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
+| `ble-client` | tnc | BLE KISS TNCs | after 1.0 |
 
-A `role = "modem" | "app"` override exists for odd cases, such as a
+A `role = "tnc" | "app"` override exists for odd cases, such as a
 `tcp-client` to an app that runs its own KISS server.
 
 ### Forwarding rules
@@ -165,17 +198,17 @@ A `role = "modem" | "app"` override exists for odd cases, such as a
 KISS isn't Ethernet. Flooding every frame to every port would make one radio
 re-transmit everything another radio hears, so forwarding follows roles:
 
-- Every complete frame from an **app** session goes to the **modem** port,
+- Every complete frame from an **app** session goes to the **TNC** port,
   serialized so frames never interleave.
-- Every frame from the **modem** is broadcast to every app session on every
+- Every frame from the **TNC** is broadcast to every app session on every
   app port.
 - **App → app** never happens in 1.0. One app's transmitted frames aren't
   copied to other app sessions, matching 0.5. An opt-in echo can be added
   later if apps turn out to need it.
-- **Modem → modem** can't happen in 1.0: validation allows exactly one
-  modem-role port per bridge.
+- **TNC → TNC** can't happen in 1.0: validation allows exactly one TNC port
+  per bridge.
 
-This is today's behavior generalized. A bridge with one modem and one BLE port
+This is today's behavior generalized. A bridge with one TNC port and one BLE port
 acts exactly like 0.5.
 
 ### Inside a bridge
@@ -187,7 +220,7 @@ acts exactly like 0.5.
  (ble, tcp-   │ per-session reassembly ─┼─> KISS policy ──┐   ├── per-session queue ───│──> TCP write
   server)     │                         │   filter        │   │                        │
               │                         │                 v   │                        │
-              │                         │          Modem port state machine            │
+              │                         │           TNC port state machine             │
               │                         │   Unpaired · Idle → Connecting → Connected   │
               │                         │                 → Backoff → …                │
               └─────────────────────────┴──────────────────────┬───────────────────────┘
@@ -209,23 +242,23 @@ to 30 s, and it leaves two reconnect gaps
 RFCOMM makes this worse, because a Classic page/connect can take several
 seconds.
 
-The modem port state machine runs `connect()` in a spawned task and reports
+The TNC port state machine runs `connect()` in a spawned task and reports
 back over a channel. Backoff is a `tokio::time::Sleep` stored in the bridge and
 polled as its own select arm. While `Connecting`, uplink frames are queued
 (bounded: 32 frames / 5 s) instead of dropped.
 
-`Unpaired` is a separate state for an `rfcomm-client` port whose TNC isn't
+`Unpaired` is a separate state for an `spp-client` port whose TNC isn't
 paired on its adapter. The bridge reports it and waits; it doesn't retry in a
 loop. Pairing the TNC (`ktbctl pair d75`) moves the port on to `Connecting`.
 `Waiting for device` is the equivalent for a `serial` port whose device path
 doesn't exist (the cable is unplugged); see [Serial details](#serial-details).
 
-### Modem connection policy
+### TNC connection policy
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
-| `connect` | `on_demand`, `always` | `on_demand` | `on_demand` connects the modem when the first app session arrives, as today. `always` keeps it up with no sessions, which is useful for a `tcp-server` port that should look "live" |
-| `idle_timeout` | duration | `0s` | With `on_demand`, how long to hold the modem after the last session leaves. Keeping an RFCOMM link warm for ~1–2 minutes avoids a slow reconnect when iOS briefly drops BLE |
+| `connect` | `on_demand`, `always` | `on_demand` | `on_demand` connects the TNC when the first app session arrives, as today. `always` keeps it up with no sessions, which is useful for a `tcp-server` port that should look "live" |
+| `idle_timeout` | duration | `0s` | With `on_demand`, how long to hold the TNC connection after the last session leaves. Keeping an RFCOMM link warm for ~1–2 minutes avoids a slow reconnect when iOS briefly drops BLE |
 
 ---
 
@@ -286,7 +319,7 @@ id = "d75"
 name = "TH-D75"
 model = "th-d75"                   # KISS init/teardown profile: th-d74 | th-d75 | none
 
-  [tnc.bluetooth]
+  [tnc.spp]
   address = "00:11:22:33:44:55"
   adapter = "builtin"              # the adapter it's paired on
   # channel = 2                    # default: SDP lookup via BlueZ profile connect
@@ -304,13 +337,13 @@ enabled = true
 
   [[bridge.port]]
   id = "radio"
-  type = "rfcomm-client"
+  type = "spp-client"
   tnc = "d75"
   idle_timeout = "90s"
 
   [[bridge.port]]
   id = "phones"
-  type = "ble-peripheral"
+  type = "ble-server"
   adapter = "dongle"               # phones on the dongle, radio on the built-in chip
   max_clients = 2
 
@@ -339,7 +372,7 @@ enabled = false
 
   [[bridge.port]]
   id = "phones"
-  type = "ble-peripheral"
+  type = "ble-server"
   adapter = "builtin"
   max_clients = 3
 
@@ -363,7 +396,7 @@ enabled = false
 
   [[bridge.port]]
   id = "phones"
-  type = "ble-peripheral"
+  type = "ble-server"
   adapter = "builtin"
 
   [[bridge.port]]
@@ -384,7 +417,7 @@ enabled = false
 
   [[bridge.port]]
   id = "phones"
-  type = "ble-peripheral"
+  type = "ble-server"
   adapter = "builtin"
 ```
 
@@ -418,7 +451,7 @@ bridges costs nothing.
   required.
 - **Port ids** use the same character rules and must be unique within a
   bridge. If omitted, they default to the type plus an index
-  (`ble-peripheral0`).
+  (`ble-server0`).
 - **TNC and adapter ids** use the same character rules and are global:
   unique across static and dynamic config, and in separate namespaces from
   each other and from bridges.
@@ -471,15 +504,14 @@ Errors:
   bridge names, radio ids, adapter ids.
 - Duplicate port ids within a bridge.
 - A reference that doesn't resolve (a port's `tnc` or `adapter`, a TNC's
-  `bluetooth.adapter`), or a static object referencing a dynamic one.
-- A port whose TNC lacks the section it needs: `rfcomm-client` needs
-  `bluetooth`, and `serial` needs `serial`.
+  `spp.adapter`), or a static object referencing a dynamic one.
+- A port whose TNC lacks the section it needs: `spp-client` needs `spp`, and
+  `serial` needs `serial`.
 - Two TNCs with the same Bluetooth address on the same adapter, two TNCs with
   the same serial path, or two adapter objects with the same MAC. These are
   checked whether or not anything is enabled, because they're duplicate
   definitions of the same hardware.
-- A bridge without exactly one modem-role port, or without at least one
-  app-role port. This also applies to disabled bridges, so a bridge is known
+- A bridge without exactly one TNC port, or without at least one app port. This also applies to disabled bridges, so a bridge is known
   valid before it's enabled.
 - Among **enabled** bridges only, resource conflicts:
   - the same TNC on two ports, whatever the transport. A TNC accepts one SPP
@@ -500,7 +532,7 @@ Errors:
 
 Warnings:
 
-- A TNC used by an enabled `rfcomm-client` port that isn't paired on its
+- A TNC used by an enabled `spp-client` port that isn't paired on its
   adapter, e.g. "tnc d75 (00:11:22:33:44:55) not paired on adapter builtin
   (B8:27:EB:12:34:56); run `ktbctl pair d75`".
 - A TNC serial path that isn't under `/dev/serial/by-id/` or
@@ -513,7 +545,7 @@ Warnings:
 - `announce = true` on a `tcp-server` bound to loopback (nothing on the LAN
   could connect to what's announced).
 - A public name longer than about 29 bytes of UTF-8 on a bridge with a
-  `ble-peripheral` port. The BLE advertisement may truncate it, and the spec
+  `ble-server` port. The BLE advertisement may truncate it, and the spec
   wants BLE and DNS-SD names to match.
 - No bridge is enabled.
 
@@ -586,7 +618,7 @@ of typing an IP address and TCP port number.
 - **Instance name: the bridge's public name.** `public_name` is a bridge-level
   key that defaults to the bridge `name`. The spec says a device with a BLE
   KISS interface MUST use the same name for BLE and DNS-SD, so the same value
-  is the BLE advertised name for every `ble-peripheral` port on the bridge.
+  is the BLE advertised name for every `ble-server` port on the bridge.
   That's why the name lives on the bridge rather than on each port. It's
   UTF-8, and non-ASCII names are fine; the spec requires clients to handle
   them.
@@ -612,14 +644,14 @@ of typing an IP address and TCP port number.
   - A specific address is announced on the interface that holds it.
   - `0.0.0.0` / `[::]` is announced on all interfaces.
 - **TXT record:** no `pn` record in 1.0. The spec says clients assume a
-  single-port TNC when it's absent, which matches one modem per bridge. When
-  bridges get several modems after 1.0, `pn` lists one name per KISS channel
-  (the TNC names).
+  single-port TNC when it's absent, which matches one TNC port per bridge.
+  When bridges get several TNC ports after 1.0, `pn` lists one name per KISS
+  channel (the TNC names).
 - **Lifecycle:** the announcement exists while the bridge is enabled and the
   `tcp-server` port is listening. It's withdrawn when the bridge is
   disabled, during `switch`, and while an interface-bound port is waiting for
-  its interface. Whether the modem is currently connected doesn't matter:
-  with `connect = "on_demand"`, the modem only connects once an app does.
+  its interface. Whether the TNC is currently connected doesn't matter: with
+  `connect = "on_demand"`, the TNC only connects once an app does.
 - **How:** through Avahi's D-Bus API (`EntryGroupNew`, `AddService`, `Commit`)
   using the `dbus` crate we already depend on through `bluer`. Avahi ships
   with Raspberry Pi OS and is likely on Flipper OS. If Avahi isn't running,
@@ -647,7 +679,7 @@ same time without validation catching it.
 |---|---|
 | `id`, `name` | As for other objects |
 | `model` | Selects the KISS init/teardown sequence: `th-d74`, `th-d75`, or `none` for TNCs that are always in KISS mode |
-| `[tnc.bluetooth]` | `address`, `adapter` (the adapter it's paired on), optional `channel`. Needed by `rfcomm-client` |
+| `[tnc.spp]` | `address`, `adapter` (the adapter it's paired on), optional `channel`. Needed by `spp-client` |
 | `[tnc.serial]` | `path`, optional `baud` (default 9600). Needed by `serial` |
 
 ### Serial details
@@ -685,12 +717,12 @@ same time without validation catching it.
 
 Sharing one radio TNC among several apps needs rules that a single TCP Dire
 Wolf connection never needed. They're applied in the bridge's KISS policy
-filter on app-to-modem traffic:
+filter on app-to-TNC traffic:
 
 - **Drop KISS "return" (`C0 FF C0`) from apps.** On Kenwood radios it takes the
   TNC out of KISS mode, which breaks it for everyone. The bridge logs it and
   swallows it. Only the daemon sends it, during teardown, and only if the
-  `rfcomm-client` or `serial` port sets `exit_kiss_on_disconnect = true`.
+  `spp-client` or `serial` port sets `exit_kiss_on_disconnect = true`.
 - **KISS parameter commands** (TXDELAY, P, SlotTime, TXtail, FullDuplex,
   SetHardware) pass through by default. A per-bridge
   `app_params = "pass" | "drop"` lets an operator pin the radio's settings.
@@ -702,7 +734,7 @@ filter on app-to-modem traffic:
   compatible with GPL-3.0.
 - **KISS channel.** The KISS channel (the command byte's high nibble, which
   the KISS spec calls a port) passes through untouched in 1.0. It becomes the
-  routing key when bridges get several modems.
+  routing key when bridges get several TNC ports.
 
 ---
 
@@ -717,7 +749,7 @@ filter on app-to-modem traffic:
   and take the `Stream` from the `ProfileHandle` connect request. BlueZ does
   the SDP lookup. A `channel` override is kept for oddball devices.
 - **Pairings belong to a TNC and an adapter.** BlueZ stores each pairing
-  under one adapter, which is why `[tnc.bluetooth]` names the adapter it's
+  under one adapter, which is why `[tnc.spp]` names the adapter it's
   paired on. Changing a TNC's adapter means pairing again. `ktbctl pair d75`
   reads the address and adapter from the TNC.
 - **Pairing never changes the configuration**, so it works on static TNCs
@@ -733,10 +765,10 @@ filter on app-to-modem traffic:
   connections at the same time are normal for dual-mode controllers. Classic
   *inquiry* (scanning) can disturb live links, so `scan` warns when sessions
   are connected. If one controller can't handle both roles reliably, use
-  different adapters: the TNC's `bluetooth.adapter` for the Classic link and each
-  `ble-peripheral` port's `adapter` for phones, such as the built-in chip for
+  different adapters: the TNC's `spp.adapter` for the Classic link and each
+  `ble-server` port's `adapter` for phones, such as the built-in chip for
   the radio and a USB dongle for phones.
-- **One GATT application per `ble-peripheral` port**, rather than one per
+- **One GATT application per `ble-server` port**, rather than one per
   adapter as today. Enabling, disabling or changing one bridge then registers
   or unregisters only its own application, and doesn't disconnect phones on
   other bridges sharing the adapter. BlueZ allows multiple applications per
@@ -819,7 +851,7 @@ gateway; a Pi 1 that only needs the CLI doesn't.
        {"id":"dongle","mac":"00:1A:7D:DA:71:13","hci":"hci1","present":true,"powered":true}],
      "tncs":[
        {"id":"d75","name":"TH-D75","model":"th-d75",
-        "bluetooth":{"address":"00:11:22:33:44:55","adapter":"builtin","paired":true},
+        "spp":{"address":"00:11:22:33:44:55","adapter":"builtin","paired":true},
         "serial":{"path":"/dev/serial/by-id/usb-JVC_KENWOOD_TH-D75_XXXXXXXX-if00","present":false},
         "in_use_by":"ktbr0","source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml"}],
      "bridges":[{
@@ -827,9 +859,9 @@ gateway; a Pi 1 that only needs the CLI doesn't.
        "public_name":{"configured":"TH-D75 portable","effective":"TH-D75 portable"},
        "source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml","editable":false,
        "ports":[
-         {"id":"radio","type":"rfcomm-client","role":"modem","tnc":"d75",
+         {"id":"radio","type":"spp-client","role":"tnc","tnc":"d75",
           "state":"connected","since":"2026-10-12T14:02:11Z"},
-         {"id":"phones","type":"ble-peripheral","role":"app","adapter":"dongle","advertising":false,
+         {"id":"phones","type":"ble-server","role":"app","adapter":"dongle","advertising":false,
           "sessions":[{"id":"7C:2A:…","since":"2026-10-12T14:02:09Z"}]},
          {"id":"lan","type":"tcp-server","role":"app","listen":"wlan0:8001","state":"listening",
           "announced":true,"sessions":[]}],
@@ -851,7 +883,7 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 | `port.add` / `port.update` / `port.remove` | Ports on dynamic bridges only |
 | `tnc.create` / `tnc.update` / `tnc.delete` | Dynamic TNCs only; delete is refused while referenced |
 | `adapter.create` / `adapter.update` / `adapter.delete` | Dynamic adapter objects only; delete is refused while referenced |
-| `port.connect` / `port.disconnect` | Force a modem port up or down |
+| `port.connect` / `port.disconnect` | Force a TNC port up or down |
 | `session.kick` | Disconnect one session |
 | `scan.start` / `scan.stop` | Discovery with `transport: classic \| le \| auto`. Emits `scan.device` events and flags likely TNCs (SPP UUID, `TH-D7*` names) |
 | `serial.list` | Serial devices present, by stable path, with USB vendor/product names, flagging known TNCs |
@@ -867,11 +899,10 @@ change it starts, stops or restarts only the bridges and ports that differ.
 
 **Adapters are tracked per port, not per bridge.** Today the supervisor groups
 TNCs by adapter and tears down everything on an adapter when it goes away. In
-the new model, losing a `ble-peripheral` port's adapter stops only that port,
-and the bridge's modem and TCP sessions keep running. Losing a TNC's
-adapter puts the `rfcomm-client` port into `Backoff` while app sessions stay
-connected. When
-the adapter returns, only the affected ports restart. Adapter hot-plug and
+the new model, losing a `ble-server` port's adapter stops only that port,
+and the bridge's TNC port and TCP sessions keep running. Losing a TNC's
+adapter puts the `spp-client` port into `Backoff` while app sessions stay
+connected. When the adapter returns, only the affected ports restart. Adapter hot-plug and
 power on/off detection (today's supervisor loop) stays as it is and feeds the
 reconciler.
 
@@ -905,9 +936,9 @@ ktbctl bridge public-name BRIDGE --default     # dynamic: fall back to the bridg
 ktbctl bridge public-name BRIDGE --retry       # any bridge: drop a DNS-SD collision adjustment
 ktbctl enable BRIDGE | disable BRIDGE | switch BRIDGE
 ktbctl port add BRIDGE TYPE [--id ID] [type options]
-    e.g. ktbctl port add ktbr0 rfcomm-client --tnc d75 --idle-timeout 90s
+    e.g. ktbctl port add ktbr0 spp-client --tnc d75 --idle-timeout 90s
          ktbctl port add ktbr3 serial --tnc d75
-         ktbctl port add ktbr0 ble-peripheral --adapter dongle --max-clients 2
+         ktbctl port add ktbr0 ble-server --adapter dongle --max-clients 2
          ktbctl port add ktbr0 tcp-server --listen wlan0:8001
          ktbctl port add ktbr1 tcp-client --address 127.0.0.1:6700
 ktbctl port rm BRIDGE/PORT
@@ -961,14 +992,14 @@ Built with `ratatui`, in the same binary as the CLI (the same relationship as
 ```
 ┌ kiss-tnc-bridge ─ pi-zero ─────────────────────────────────────────────────┐
 │ ktbr0  TH-D75 portable                                         ● enabled   │
-│   radio   rfcomm-client   d75 (TH-D75)       connected 2h14m   ■ rx ■ tx   │
-│   phones  ble-peripheral  dongle "TH-D75"    1/2 sessions      ■ rx ■ tx   │
+│   radio   spp-client      d75 (TH-D75)       connected 2h14m   ■ rx ■ tx   │
+│   phones  ble-server      dongle "TH-D75"    1/2 sessions      ■ rx ■ tx   │
 │             └ 7C:2A:…  iPhone                                  ■ rx ■ tx   │
 │   lan     tcp-server      wlan0:8001         0/4 sessions                  │
 │ ktbr1  Graywolf at home                                        ○ disabled  │
 │ ktbr2  Shack relay                                             ○ disabled  │
 ├────────────────────────────────────────────────────────────────────────────┤
-│ tncs     d75 TH-D75  bt: paired on builtin  usb: not present               │
+│ tncs     d75 TH-D75  spp: paired on builtin  serial: not present           │
 │ adapters builtin hci0 B8:27:EB:… on · dongle hci1 00:1A:7D:… on            │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ 14:22:07 rx ktbr0/radio  W1AW-9>APDR16,WIDE1-1:!4237.14N/07120.83W>        │
@@ -1032,7 +1063,7 @@ src/
   lib.rs                   shared by all binaries
   kiss/                    unchanged: frame.rs, buffer.rs
   bridge/
-    mod.rs                 bridge task: modem state machine, session registry, routing,
+    mod.rs                 bridge task: TNC port state machine, session registry, routing,
                            counters, activity events
     policy.rs              KISS command filtering
   port/
@@ -1040,9 +1071,9 @@ src/
     stream.rs              KissConnection<S: AsyncRead + AsyncWrite> (from bridge/tcp.rs)
     tcp_client.rs
     tcp_server.rs
-    rfcomm_client.rs       linux only
+    spp_client.rs          RFCOMM via a BlueZ SPP profile, linux only
     serial.rs              tokio-serial, TIOCEXCL, path polling
-    ble_peripheral.rs      GATT service + advertising (from bridge/manager.rs), linux only
+    ble_server.rs          GATT peripheral + advertising (from bridge/manager.rs), linux only
     tnc_init.rs            KISS init by TNC model: th-d74, th-d75, none
     listen.rs              tcp-server binding: address, interface (SO_BINDTODEVICE), allow
   announce.rs              DNS-SD via Avahi D-Bus: entry groups, collisions, per-interface
@@ -1109,10 +1140,10 @@ coexistence is a dead end on Pi hardware, stop here.
 
 - [ ] Extract `KissConnection<S>` from `TcpKissConnection`.
 - [ ] Bridge task with port roles, forwarding rules, KISS policy filter, and
-      the non-blocking modem state machine. This fixes
+      the non-blocking TNC port state machine. This fixes
       [kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)
       if it hasn't already been patched in 0.5.x.
-- [ ] Port types `ble-peripheral` (moved out of `BridgeManager`, one GATT app
+- [ ] Port types `ble-server` (moved out of `BridgeManager`, one GATT app
       per port), `tcp-client`, and `tcp-server` (localhost default, address
       and interface binding, `allow`).
 - [ ] TOML config: main file + `conf.d/`, bridges with ids, names and
@@ -1122,7 +1153,7 @@ coexistence is a dead end on Pi hardware, stop here.
 - [ ] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
       `RuntimeDirectory=`, `ProtectSystem=strict`, and moving the lock file to
       the runtime dir. Package the new example config.
-- [ ] Bridge unit tests with `tokio::io::duplex` modems and fake app ports.
+- [ ] Bridge unit tests with `tokio::io::duplex` TNCs and fake app ports.
       This is the first time routing is testable without BlueZ.
 - [ ] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-client` →
       bridge → `tcp-server` → several clients, checking broadcast, uplink
@@ -1132,9 +1163,9 @@ coexistence is a dead end on Pi hardware, stop here.
 
 ### Phase 2: TNCs over Bluetooth and serial (→ 0.7.0)
 
-- [ ] `[[tnc]]` objects with `bluetooth` and `serial` sections, and the
+- [ ] `[[tnc]]` objects with `spp` and `serial` sections, and the
       one-enabled-bridge-per-TNC rule.
-- [ ] `rfcomm-client` using the profile approach, with the `Unpaired` state.
+- [ ] `spp-client` using the profile approach, with the `Unpaired` state.
       Pairing is still manual (`bluetoothctl`) in this release.
 - [ ] `serial` port: `tokio-serial`, `TIOCEXCL`, `Waiting for device` with
       path polling, stable-path warnings.
@@ -1182,10 +1213,10 @@ serial TNCs, all configured by hand.
 
 - [ ] Soak test: 24 h on a Pi Zero 2 W with a D75, two BLE clients and one TCP
       client, checking memory, reconnects, and that no frames are lost while
-      the modem is up. Repeat over USB.
+      the TNC is up. Repeat over USB.
 - [ ] Check the daemon's footprint on a Pi 1 (armhf) still fits the README's
       "~5MB" claim.
-- [ ] Stretch: `rfcomm-server` for Android SPP apps.
+- [ ] Stretch: `spp-server` for Android SPP apps.
 - [ ] Rewrite the README around bridges and ports, with new architecture
       diagrams and a "coming from 0.5" section showing the equivalent TOML.
 - [ ] Flipper One validation, if hardware is available by then. Otherwise 1.0
@@ -1209,7 +1240,7 @@ serial TNCs, all configured by hand.
       snapshots (pointing `StateDirectory` elsewhere if needed).
 - [ ] Check the MT7921 Bluetooth under load (MediaTek btusb firmware has had
       quirks on Linux): BLE peripheral and RFCOMM at the same time, and
-      extended advertising with several `ble-peripheral` ports. If it falls
+      extended advertising with several `ble-server` ports. If it falls
       short, the fallback is a USB Bluetooth dongle in one of the Flipper
       One's USB ports, with the radio and BLE ports on different adapters.
       Test that setup too, and document a recommended dongle.
@@ -1218,7 +1249,7 @@ serial TNCs, all configured by hand.
 - [ ] Power: measure the battery cost of `connect = "always"` against
       `on_demand`, and consider a configurable advertising interval.
 - [ ] On-device UI for the 256×144 screen, built on the control protocol: the
-      enabled bridge, modem state, session count, last heard station, a
+      enabled bridge, TNC state, session count, last heard station, a
       bridge switcher, and a guided pairing flow. The technology depends on
       what Flipper ships for apps.
 - [ ] Possibly ship as a Flipper OS package or profile if they have a
@@ -1272,13 +1303,14 @@ announcing on the same Pi.
 
 ## After 1.0
 
-- **Several modems per bridge**, presented to apps as a multi-port KISS TNC.
+- **Several TNC ports per bridge**, presented to apps as a multi-channel KISS
+  TNC.
   The bridge rewrites the KISS channel in both directions: the D75 is
   channel 0 and Dire Wolf channel 1, so apps that support KISS channels can
   pick a radio.
-- **`ble-central` port:** connect *to* BLE KISS TNCs (Mobilinkd TNC4, radios
-  that implement the BLE KISS API) and share them like any other modem. They
-  would probably get a `ble` section on `[[tnc]]`.
+- **`ble-client` port:** connect *to* BLE KISS TNCs (Mobilinkd TNC4, radios
+  that implement the BLE KISS API) and share them like any other TNC. They
+  would get a `[tnc.ble]` section.
 - **Per-session transmit permissions** (receive-only apps) on top of the KISS
   policy filter.
 - **`pty` port** (app role): creates a pseudo-terminal, symlinked at
@@ -1292,6 +1324,6 @@ announcing on the same Pi.
   TUI would offer a list of discovered `_kiss-tnc._tcp` services when adding a
   `tcp-client`.
 - **`pn` TXT record** listing one name per KISS channel, once bridges can have
-  several modems.
+  several TNC ports.
 - **App-to-app echo:** an opt-in per-bridge setting that copies each app's
   transmitted frames to the other app sessions, if apps turn out to need it.
