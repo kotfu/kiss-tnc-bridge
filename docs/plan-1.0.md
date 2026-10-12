@@ -9,9 +9,9 @@ Turn `kiss-tnc-bridge` from a one-way "TCP TNC → BLE" bridge into a small
 Linux bridges. You define **bridges** (`ktbr0`, `ktbr1`, …). Each bridge
 connects one KISS TNC (a radio's built-in TNC over Bluetooth Classic SPP or
 USB, a standalone TNC, or a software TNC like Dire Wolf over TCP) to any
-number of apps, over BLE and over
-TCP. Bridges are managed from a CLI and a full-screen TUI, and the management
-protocol is designed so a web UI and phone apps can be added later.
+number of apps, over BLE and over TCP. Bridges are managed from a CLI and a
+full-screen TUI, and the management protocol is designed so a web UI and phone
+apps can be added later.
 
 The motivating setup:
 
@@ -90,10 +90,12 @@ hardware you already carry.
 
 - More than one TNC port per bridge, and any TNC-to-TNC forwarding
   (digipeating or cross-band gating).
-- `ble-client` ports, connecting out to BLE TNCs (Mobilinkd TNC4, etc.). The
-  port model leaves room for them; see [After 1.0](#after-10).
-- Any non-Linux daemon. `ktbctl` and TCP-only bridges should still build and
-  run on macOS for development.
+- `ble-client` ports, connecting out to BLE TNCs (BTech UV-PRO, Vero VR-N76,
+  Mobilinkd TNC4, etc.). The port model leaves room for them; see
+  [After 1.0](#after-10).
+- Supporting the daemon on anything but Linux. It should still build and run
+  TCP-only bridges on macOS for development, and `ktbctl` should build there
+  too, but only Linux is supported.
 - AX.25 or APRS awareness in the data path. Bridges move KISS frames. Decoding
   is only for display, in `monitor` and the TUI.
 - Migrating 0.5 configs.
@@ -112,14 +114,17 @@ hardware you already carry.
 - **Port**: one attachment point on a bridge, defined inline in the bridge,
   with a port id unique within its bridge, written `ktbr0/radio`. Every
   connection type is a port type. Ports carry the settings that vary per
-  setup (idle timeout, max clients, listen address), so the same radio can be
+  setup (idle timeout, max clients, listen address), so the same TNC can be
   used differently by different bridges.
 - **Session**: one live connection on a port. A client port has at most one
   session. A server port has one per connected client
   (`ktbr0/phones/7C:2A:…`, `ktbr0/lan/192.168.4.20:51515`).
-- **TNC**: a top-level object for a hardware KISS TNC. A TNC can be built
-  into a radio like the ICOM ID-5200, TH-D75, BTech UV-PRO, VGC VR-N76. It
-  could also be a standalone one like a NinoTNC, OpenTNC, or Mobilinkd. It has
+- **TNC**: a top-level object for a hardware KISS TNC. It can be built into a
+  radio, like the Kenwood TH-D74/D75 (SPP or USB) or the ICOM ID-5200 (USB in
+  1.0; its Bluetooth TNC is probably BLE), or standalone, like a NinoTNC,
+  OpenTNC or Mobilinkd. Radios that expose their TNC only over BLE, such as
+  the BTech UV-PRO and Vero VR-N76, need a `ble-client` port, which comes
+  after 1.0. It has
   an id, name and model (which selects the KISS init sequence), plus a
   section for each way to reach it: `spp` (Bluetooth address, and the
   adapter it's paired on) and/or `serial` (device path). `spp-client` and `serial`
@@ -183,12 +188,12 @@ section names:
 | Type | Default role | Connects to / accepts | 1.0? |
 |---|---|---|---|
 | `spp-client` | tnc | A TNC's Bluetooth SPP link (TH-D74/D75, other SPP KISS TNCs), via a `[[tnc]]` with an `spp` section | yes |
-| `serial` | tnc | A TNC's USB or UART serial link (TH-D75 over USB, NinoTNC, TNC-Pi), via a `[[tnc]]` with a `serial` section | yes |
+| `serial` | tnc | A TNC's USB or UART serial link (TH-D75 or ID-5200 over USB, NinoTNC, OpenTNC, TNC-Pi), via a `[[tnc]]` with a `serial` section | yes |
 | `tcp-client` | tnc | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge's `tcp-server` | yes |
 | `ble-server` | app | Phones and tablets via the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) (today's behavior) | yes |
 | `tcp-server` | app | Apps connecting in over the network: Pat, Xastir, YAAC, and aprs.fi on iOS over Wi-Fi. Announced with DNS-SD | yes |
 | `spp-server` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
-| `ble-client` | tnc | BLE KISS TNCs | after 1.0 |
+| `ble-client` | tnc | BLE KISS TNCs: BTech UV-PRO, Vero VR-N76, Mobilinkd TNC4, probably the ID-5200's Bluetooth TNC | after 1.0 |
 
 A `role = "tnc" | "app"` override exists for odd cases, such as a
 `tcp-client` to an app that runs its own KISS server.
@@ -221,8 +226,8 @@ acts exactly like 0.5.
   server)     │                         │   filter        │   │                        │
               │                         │                 v   │                        │
               │                         │           TNC port state machine             │
-              │                         │   Unpaired · Idle → Connecting → Connected   │
-              │                         │                 → Backoff → …                │
+              │                         │   Unpaired · Waiting for device ·            │
+              │                         │   Idle → Connecting → Connected → Backoff    │
               └─────────────────────────┴──────────────────────┬───────────────────────┘
                                                                │ AsyncRead + AsyncWrite
                                         TcpStream | bluer::rfcomm::Stream | (serial)
@@ -321,8 +326,9 @@ name = "TH-D75"
 - `spp = { ... }` is a TOML inline table, the same as a `[tnc.spp]` section.
 - Everything else comes from [Defaults](#defaults): the bridge is enabled,
   both Bluetooth roles use BlueZ's default adapter (the built-in chip on a Pi
-  4 with nothing plugged in), the BLE and DNS-SD name is "TH-D75", and the
-  port ids are `spp-client0` and `ble-server0`.
+  4 with nothing plugged in), the BLE name is "TH-D75", and the port ids are
+  `spp-client0` and `ble-server0`. There's no `tcp-server`, so nothing is
+  announced with DNS-SD.
 - `model = "th-d75"` could be left out too, but then the radio only works if
   KISS mode was turned on from its menu.
 - The D75 still has to be paired once (`ktbctl pair d75`, or `bluetoothctl`
@@ -338,8 +344,7 @@ log_level = "info"
 adapter = "builtin"                # default for Bluetooth ports and TNCs
 
 [control]
-socket = "/run/kiss-tnc-bridge/control.sock"
-group = "kiss-tnc-bridge"
+group = "kiss-tnc-bridge"          # who may use ktbctl
 
 [[adapter]]
 id = "builtin"
@@ -484,6 +489,7 @@ bridges costs nothing.
 | `[global]` | (whole section) | Optional |
 | | `log_level` | `info` |
 | | `adapter` | BlueZ's default adapter (see the adapter fallback below) |
+| `[control]` | `group` | `kiss-tnc-bridge` |
 | `[[bridge]]` | `id` | Required for static bridges. The API assigns the lowest free `ktbrN` for dynamic ones |
 | | `name` | Required. It's what phones see, through `public_name` |
 | | `public_name` | The bridge `name` |
@@ -553,8 +559,8 @@ multi-adapter setups toward named `[[adapter]]` objects.
 
 The point of disabling is to keep several bridges defined, one per physical
 setup, and enable whichever matches the hardware you have with you. Several
-bridges can use the same TNC, TCP listen socket, or public name, as long
-as **only one of them is enabled at a time**.
+bridges can use the same TNC, TCP listen socket, public name, or BLE
+adapter, as long as **only one of them is enabled at a time**.
 
 - For **dynamic bridges**, `enabled` is part of the definition and is changed
   through the API.
@@ -578,7 +584,7 @@ Errors:
 
 - TOML syntax, unknown keys, bad values.
 - Duplicate ids within the static set (main file + `conf.d/`): bridge ids,
-  bridge names, radio ids, adapter ids.
+  bridge names, TNC ids, adapter ids.
 - Duplicate port ids within a bridge.
 - A reference that doesn't resolve (a port's `tnc` or `adapter`, a TNC's
   `spp.adapter`), or a static object referencing a dynamic one.
@@ -588,8 +594,9 @@ Errors:
   the same serial path, or two adapter objects with the same MAC. These are
   checked whether or not anything is enabled, because they're duplicate
   definitions of the same hardware.
-- A bridge without exactly one TNC port, or without at least one app port. This also applies to disabled bridges, so a bridge is known
-  valid before it's enabled.
+- A bridge without exactly one TNC port, or without at least one app port.
+  This also applies to disabled bridges, so a bridge is known valid before
+  it's enabled.
 - Among **enabled** bridges only, resource conflicts:
   - the same TNC on two ports, whatever the transport. A TNC accepts one SPP
     connection, a serial device should be opened once, and as far as we
@@ -600,7 +607,9 @@ Errors:
     address is on that interface, or is `0.0.0.0`,
   - the same public name on two bridges (it's the BLE advertised name and
     the DNS-SD instance name, so two enabled bridges sharing one would be
-    indistinguishable to apps).
+    indistinguishable to apps),
+  - two `ble-server` ports on the same adapter (see
+    [Bluetooth specifics](#bluetooth-specifics) for why).
 
   `tcp-client` targets never conflict: Dire Wolf and Graywolf accept several
   KISS clients, so two enabled bridges pointing at the same TNC is
@@ -642,7 +651,15 @@ rejected as a whole, and the running bridges keep going.
 | Command | Needs the daemon | Answers |
 |---|---|---|
 | `kiss-tnc-bridge -t` | No | Is the config on disk valid? For package scripts, CI and image builds, when the daemon often isn't running |
-| `ktbctl check` | Yes | Is it valid, including checks only the live daemon can do (adapter present, TNC paired)? And what would a reload do? |
+| `ktbctl check` | Yes | Is it valid, as the running daemon sees it? And what would a reload do? |
+
+**Errors are config-only for both:** syntax, values, references, conflicts.
+They never depend on the host, so a config that passes `-t` in CI passes on
+the device. **Warnings include host checks** (TNC paired, serial device
+present, interface up), done on a best-effort basis: `-t` asks BlueZ and
+looks at `/dev` and the network interfaces when it can, and skips those
+checks with a note when it can't (for example in a CI container with no
+BlueZ). `ktbctl check` always has them, from the daemon's live view.
 
 `ktbctl check` validates first and shows the same errors `-t` would. If the
 config is valid, it prints the reload plan: each bridge and port as unchanged,
@@ -667,11 +684,13 @@ the reasons, and scripts that need to avoid disruption use
   running. The daemon refuses to overwrite it and logs "dynamic.toml changed
   on disk, run `ktbctl reload`" rather than discarding the edit.
 - **`ktbctl edit`** is the documented way to hand-edit, like `visudo` or
-  `virsh net-edit`. It opens a copy in `$EDITOR`. On save it runs
-  `config.check` on the edited copy (reopening the editor on errors), shows
-  the reload plan, asks for confirmation if the plan would restart ports or
-  disconnect sessions, then applies it. You always see what an edit is about
-  to do before it happens.
+  `virsh net-edit`. It fetches the TOML with `config.get` and opens it in
+  `$EDITOR`. On save it runs `config.check` on the edited copy (reopening the
+  editor on errors), shows the reload plan, asks for confirmation if the plan
+  is disruptive, then writes it with `config.put`. If someone else changed the
+  object in the meantime, the revision check fails and `edit` says so instead
+  of overwriting their change. You always see what an edit is about to do
+  before it happens.
 - `ktbctl edit ktbr2` edits a single dynamic bridge, and `ktbctl edit tnc
   d75` a single dynamic TNC. On a static object it refuses and prints the
   file that defines it.
@@ -870,9 +889,22 @@ filter on app-to-TNC traffic:
   the radio and a USB dongle for phones.
 - **One GATT application per `ble-server` port**, rather than one per
   adapter as today. Enabling, disabling or changing one bridge then registers
-  or unregisters only its own application, and doesn't disconnect phones on
-  other bridges sharing the adapter. BlueZ allows multiple applications per
-  adapter.
+  or unregisters only its own application.
+- **At most one enabled `ble-server` per adapter.** BlueZ serves every
+  registered GATT application to every phone connected to an adapter, so a
+  phone that connected to bridge A's advertisement would also see bridge B's
+  KISS service, with the same UUID, and an app could attach to the wrong one.
+  iOS also caches one name per Bluetooth address, so two names from one
+  adapter would confuse it (the README's existing caveat). Validation makes
+  this an error among enabled bridges. Disabled bridges can share an adapter
+  freely, so switching setups still works, and two simultaneous BLE bridges
+  just need two adapters.
+- **Adapter alias.** 0.5 sets the adapter's alias to the first TNC's name, and
+  that alias is what a radio sees while pairing and what phones show in their
+  Bluetooth settings. 1.0 keeps the spirit: an adapter used by an enabled
+  `ble-server` gets that bridge's effective public name as its alias, updated
+  when the public name changes. Adapters with no enabled `ble-server` keep
+  their system alias, which the daemon leaves alone.
 
 ### Pairing agent
 
@@ -916,7 +948,9 @@ event stream. Every UI is a client of that model over some transport:
                                                                                    no network   ┘
 ```
 
-**The daemon only speaks the local Unix socket.** It runs as root and holds
+**For management, the daemon only speaks the local Unix socket.** (Its KISS
+`tcp-server` ports and DNS-SD announcements are data-plane features, not
+management.) It runs as root and holds
 the TNCs, and it has to stay small enough for a Pi 1. Everything reachable
 from the network or over BLE management lives in `ktb-gateway`, a separate
 unprivileged process. It talks to the daemon over the same socket protocol as
@@ -928,8 +962,13 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 ### Control protocol
 
 - **Transport (1.0):** Unix stream socket at
-  `/run/kiss-tnc-bridge/control.sock`, mode `0660`, group `kiss-tnc-bridge`
-  (created by the deb/rpm scripts).
+  `/run/kiss-tnc-bridge/control.sock`, mode `0660`, group from
+  `[control] group` (default `kiss-tnc-bridge`, created by the deb/rpm
+  scripts). The path is fixed, under the systemd `RuntimeDirectory=`, rather
+  than configurable in `/etc`, because `ktbctl` doesn't read `/etc` and needs
+  to find it. For unusual setups (a development daemon, tests), the daemon
+  takes a `--socket` option, and `ktbctl` takes `--socket` or the
+  `KTBCTL_SOCKET` environment variable.
 - **Framing:** newline-delimited JSON. Every message carries `"v": 1`.
   Requests have an `id`, responses echo it with `ok`/`error`, and events have
   no `id`.
@@ -990,10 +1029,12 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 | `adapter.create` / `adapter.update` / `adapter.delete` | Dynamic adapter objects only; delete is refused while referenced |
 | `port.connect` / `port.disconnect` | Force a TNC port up or down |
 | `session.kick` | Disconnect one session |
-| `scan.start` / `scan.stop` | Discovery with `transport: classic \| le \| auto`. Emits `scan.device` events and flags likely TNCs (SPP UUID, `TH-D7*` names) |
+| `scan.start` / `scan.stop` | Discovery with `transport: spp \| ble \| auto`. Emits `scan.device` events and flags likely TNCs (SPP UUID, `TH-D7*` names) |
 | `serial.list` | Serial devices present, by stable path, with USB vendor/product names, flagging known TNCs |
 | `pair` / `unpair` | Pairing window, by TNC id (`d75`) or by address + adapter |
 | `config.check` | Validate the on-disk config, or a candidate passed in (as `ktbctl edit` does), and return the errors or the reload plan with its `disruptive` flag and reasons, without applying anything |
+| `config.get` | The TOML for one dynamic object, or all of `dynamic.toml`, plus a revision hash. `ktbctl` users only have socket access, so this is how `edit` (and later `export`) reads config |
+| `config.put` | Replace that TOML if the revision still matches (otherwise `revision_conflict`), going through the same check, reconcile and consent rules as any change |
 | `reload` | Re-read config and reconcile. Returns the change report. With `non_disruptive: true`, refuses with `reload_would_disrupt` and applies nothing if the plan is disruptive (`ktbctl` sets this unless it has confirmation). `SIGHUP` is equivalent to `reload` without the flag |
 
 ### Reconciler
@@ -1039,7 +1080,7 @@ config-management run every 30 minutes, or out of habit. Whether a
    |---|---|
    | `log_level` | Applied live |
    | TNC `name`; bridge `name` when `public_name` is set | Display only |
-   | `public_name` (or bridge `name` when it's the default) | BLE advertisement restarts with the new name, and DNS-SD re-announces. Connected phones and TCP sessions stay connected, because the GATT service doesn't change. Any collision adjustment in `state.toml` is cleared |
+   | `public_name` (or bridge `name` when it's the default) | BLE advertisement restarts with the new name, the adapter alias follows, and DNS-SD re-announces. Connected phones and TCP sessions stay connected, because the GATT service doesn't change. Any collision adjustment in `state.toml` is cleared |
    | `allow` | Applied live. **Existing sessions that are no longer allowed are disconnected**, because it's a security setting |
    | `max_clients` | Applied live. If it drops below the current session count, **the newest sessions are disconnected** until the port is within the limit |
    | `announce` | DNS-SD only |
@@ -1080,6 +1121,14 @@ config-management run every 30 minutes, or out of habit. Whether a
    can't disconnect someone mid-QSO unless their author wrote `--yes` on
    purpose. `--non-disruptive` is the explicit form of that default, and in a
    terminal it means "don't ask, just refuse".
+
+   **The same rule applies to every `ktbctl` command that changes config or
+   state** (`enable`, `disable`, `switch`, `bridge rm`, `port add`/`rm`,
+   `tnc` and `adapter` changes, `edit`): they all go through the same
+   reconcile, and if the resulting plan is disruptive, they ask, refuse, or
+   honor `--yes` / `--non-disruptive` exactly as `reload` does. The
+   exceptions are commands whose whole purpose is to disrupt, `kick` and
+   `disconnect`, which act immediately.
 10. **Refusals are all-or-nothing and race-free.** The daemon computes the
     plan and applies it in one step, so there's no gap in which a phone could
     connect between a check and a reload. A refused reload applies
@@ -1131,9 +1180,9 @@ ktbctl adapter list                            # hardware present + adapter obje
 ktbctl adapter add ID --mac MAC | adapter rm ID
 ktbctl tnc list
 ktbctl tnc add ID --model th-d75 [--name NAME]
-        [--bt-address ADDR --adapter ADAPTER] [--serial PATH [--baud N]]
+        [--spp-address ADDR --adapter ADAPTER] [--serial PATH [--baud N]]
 ktbctl tnc rm TNC
-ktbctl scan [--classic|--le] [--adapter ADAPTER] [--timeout 15s]
+ktbctl scan [--spp|--ble] [--adapter ADAPTER] [--timeout 15s]
 ktbctl serial list                             # stable paths, flags known TNCs
 ktbctl pair TNC | unpair TNC
 
@@ -1295,6 +1344,7 @@ src/
     resolve.rs             adapter values (id, MAC, hciN) and TNC references
     validate.rs            shared by -t, reload, and config.check
     store.rs               dynamic.toml: toml_edit, atomic writes, hash check
+    state.rs               state.toml: enable overrides, collision-adjusted names
   control/
     protocol.rs            serde types + JSON Schema export
     server.rs              Unix socket server
@@ -1356,12 +1406,14 @@ coexistence is a dead end on Pi hardware, stop here.
       [kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)
       if it hasn't already been patched in 0.5.x.
 - [ ] Port types `ble-server` (moved out of `BridgeManager`, one GATT app
-      per port), `tcp-client`, and `tcp-server` (localhost default, address
-      and interface binding, `allow`).
+      per port, advertising the bridge's `public_name`, setting the adapter
+      alias), `tcp-client`, and `tcp-server` (localhost default, address and
+      interface binding, `allow`).
 - [ ] TOML config: main file + `conf.d/`, bridges with ids, names and
       `enabled`, inline ports, `[[adapter]]` objects and adapter values (id,
-      MAC, `hciN`), `-t` validation with reference checks and conflict
-      checks among enabled bridges, and the 0.5 config warning.
+      MAC, `hciN`), `public_name`, `[control] group`, `-t` validation with
+      reference checks and conflict checks among enabled bridges (including
+      one `ble-server` per adapter), and the 0.5 config warning.
 - [ ] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
       `RuntimeDirectory=`, `ProtectSystem=strict`, and moving the lock file to
       the runtime dir. Package the new example config. No `ExecReload=` yet:
@@ -1387,9 +1439,12 @@ coexistence is a dead end on Pi hardware, stop here.
       `connect = "always"`.
 - [ ] Per-port adapter tracking in the supervisor.
 - [ ] `-t` warnings for unpaired TNCs and missing serial devices.
-- [ ] DNS-SD announcement of `tcp-server` ports through Avahi: `public_name`,
-      per-interface announcing, collision renaming persisted in `state.toml`
-      and applied to BLE too. Checked with `avahi-browse` and aprs.fi on iOS.
+- [ ] `state.toml` store (atomic writes), first used for DNS-SD collision
+      names.
+- [ ] DNS-SD announcement of `tcp-server` ports through Avahi: per-interface
+      announcing, and collision renaming persisted in `state.toml` and
+      applied to BLE and the adapter alias too. Checked with `avahi-browse`
+      and aprs.fi on iOS.
 - [ ] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
       the TCP exposure warning.
 - [ ] Manual hardware test matrix (below).
@@ -1409,19 +1464,21 @@ serial TNCs, all configured by hand.
       Unit tests for each row of the table, including "no change means no
       reconnect", and for the disruptive/not-disruptive split.
 - [ ] `SIGHUP` handler, and `ExecReload=` in the systemd unit.
-- [ ] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check) and
-      `state.toml` enable overrides.
-- [ ] `bridge.*`, `port.*`, `tnc.*`, `adapter.*`, `serial.list` and `config.check`
-      commands, with static objects read-only, reference-integrity checks,
-      and `bridge.clone`.
+- [ ] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check), and
+      enable overrides added to `state.toml`.
+- [ ] `bridge.*`, `port.*`, `tnc.*`, `adapter.*`, `serial.list`,
+      `config.check`, `config.get` and `config.put` commands, with static
+      objects read-only, reference-integrity checks, revision checks, and
+      `bridge.clone`.
 - [ ] `docs/control-api.md`.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI (→ 0.9.0)
 
 - [ ] All CLI commands above, plus `--json`.
-- [ ] `ktbctl check`; `ktbctl edit` with check-and-reopen, plan, and confirm;
-      `ktbctl reload` with the interactive confirmation, `--yes`, and
-      `--non-disruptive`.
+- [ ] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`,
+      check-and-reopen, plan, and confirm; the consent rule (confirm in a
+      terminal, refuse without one, `--yes`, `--non-disruptive`) on `reload`
+      and every other mutating command.
 - [ ] Pairing-window agent (unless Phase 0 made it unnecessary), `scan` with
       radio detection, and the `setup` wizard.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
@@ -1460,8 +1517,7 @@ serial TNCs, all configured by hand.
       works with our `cross` builds, and which paths survive its profile
       snapshots (pointing `StateDirectory` elsewhere if needed).
 - [ ] Check the MT7921 Bluetooth under load (MediaTek btusb firmware has had
-      quirks on Linux): BLE peripheral and RFCOMM at the same time, and
-      extended advertising with several `ble-server` ports. If it falls
+      quirks on Linux): BLE peripheral and RFCOMM at the same time. If it falls
       short, the fallback is a USB Bluetooth dongle in one of the Flipper
       One's USB ports, with the radio and BLE ports on different adapters.
       Test that setup too, and document a recommended dongle.
@@ -1504,8 +1560,7 @@ unplugged; adapters re-enumerated so `hci0`/`hci1` swap (MAC-pinned config must
 survive); `switch` between two bridges sharing the same radio; a
 `tcp-server` bound to `wlan0` while the AP goes down and comes back; USB cable
 unplugged and replugged mid-session; `switch` between the D75's Bluetooth and
-USB bridges; a BLE client
-sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
+USB bridges; a BLE client sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
 `dynamic.toml` while the daemon runs; two Pis on one LAN with the same public
 name (collision renaming, and BLE following it); Dire Wolf and a bridge both
 announcing on the same Pi.
@@ -1519,7 +1574,10 @@ announcing on the same Pi.
 2. **Other SPP KISS devices** besides the D74/D75. A TNC with
    `model = "none"` should work for any SPP KISS TNC. Collect testers after
    0.7.
-3. **Flipper OS unknowns:** app SDK, Bluetooth ownership, filesystem layout,
+3. **ICOM ID-5200:** confirm its USB TNC works as a plain `serial` KISS TNC,
+   whether it needs a KISS init `model`, and whether its Bluetooth TNC is BLE
+   (which would make it a `ble-client` TNC after 1.0).
+4. **Flipper OS unknowns:** app SDK, Bluetooth ownership, filesystem layout,
    package format, and whether Avahi is present.
 
 ## After 1.0
@@ -1529,9 +1587,14 @@ announcing on the same Pi.
   The bridge rewrites the KISS channel in both directions: the D75 is
   channel 0 and Dire Wolf channel 1, so apps that support KISS channels can
   pick a radio.
-- **`ble-client` port:** connect *to* BLE KISS TNCs (Mobilinkd TNC4, radios
-  that implement the BLE KISS API) and share them like any other TNC. They
-  would get a `[tnc.ble]` section.
+- **`ble-client` port:** connect *to* BLE KISS TNCs and share them like any
+  other TNC. That covers radios whose TNC is only on BLE, like the BTech
+  UV-PRO and Vero VR-N76, probably the ICOM ID-5200's Bluetooth TNC, and
+  standalone ones like the Mobilinkd TNC4. They would get a `[tnc.ble]`
+  section. Worth checking early whether these radios follow the
+  [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+  or their own GATT layouts, which would need per-model profiles, as
+  `model` already does for KISS init.
 - **Per-session transmit permissions** (receive-only apps) on top of the KISS
   policy filter.
 - **`pty` port** (app role): creates a pseudo-terminal, symlinked at
@@ -1547,7 +1610,7 @@ announcing on the same Pi.
 - **`pn` TXT record** listing one name per KISS channel, once bridges can have
   several TNC ports.
 - **`ktbctl export`:** print a bridge, plus the TNCs and adapters it
-  references, as TOML ready to drop into `conf.d/`. For example,
+  references, as TOML ready to drop into `conf.d/`, built on `config.get`. For example,
   `ktbctl export ktbr2 > /etc/kiss-tnc-bridge/conf.d/field.toml`, then delete
   the dynamic copy. This "promotes" a setup that was built and tuned with
   `ktbctl` into permanent static config, or into a Pi or Flipper image. It
