@@ -293,7 +293,42 @@ If `/etc/kiss-tnc-bridge.conf` (0.5) exists, the daemon logs one warning at
 startup saying it's ignored and pointing to the docs. That's all; there's no
 migration code.
 
-### Example
+### Minimal example
+
+The B.B. Link equivalent: a TH-D75 over Bluetooth, shared to phones over BLE
+on a Pi 4's built-in adapter.
+
+```toml
+# /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml
+
+[[tnc]]
+id = "d75"
+model = "th-d75"
+spp = { address = "00:11:22:33:44:55" }
+
+[[bridge]]
+id = "ktbr0"
+name = "TH-D75"
+
+  [[bridge.port]]
+  type = "spp-client"
+  tnc = "d75"
+
+  [[bridge.port]]
+  type = "ble-server"
+```
+
+- `spp = { ... }` is a TOML inline table, the same as a `[tnc.spp]` section.
+- Everything else comes from [Defaults](#defaults): the bridge is enabled,
+  both Bluetooth roles use BlueZ's default adapter (the built-in chip on a Pi
+  4 with nothing plugged in), the BLE and DNS-SD name is "TH-D75", and the
+  port ids are `spp-client0` and `ble-server0`.
+- `model = "th-d75"` could be left out too, but then the radio only works if
+  KISS mode was turned on from its menu.
+- The D75 still has to be paired once (`ktbctl pair d75`, or `bluetoothctl`
+  before 0.9). Until then `-t` warns and the port reports `Unpaired`.
+
+### Full example
 
 ```toml
 # /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml
@@ -441,6 +476,48 @@ TCP ports are always inline. A `tcp-client` is just a `host:port`, and a
 `tcp-server` is just a listening socket. Neither has a hardware identity or
 state that outlives a bridge, so repeating `address = "127.0.0.1:6700"` in two
 bridges costs nothing.
+
+### Defaults
+
+| Object | Key | Default |
+|---|---|---|
+| `[global]` | (whole section) | Optional |
+| | `log_level` | `info` |
+| | `adapter` | BlueZ's default adapter (see the adapter fallback below) |
+| `[[bridge]]` | `id` | Required for static bridges. The API assigns the lowest free `ktbrN` for dynamic ones |
+| | `name` | Required. It's what phones see, through `public_name` |
+| | `public_name` | The bridge `name` |
+| | `enabled` | `true`. A bridge written into a file is meant to run; disabling is the deliberate exception |
+| | `app_params` | `pass` |
+| `[[bridge.port]]`, all | `id` | Type plus an index within the bridge: `spp-client0`, `ble-server0` |
+| | `role` | From the type: `tnc` for `spp-client`, `serial`, `tcp-client`, `ble-client`; `app` for `ble-server`, `tcp-server`, `spp-server` |
+| TNC ports | `connect` | `on_demand` |
+| | `idle_timeout` | `0s` |
+| `spp-client`, `serial` | `exit_kiss_on_disconnect` | `false` |
+| `ble-server` | `adapter` | See the adapter fallback below |
+| | `max_clients` | `1`, as in 0.5. Many Bluetooth chips (e.g. the RTL8761B) can't serve more |
+| `tcp-server` | `listen` | Required. A TCP port number alone binds `127.0.0.1` |
+| | `max_clients` | Unset: no limit. Set it (≥ 1) to cap TCP sessions |
+| | `allow` | Unset: any peer that can reach the socket |
+| | `announce` | `true`, except `false` for loopback bindings |
+| `[[tnc]]` | `name` | The TNC `id` |
+| | `model` | `none`: no KISS init; for TNCs that are always in KISS mode |
+| `[tnc.spp]` | `adapter` | See the adapter fallback below |
+| | `channel` | Found by SDP lookup |
+| `[tnc.serial]` | `baud` | `9600` |
+
+**Adapter fallback.** Wherever an adapter is needed (`ble-server` ports and
+`[tnc.spp]`), the daemon uses the first of:
+
+1. the object's own `adapter`,
+2. `[global] adapter`,
+3. BlueZ's default adapter: the first one present, which is 0.5's behavior.
+
+The third step keeps single-adapter setups to zero adapter config, but which
+adapter is "first" isn't guaranteed once a USB dongle is added. A TNC could
+then land on an adapter it isn't paired with. That fails clearly (`-t` warns,
+the port reports `Unpaired`), and the docs and `ktbctl setup` steer
+multi-adapter setups toward named `[[adapter]]` objects.
 
 ### Identifiers and references
 
@@ -1325,5 +1402,12 @@ announcing on the same Pi.
   `tcp-client`.
 - **`pn` TXT record** listing one name per KISS channel, once bridges can have
   several TNC ports.
+- **`ktbctl export`:** print a bridge, plus the TNCs and adapters it
+  references, as TOML ready to drop into `conf.d/`. For example,
+  `ktbctl export ktbr2 > /etc/kiss-tnc-bridge/conf.d/field.toml`, then delete
+  the dynamic copy. This "promotes" a setup that was built and tuned with
+  `ktbctl` into permanent static config, or into a Pi or Flipper image. It
+  works because `dynamic.toml` and `conf.d/` share one schema. Objects that
+  are already static are left out, or included with `--all`.
 - **App-to-app echo:** an opt-in per-bridge setting that copies each app's
   transmitted frames to the other app sessions, if apps turn out to need it.
