@@ -633,9 +633,29 @@ static one is ignored with a warning, and dynamic bridges referencing it then
 resolve to the static one. The API refuses to create a dynamic object whose id
 or name is taken by a static one.
 
-`SIGHUP` or `ktbctl reload` re-reads everything and reconciles (below). An
-invalid config on reload is rejected as a whole, and the running bridges keep
-going.
+`SIGHUP` or `ktbctl reload` re-reads everything and reconciles (see
+[Reload semantics](#reload-semantics)). An invalid config on reload is
+rejected as a whole, and the running bridges keep going.
+
+**`-t` and `ktbctl check` answer different questions:**
+
+| Command | Needs the daemon | Answers |
+|---|---|---|
+| `kiss-tnc-bridge -t` | No | Is the config on disk valid? For package scripts, CI and image builds, when the daemon often isn't running |
+| `ktbctl check` | Yes | Is it valid, including checks only the live daemon can do (adapter present, TNC paired)? And what would a reload do? |
+
+`ktbctl check` validates first and shows the same errors `-t` would. If the
+config is valid, it prints the reload plan: each bridge and port as unchanged,
+updated in place, restarted, started or stopped, plus any sessions that would
+be disconnected. Exit codes: 0 valid, 1 invalid, 2 couldn't check (e.g. the
+daemon isn't running). There's deliberately no exit code for "valid, with
+changes pending": an unchanged reload is a no-op, so scripts can simply run
+`ktbctl reload`. Nor is there one for "valid, but disruptive", which would
+trip scripts that only want to know whether the config is valid. Instead,
+`ktbctl check --json` includes a top-level `"disruptive": true | false` with
+the reasons, and scripts that need to avoid disruption use
+`ktbctl reload --non-disruptive` (see
+[Reload semantics](#reload-semantics)).
 
 ### Dynamic config: writing and hand-editing
 
@@ -647,8 +667,11 @@ going.
   running. The daemon refuses to overwrite it and logs "dynamic.toml changed
   on disk, run `ktbctl reload`" rather than discarding the edit.
 - **`ktbctl edit`** is the documented way to hand-edit, like `visudo` or
-  `virsh net-edit`. It opens a copy in `$EDITOR`, validates it through the API
-  on save (and reopens the editor on errors), then applies it.
+  `virsh net-edit`. It opens a copy in `$EDITOR`. On save it runs
+  `config.check` on the edited copy (reopening the editor on errors), shows
+  the reload plan, asks for confirmation if the plan would restart ports or
+  disconnect sessions, then applies it. You always see what an edit is about
+  to do before it happens.
 - `ktbctl edit ktbr2` edits a single dynamic bridge, and `ktbctl edit tnc
   d75` a single dynamic TNC. On a static object it refuses and prints the
   file that defines it.
@@ -970,8 +993,8 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 | `scan.start` / `scan.stop` | Discovery with `transport: classic \| le \| auto`. Emits `scan.device` events and flags likely TNCs (SPP UUID, `TH-D7*` names) |
 | `serial.list` | Serial devices present, by stable path, with USB vendor/product names, flagging known TNCs |
 | `pair` / `unpair` | Pairing window, by TNC id (`d75`) or by address + adapter |
-| `config.validate` | Validate a candidate config without applying it (used by `ktbctl edit`) |
-| `reload` | Re-read config and reconcile (also on `SIGHUP`) |
+| `config.check` | Validate the on-disk config, or a candidate passed in (as `ktbctl edit` does), and return the errors or the reload plan with its `disruptive` flag and reasons, without applying anything |
+| `reload` | Re-read config and reconcile. Returns the change report. With `non_disruptive: true`, refuses with `reload_would_disrupt` and applies nothing if the plan is disruptive (`ktbctl` sets this unless it has confirmation). `SIGHUP` is equivalent to `reload` without the flag |
 
 ### Reconciler
 
@@ -984,9 +1007,115 @@ TNCs by adapter and tears down everything on an adapter when it goes away. In
 the new model, losing a `ble-server` port's adapter stops only that port,
 and the bridge's TNC port and TCP sessions keep running. Losing a TNC's
 adapter puts the `spp-client` port into `Backoff` while app sessions stay
-connected. When the adapter returns, only the affected ports restart. Adapter hot-plug and
-power on/off detection (today's supervisor loop) stays as it is and feeds the
-reconciler.
+connected. When the adapter returns, only the affected ports restart.
+Adapter hot-plug and power on/off detection (today's supervisor loop) stays as
+it is and feeds the reconciler.
+
+### Reload semantics
+
+A reload (`ktbctl reload`, `SIGHUP`, or `systemctl reload`) never touches
+anything that hasn't changed, so it's safe to run at any time: from a
+config-management run every 30 minutes, or out of habit. Whether a
+*disruptive* change gets applied depends on how the reload was invoked
+(rules 9 and 10). The rules:
+
+1. **An unchanged config is a no-op.** Nothing is touched: no TCP sockets
+   closed, no serial devices reopened, no BLE re-registration. The daemon logs
+   "no changes".
+2. **The comparison uses the resolved config, not the file text.** It
+   happens after defaults are filled in and references resolved. Reformatting,
+   editing comments, moving a bridge from the main file into `conf.d/`,
+   renaming an `[[adapter]]` id while references still resolve to the same
+   MAC, or setting `[global] adapter` to the adapter already in use by default
+   change nothing.
+3. **Ports are compared individually.** A port's resolved settings include
+   whatever it references, so editing the D75's `[tnc.spp]` is a change to
+   every port that uses TNC `d75`. A changed port is handled on its own; its
+   sibling ports and their sessions are untouched.
+4. **Changes are applied live where possible, and restart the port only when
+   they change the link itself:**
+
+   | Change | Effect |
+   |---|---|
+   | `log_level` | Applied live |
+   | TNC `name`; bridge `name` when `public_name` is set | Display only |
+   | `public_name` (or bridge `name` when it's the default) | BLE advertisement restarts with the new name, and DNS-SD re-announces. Connected phones and TCP sessions stay connected, because the GATT service doesn't change. Any collision adjustment in `state.toml` is cleared |
+   | `allow` | Applied live. **Existing sessions that are no longer allowed are disconnected**, because it's a security setting |
+   | `max_clients` | Applied live. If it drops below the current session count, **the newest sessions are disconnected** until the port is within the limit |
+   | `announce` | DNS-SD only |
+   | `connect`, `idle_timeout` | Applied live. `on_demand` → `always` connects now; `always` → `on_demand` follows `idle_timeout` |
+   | `app_params` | Applied from the next frame |
+   | Anything that identifies the link: TNC `spp.address`, `spp.adapter`, `channel`, `serial.path`, `baud`; `tcp-client` `address`; `tcp-server` `listen`; `ble-server` `adapter`; port `type` or `role` | That port restarts |
+   | TNC `model` | The TNC port reconnects, so the new KISS init sequence runs |
+   | A port id or bridge id | Treated as removing one object and adding another |
+   | `enabled` | The whole bridge starts or stops |
+
+5. **While a TNC port restarts, app sessions stay connected.** The TNC port
+   goes back to `Connecting` and uplink frames queue, the same as for any
+   reconnect.
+6. **Stops happen before starts.** Shared resources (a TNC, a listen socket, a
+   public name) are released before another bridge claims them, so "disable
+   `ktbr0`, enable `ktbr3`" works in a single reload. `switch` relies on the
+   same ordering.
+7. **Reloads and API changes are the same operation.** `ktbctl port add`,
+   `tnc update` and the rest reconcile just the objects they touched, under
+   the same rules. Enable overrides and collision adjustments in `state.toml`
+   survive a reload, except where a rule above clears them.
+8. **The response says what happened.** Each bridge and port is reported as
+   unchanged, updated in place, restarted, started or stopped, with any
+   disconnected sessions listed. `ktbctl check` prints the same plan without
+   applying anything.
+9. **`ktbctl reload` never applies a disruptive plan without consent.**
+   Like `terraform apply` or `apt-get`, it refuses when confirmation is
+   needed and nobody can give it:
+
+   | Invocation | Plan not disruptive | Plan disruptive |
+   |---|---|---|
+   | `ktbctl reload` in a terminal | Applies | Shows the plan and asks (e.g. "This will disconnect 2 sessions. Continue?") |
+   | `ktbctl reload` without a terminal | Applies | **Refuses**: applies nothing, prints the plan, exits 3 |
+   | `ktbctl reload --yes` | Applies | Applies |
+   | `ktbctl reload --non-disruptive` | Applies | Refuses and exits 3, even in a terminal, without asking |
+
+   So scripts, cron jobs and config-management runs are safe by default: they
+   can't disconnect someone mid-QSO unless their author wrote `--yes` on
+   purpose. `--non-disruptive` is the explicit form of that default, and in a
+   terminal it means "don't ask, just refuse".
+10. **Refusals are all-or-nothing and race-free.** The daemon computes the
+    plan and applies it in one step, so there's no gap in which a phone could
+    connect between a check and a reload. A refused reload applies
+    **nothing**: a partial reload would leave a half-applied config that's
+    hard to reason about. Exit codes: 0 applied (or nothing to do), 1
+    invalid config, 2 couldn't reach the daemon, 3 refused as disruptive. In
+    the API, `reload` takes `non_disruptive: true` and refuses with error
+    code `reload_would_disrupt`. `ktbctl` sets it whenever it can't get
+    confirmation, then retries without it if the user says yes. The plan it
+    shows is the one the daemon returned with the refusal.
+    **`SIGHUP` and `systemctl reload` are the exception: they always apply
+    everything.** A signal has no way to report a refusal, and admins expect
+    `systemctl reload` to apply the config. The docs present `ktbctl reload`
+    as the careful path and `systemctl reload` as the forceful one.
+11. **Restarting the daemon is different.** `systemctl restart` drops
+    everything, by definition. `systemctl reload` (the unit's `ExecReload=`
+    sends `SIGHUP`) only touches what changed, but applies disruptive changes
+    without asking. `ktbctl reload` is the one that refuses or asks. The docs
+    recommend `ktbctl reload`, then `systemctl reload`, and `restart` only
+    when needed, such as after an upgrade.
+
+Disconnecting a BLE session means disconnecting the device at the link layer,
+as 0.5 already does for rejected clients. A disconnected phone that tries to
+reconnect is refused while the port is at its limit, and advertising stops
+while the port is full, so it won't keep seeing the bridge.
+
+**What counts as disruptive.** The same definition drives `ktbctl reload`'s
+confirmation prompt, `--non-disruptive`, and the `disruptive` field from
+`ktbctl check`:
+
+| Disruptive | Not disruptive |
+|---|---|
+| Any session disconnected: `allow` tightened, `max_clients` lowered below the session count, an app port removed or restarted, a bridge stopped | Starting bridges or ports |
+| Any TNC port restart (a link-identity change or a `model` change). App sessions stay connected, but traffic stops while the link reconnects and the TNC re-runs KISS init | Live updates: `log_level`, `connect`, `idle_timeout`, `announce`, `app_params`, raising `max_clients`, loosening `allow` |
+| | A `public_name` change: the BLE advertisement and DNS-SD announcement restart, but connected phones and TCP sessions stay connected |
+| | Display-only changes such as TNC `name` |
 
 ### `ktbctl`: CLI
 
@@ -1029,7 +1158,8 @@ ktbctl kick BRIDGE/PORT/SESSION
 
 ktbctl edit [BRIDGE | tnc TNC | adapter ADAPTER]   # dynamic objects only
 ktbctl monitor [BRIDGE]                        # live frames: W1AW-9>APDR16,WIDE1-1: ...
-ktbctl reload
+ktbctl check                                   # validate + show what a reload would do
+ktbctl reload [--yes | --non-disruptive]       # confirms disruptive changes in a terminal
 ktbctl tui                                     # also: ktbctl with no arguments
 ```
 
@@ -1163,7 +1293,7 @@ src/
     model.rs               serde types: global, adapters, TNCs, bridges, ports
     load.rs                main file + conf.d + dynamic.toml + overrides → effective set
     resolve.rs             adapter values (id, MAC, hciN) and TNC references
-    validate.rs            shared by -t, reload, and config.validate
+    validate.rs            shared by -t, reload, and config.check
     store.rs               dynamic.toml: toml_edit, atomic writes, hash check
   control/
     protocol.rs            serde types + JSON Schema export
@@ -1234,7 +1364,8 @@ coexistence is a dead end on Pi hardware, stop here.
       checks among enabled bridges, and the 0.5 config warning.
 - [ ] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
       `RuntimeDirectory=`, `ProtectSystem=strict`, and moving the lock file to
-      the runtime dir. Package the new example config.
+      the runtime dir. Package the new example config. No `ExecReload=` yet:
+      `SIGHUP` would terminate the daemon until Phase 3 implements reload.
 - [ ] Bridge unit tests with `tokio::io::duplex` TNCs and fake app ports.
       This is the first time routing is testable without BlueZ.
 - [ ] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-client` →
@@ -1271,10 +1402,16 @@ serial TNCs, all configured by hand.
 
 - [ ] `control::server`, protocol types, JSON Schema export, `subscribe` with
       `state`, `activity` and `frames` events, and counters.
-- [ ] Reconciler: start, stop or restart only what changed; `reload`/`SIGHUP`.
+- [ ] Reconciler implementing the [reload semantics](#reload-semantics):
+      resolved-config diff per port, live updates, port restarts, stop-before-start
+      ordering, session kicks for `allow` and `max_clients`, the change report
+      with its `disruptive` classification, and `non_disruptive` reloads.
+      Unit tests for each row of the table, including "no change means no
+      reconnect", and for the disruptive/not-disruptive split.
+- [ ] `SIGHUP` handler, and `ExecReload=` in the systemd unit.
 - [ ] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check) and
       `state.toml` enable overrides.
-- [ ] `bridge.*`, `port.*`, `tnc.*`, `adapter.*`, `serial.list` and `config.validate`
+- [ ] `bridge.*`, `port.*`, `tnc.*`, `adapter.*`, `serial.list` and `config.check`
       commands, with static objects read-only, reference-integrity checks,
       and `bridge.clone`.
 - [ ] `docs/control-api.md`.
@@ -1282,7 +1419,9 @@ serial TNCs, all configured by hand.
 ### Phase 4: `ktbctl` CLI, pairing, TUI (→ 0.9.0)
 
 - [ ] All CLI commands above, plus `--json`.
-- [ ] `ktbctl edit` with validate-and-reopen.
+- [ ] `ktbctl check`; `ktbctl edit` with check-and-reopen, plan, and confirm;
+      `ktbctl reload` with the interactive confirmation, `--yes`, and
+      `--non-disruptive`.
 - [ ] Pairing-window agent (unless Phase 0 made it unnecessary), `scan` with
       radio detection, and the `setup` wizard.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
@@ -1414,6 +1553,13 @@ announcing on the same Pi.
   `ktbctl` into permanent static config, or into a Pi or Flipper image. It
   works because `dynamic.toml` and `conf.d/` share one schema. Objects that
   are already static are left out, or included with `--all`.
+- **`ktbctl reload --when-idle`:** the daemon holds a pending reload and
+  applies it once the affected ports have no sessions. For unattended setups,
+  a config-management push that lands mid-QSO then takes effect after the
+  operator disconnects, rather than failing (`--non-disruptive`) or
+  interrupting them. It needs pending-state tracking, and `status`, `check`
+  and the TUI showing that a reload is waiting and on which ports. A second
+  reload replaces the pending one.
 - **App-to-app echo:** an opt-in per-bridge setting that copies each app's
   transmitted frames to the other app sessions, if apps turn out to need it.
 - **An LLM skill for configuring and troubleshooting.** A packaged skill
@@ -1423,8 +1569,9 @@ announcing on the same Pi.
   bridge?". Design points:
   - **Act through `ktbctl --json`, never by writing files.** Every change
     goes through the control API, so it gets the same validation, reference
-    checks and static/dynamic rules as a human. `config.validate` gives the
-    model a propose → validate → fix loop, with errors it can read.
+    checks and static/dynamic rules as a human. `config.check` gives the
+    model a propose → check → fix loop, with errors it can read and a plan
+    it can explain to the user before applying.
   - **Make it small enough for on-device models.** Small models are weak at
     free-form TOML but good at filling in structured output. The JSON Schema
     already published for the control protocol can drive constrained
@@ -1445,9 +1592,10 @@ announcing on the same Pi.
     It also needs to explain the steps a model can't do: putting the radio in
     pairing mode, turning on KISS, plugging in cables.
   - **Diagnostics are the bigger win.** Most questions will be "why isn't it
-    working?". A structured `ktbctl doctor` (adapter present and powered, TNC
-    paired, serial device present, interface up, DNS-SD announced, recent
-    errors) would help humans as much as models, and could come first.
+    working?". A structured `ktbctl doctor` would help humans as much as
+    models, and could come first. Where `check` is about the config, `doctor`
+    is about the running system: adapter present and powered, TNC paired,
+    serial device present, interface up, DNS-SD announced, recent errors.
   - **What 1.0 should get right so this is easy later:** complete and stable
     `--json` output, stable error codes with actionable messages, and the
     published schema. All three are already in the plan.
