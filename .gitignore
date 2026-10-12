@@ -1,2 +1,5 @@
 .claude
 /target
+
+# Local settings for scripts/pi-deploy.sh
+/scripts/pi-deploy.local

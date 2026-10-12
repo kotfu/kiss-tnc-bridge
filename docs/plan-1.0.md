@@ -332,7 +332,7 @@ name = "TH-D75"
 - `model = "th-d75"` could be left out too, but then the radio only works if
   KISS mode was turned on from its menu.
 - The D75 still has to be paired once (`ktbctl pair d75`, or `bluetoothctl`
-  before 0.9). Until then `-t` warns and the port reports `Unpaired`.
+  until Phase 4 adds pairing to `ktbctl`). Until then `-t` warns and the port reports `Unpaired`.
 
 ### Full example
 
@@ -1366,9 +1366,32 @@ release pipeline nearly unchanged. The CLI's and TUI's dependencies
 
 ## Phases
 
-Each phase ends in a release. 0.6 introduces the new config and stops reading
-0.5 configs. **1.0.0** marks the config schema, control protocol v1, and
+Each phase ends in a milestone on `main`, not a release. **1.0.0** is the
+next release, and it marks the config schema, control protocol v1, and
 `ktbctl` as stable.
+
+### No releases until 1.0
+
+Once Phase 1 work starts landing on `main`, there can't be another GitHub
+release until 1.0 is done:
+
+- Phase 1 replaces the 0.5 INI config with the new TOML layout, so anything
+  released from `main` in between would break every existing install without
+  yet offering the features that make the switch worthwhile.
+- The schema, control protocol and CLI keep changing until Phase 5. A release
+  in the middle would turn a half-finished design into something users depend
+  on.
+- The release workflow builds and publishes any pushed `v*` tag, so the rule
+  is simple: **no version tags on `main` until `v1.0.0`.** The version in
+  `Cargo.toml` stays at the last 0.5 release until `cargo release major`
+  bumps it to 1.0.0.
+
+If 0.5 users need a fix in the meantime (for example
+[kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)),
+it goes on a `0.5.x` maintenance branch cut from the `v0.5.1` tag, released
+from there as 0.5.2 and so on, and merged or re-applied to `main` if it still
+applies. Testers who want to try 1.0 work early build from `main` (see
+`CONTRIBUTING.md`).
 
 ### Phase 0: Spikes (before committing)
 
@@ -1398,13 +1421,13 @@ plan:
 **Exit:** a short findings section appended to this doc. If pairing or
 coexistence is a dead end on Pi hardware, stop here.
 
-### Phase 1: Bridge core + new config (→ 0.6.0)
+### Phase 1: Bridge core + new config
 
 - [ ] Extract `KissConnection<S>` from `TcpKissConnection`.
 - [ ] Bridge task with port roles, forwarding rules, KISS policy filter, and
       the non-blocking TNC port state machine. This fixes
       [kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)
-      if it hasn't already been patched in 0.5.x.
+      if it hasn't already been fixed on the `0.5.x` branch.
 - [ ] Port types `ble-server` (moved out of `BridgeManager`, one GATT app
       per port, advertising the bridge's `public_name`, setting the adapter
       alias), `tcp-client`, and `tcp-server` (localhost default, address and
@@ -1426,7 +1449,7 @@ coexistence is a dead end on Pi hardware, stop here.
 - [ ] Add a PR CI workflow (`cargo test`, `clippy`, `fmt --check`). Today only
       the release workflow exists.
 
-### Phase 2: TNCs over Bluetooth and serial (→ 0.7.0)
+### Phase 2: TNCs over Bluetooth and serial
 
 - [ ] `[[tnc]]` objects with `spp` and `serial` sections, and the
       one-enabled-bridge-per-TNC rule.
@@ -1453,7 +1476,7 @@ At this point the core value is shipped: a Pi replaces a B.B. Link, shares
 the D75 over BLE and TCP by Bluetooth or USB cable, and works with standalone
 serial TNCs, all configured by hand.
 
-### Phase 3: Control API, dynamic config, reconciler (→ 0.8.0)
+### Phase 3: Control API, dynamic config, reconciler
 
 - [ ] `control::server`, protocol types, JSON Schema export, `subscribe` with
       `state`, `activity` and `frames` events, and counters.
@@ -1472,7 +1495,7 @@ serial TNCs, all configured by hand.
       `bridge.clone`.
 - [ ] `docs/control-api.md`.
 
-### Phase 4: `ktbctl` CLI, pairing, TUI (→ 0.9.0)
+### Phase 4: `ktbctl` CLI, pairing, TUI
 
 - [ ] All CLI commands above, plus `--json`.
 - [ ] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`,
@@ -1487,7 +1510,7 @@ serial TNCs, all configured by hand.
       with the TUI's frame pane.
 - [ ] Package `ktbctl` in deb/rpm/tarball.
 
-### Phase 5: Hardening → 1.0.0
+### Phase 5: Hardening → release 1.0.0
 
 - [ ] Soak test: 24 h on a Pi Zero 2 W with a D75, two BLE clients and one TCP
       client, checking memory, reconnects, and that no frames are lost while
@@ -1540,7 +1563,7 @@ architecture. The control protocol is the integration point.
 
 ---
 
-## Test matrix (manual, per release from 0.7)
+## Test matrix (manual, at each milestone from Phase 2, and before 1.0)
 
 | Host | TNC | BLE clients | TCP clients |
 |---|---|---|---|
@@ -1572,8 +1595,8 @@ announcing on the same Pi.
 1. **D75 pairing model** (Phase 0). This decides whether the pairing-window
    agent is needed at all.
 2. **Other SPP KISS devices** besides the D74/D75. A TNC with
-   `model = "none"` should work for any SPP KISS TNC. Collect testers after
-   0.7.
+   `model = "none"` should work for any SPP KISS TNC. Collect testers once
+   Phase 2 lands on `main`.
 3. **ICOM ID-5200:** confirm its USB TNC works as a plain `serial` KISS TNC,
    whether it needs a KISS init `model`, and whether its Bluetooth TNC is BLE
    (which would make it a `ble-client` TNC after 1.0).
