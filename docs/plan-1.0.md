@@ -63,6 +63,11 @@ hardware you already carry.
   software modem. Every modem it talks to is a TNC: a hardware one
   (`[[tnc]]`), or a software one reached over TCP (`tcp-client`).
 - **Serial TNCs are in 1.0**, including the TH-D75's TNC over USB.
+- **`tcp-server` ports are announced with DNS-SD in 1.0**, following the
+  [TCP KISS DNS-SD spec](https://github.com/hessu/aprs-specs/blob/master/TCP-KISS-DNS-SD.md)
+  (`_kiss-tnc._tcp`), so apps like aprs.fi on iOS can pick a bridge from a
+  list. A bridge has one public name, used for both BLE and DNS-SD, as the
+  spec requires.
 - **Bridges have an id (`ktbr0`) and a human-friendly name, and can be
   disabled.** You can keep a bridge for each physical setup and enable the one
   that matches what you have with you.
@@ -148,7 +153,7 @@ server like Dire Wolf's; `tcp-server` runs one. BLE keeps the Bluetooth terms
 | `serial` | modem | A TNC's USB or UART serial link (TH-D75 over USB, NinoTNC, TNC-Pi), via a `[[tnc]]` with a `serial` section | yes |
 | `tcp-client` | modem | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge's `tcp-server` | yes |
 | `ble-peripheral` | app | Phones and tablets via the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) (today's behavior) | yes |
-| `tcp-server` | app | Desktop apps connecting in: Pat, Xastir, YAAC | yes |
+| `tcp-server` | app | Apps connecting in over the network: Pat, Xastir, YAAC, and aprs.fi on iOS over Wi-Fi. Announced with DNS-SD | yes |
 | `rfcomm-server` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
 | `ble-central` | modem | BLE KISS TNCs | after 1.0 |
 
@@ -233,7 +238,7 @@ doesn't exist (the cable is unplugged); see [Serial details](#serial-details).
 | `/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml` | admin; daemon only reads | Global settings. Can also define static adapters, TNCs and bridges |
 | `/etc/kiss-tnc-bridge/conf.d/*.toml` | admin; daemon only reads | More static adapters, TNCs and bridges, in any mix. Conventionally one bridge per file. Loaded in name order |
 | `/var/lib/kiss-tnc-bridge/dynamic.toml` | daemon | Dynamic adapters, TNCs and bridges, created and changed through the control API (e.g. by `ktbctl setup`) |
-| `/var/lib/kiss-tnc-bridge/state.toml` | daemon | Runtime state that persists across restarts, such as enable/disable overrides for static bridges (below) |
+| `/var/lib/kiss-tnc-bridge/state.toml` | daemon | Runtime state that persists across restarts: enable/disable overrides for static bridges, and public names adjusted after a DNS-SD collision |
 | `/var/lib/kiss-tnc-bridge/secrets/` (0700) | daemon | Management tokens and phone credentials, for the gateway in 1.x |
 | `/run/kiss-tnc-bridge/` | daemon | Control socket, lock file |
 | `/var/lib/bluetooth/` | BlueZ | Pairing keys. We never write these directly |
@@ -295,6 +300,7 @@ model = "th-d75"                   # KISS init/teardown profile: th-d74 | th-d75
 id = "ktbr0"
 name = "TH-D75 portable"
 enabled = true
+# public_name = "TH-D75 on pi-zero"  # BLE + DNS-SD name; default: the bridge name
 
   [[bridge.port]]
   id = "radio"
@@ -307,13 +313,13 @@ enabled = true
   type = "ble-peripheral"
   adapter = "dongle"               # phones on the dongle, radio on the built-in chip
   max_clients = 2
-  # advertised_name defaults to the bridge name
 
   [[bridge.port]]
   id = "lan"
   type = "tcp-server"
   listen = "wlan0:8001"            # only on the Wi-Fi AP interface
   max_clients = 4
+  # announce = true                # DNS-SD; default true unless bound to loopback
 ```
 
 ```toml
@@ -437,7 +443,7 @@ bridges costs nothing.
 
 The point of disabling is to keep several bridges defined, one per physical
 setup, and enable whichever matches the hardware you have with you. Several
-bridges can use the same TNC, TCP listen socket, or advertised name, as long
+bridges can use the same TNC, TCP listen socket, or public name, as long
 as **only one of them is enabled at a time**.
 
 - For **dynamic bridges**, `enabled` is part of the definition and is changed
@@ -469,8 +475,9 @@ Errors:
 - A port whose TNC lacks the section it needs: `rfcomm-client` needs
   `bluetooth`, and `serial` needs `serial`.
 - Two TNCs with the same Bluetooth address on the same adapter, two TNCs with
-  the same serial path, or two adapter objects with the same MAC. These are checked whether or not anything is
-  enabled, because they're duplicate definitions of the same hardware.
+  the same serial path, or two adapter objects with the same MAC. These are
+  checked whether or not anything is enabled, because they're duplicate
+  definitions of the same hardware.
 - A bridge without exactly one modem-role port, or without at least one
   app-role port. This also applies to disabled bridges, so a bridge is known
   valid before it's enabled.
@@ -482,7 +489,9 @@ Errors:
   - the same `tcp-server` listen socket. An interface binding (`wlan0:8001`)
     conflicts with an address binding on the same TCP port number if the
     address is on that interface, or is `0.0.0.0`,
-  - the same advertised BLE name on the same adapter.
+  - the same public name on two bridges (it's the BLE advertised name and
+    the DNS-SD instance name, so two enabled bridges sharing one would be
+    indistinguishable to apps).
 
   `tcp-client` targets never conflict: Dire Wolf and Graywolf accept several
   KISS clients, so two enabled bridges pointing at the same TNC is
@@ -501,6 +510,11 @@ Warnings:
 - A `tcp-server` bound to `0.0.0.0` without an `allow` list (see
   [TCP server binding](#tcp-server-binding)).
 - A `tcp-server` bound to an interface that doesn't currently exist.
+- `announce = true` on a `tcp-server` bound to loopback (nothing on the LAN
+  could connect to what's announced).
+- A public name longer than about 29 bytes of UTF-8 on a bridge with a
+  `ble-peripheral` port. The BLE advertisement may truncate it, and the spec
+  wants BLE and DNS-SD names to match.
 - No bridge is enabled.
 
 **Static vs. dynamic collisions:** if a dynamic bridge has the same id or name
@@ -557,6 +571,66 @@ under your callsign. So:
   and is logged at startup.
 - An optional `allow = ["192.168.4.0/24"]` allowlist on `tcp-server` rejects
   other peers at accept time. It works with any binding form.
+
+### DNS-SD announcement
+
+`tcp-server` ports are announced on the LAN following the
+[TCP KISS DNS-SD spec](https://github.com/hessu/aprs-specs/blob/master/TCP-KISS-DNS-SD.md)
+(Heikki Hannikainen, OH7LZB, the same author as the BLE KISS API spec). Dire
+Wolf already announces this way, and aprs.fi on iOS browses for it, so a
+phone on the Pi's or Flipper One's Wi-Fi can pick a bridge from a list instead
+of typing an IP address and TCP port number.
+
+- **Service type:** `_kiss-tnc._tcp` in `local.`, pointing at the
+  `tcp-server`'s TCP port number.
+- **Instance name: the bridge's public name.** `public_name` is a bridge-level
+  key that defaults to the bridge `name`. The spec says a device with a BLE
+  KISS interface MUST use the same name for BLE and DNS-SD, so the same value
+  is the BLE advertised name for every `ble-peripheral` port on the bridge.
+  That's why the name lives on the bridge rather than on each port. It's
+  UTF-8, and non-ASCII names are fine; the spec requires clients to handle
+  them.
+- **Naming style:** the spec recommends friendly names without serial numbers
+  or MAC addresses, and suggests including the host name ("Dire Wolf on
+  raspberrypi"). Bridge names already fit; the docs suggest something like
+  "TH-D75 on pi-zero" for setups where several Pis are on one LAN. BLE
+  advertising limits names to roughly 29 bytes, so `-t` warns on longer
+  public names for bridges with BLE.
+- **Name collisions.** If another device on the LAN already uses the name,
+  Avahi reports a collision. Following the spec, the daemon appends or
+  increments a number ("TH-D75 portable (2)"), stores the adjusted name in
+  `state.toml` so it stays stable across restarts, and uses the adjusted name
+  for BLE too, keeping the two matched. `status` and the TUI show when a name
+  has been adjusted, and `ktbctl bridge public-name BRIDGE --retry` drops the
+  adjustment to retry the configured name. Retrying works on static bridges
+  too, since the adjustment is runtime state, not part of the definition.
+- **Which interfaces.** Per `tcp-server` port:
+  - `announce` defaults to `true`, except for loopback bindings, where it
+    defaults to `false`; forcing it on there is a `-t` warning.
+  - An interface binding (`wlan0:8001`) is announced only on that interface,
+    using Avahi's per-interface publishing.
+  - A specific address is announced on the interface that holds it.
+  - `0.0.0.0` / `[::]` is announced on all interfaces.
+- **TXT record:** no `pn` record in 1.0. The spec says clients assume a
+  single-port TNC when it's absent, which matches one modem per bridge. When
+  bridges get several modems after 1.0, `pn` lists one name per KISS channel
+  (the TNC names).
+- **Lifecycle:** the announcement exists while the bridge is enabled and the
+  `tcp-server` port is listening. It's withdrawn when the bridge is
+  disabled, during `switch`, and while an interface-bound port is waiting for
+  its interface. Whether the modem is currently connected doesn't matter:
+  with `connect = "on_demand"`, the modem only connects once an app does.
+- **How:** through Avahi's D-Bus API (`EntryGroupNew`, `AddService`, `Commit`)
+  using the `dbus` crate we already depend on through `bluer`. Avahi ships
+  with Raspberry Pi OS and is likely on Flipper OS. If Avahi isn't running,
+  the daemon logs it once and carries on unannounced. Running our own mDNS
+  responder next to Avahi would fight over UDP port 5353, so we don't.
+- **Exposure:** announcing makes an open KISS port easy to find, which is the
+  point, but it also means the [binding rules](#tcp-server-binding) matter
+  more. Announcing doesn't change the defaults: a `tcp-server` bound to
+  `127.0.0.1` isn't reachable or announced.
+- **Debugging:** `avahi-browse -r _kiss-tnc._tcp` on Linux or
+  `dns-sd -B _kiss-tnc._tcp` on a Mac shows what's announced.
 
 ---
 
@@ -750,6 +824,7 @@ gateway; a Pi 1 that only needs the CLI doesn't.
         "in_use_by":"ktbr0","source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml"}],
      "bridges":[{
        "id":"ktbr0","name":"TH-D75 portable","enabled":true,
+       "public_name":{"configured":"TH-D75 portable","effective":"TH-D75 portable"},
        "source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml","editable":false,
        "ports":[
          {"id":"radio","type":"rfcomm-client","role":"modem","tnc":"d75",
@@ -757,7 +832,7 @@ gateway; a Pi 1 that only needs the CLI doesn't.
          {"id":"phones","type":"ble-peripheral","role":"app","adapter":"dongle","advertising":false,
           "sessions":[{"id":"7C:2A:…","since":"2026-10-12T14:02:09Z"}]},
          {"id":"lan","type":"tcp-server","role":"app","listen":"wlan0:8001","state":"listening",
-          "sessions":[]}],
+          "announced":true,"sessions":[]}],
        "counters":{"frames_up":12,"frames_down":340,"dropped":0}}]}}
 
 → {"v":1,"id":2,"cmd":"subscribe","topics":["state","activity","pairing"]}
@@ -772,6 +847,7 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 | `subscribe` | Event topics: `state`, `activity` (coalesced, ≤10/s per port), `frames` (full frames with decoded AX.25 header), `pairing`, `scan` |
 | `bridge.create` / `bridge.update` / `bridge.delete` / `bridge.clone` | Dynamic bridges only. `clone` copies any bridge, static or dynamic, into a new dynamic one |
 | `bridge.enable` / `bridge.disable` / `bridge.switch` | Any bridge; on static bridges this sets an override in `state.toml` |
+| `bridge.retry_public_name` | Any bridge; drops a DNS-SD collision adjustment from `state.toml` |
 | `port.add` / `port.update` / `port.remove` | Ports on dynamic bridges only |
 | `tnc.create` / `tnc.update` / `tnc.delete` | Dynamic TNCs only; delete is refused while referenced |
 | `adapter.create` / `adapter.update` / `adapter.delete` | Dynamic adapter objects only; delete is refused while referenced |
@@ -822,7 +898,11 @@ ktbctl pair TNC | unpair TNC
 ktbctl bridge add [ID] --name NAME             # dynamic; id defaults to next free ktbrN
 ktbctl bridge clone BRIDGE [NEW_ID] --name NAME
 ktbctl bridge rm BRIDGE
-ktbctl bridge rename BRIDGE NAME
+ktbctl bridge name BRIDGE NAME                 # dynamic bridges only
+ktbctl bridge public-name BRIDGE               # show configured and effective public name
+ktbctl bridge public-name BRIDGE NAME          # dynamic bridges only
+ktbctl bridge public-name BRIDGE --default     # dynamic: fall back to the bridge name
+ktbctl bridge public-name BRIDGE --retry       # any bridge: drop a DNS-SD collision adjustment
 ktbctl enable BRIDGE | disable BRIDGE | switch BRIDGE
 ktbctl port add BRIDGE TYPE [--id ID] [type options]
     e.g. ktbctl port add ktbr0 rfcomm-client --tnc d75 --idle-timeout 90s
@@ -919,10 +999,9 @@ and each off unless configured:
 - **HTTP + WebSocket:** serves a web UI as embedded static files, plus the
   protocol over WebSocket.
 - **LAN TCP + mDNS:** the protocol over TCP for phone apps on the LAN,
-  advertised through Avahi over D-Bus. Avahi ships with Raspberry Pi OS, and
-  running a second mDNS responder alongside it gets messy. It could also
-  advertise `tcp-server` ports; first check whether any APRS apps
-  already browse for a service type.
+  announced through Avahi the same way the daemon announces `tcp-server`
+  ports, but under its own service type (e.g. `_ktb-mgmt._tcp`). It must
+  never use `_kiss-tnc._tcp`, or KISS apps would try to speak KISS to it.
 - **BLE management GATT:** a separate 128-bit service UUID (not the KISS
   service), carrying the protocol as described above.
 
@@ -966,6 +1045,7 @@ src/
     ble_peripheral.rs      GATT service + advertising (from bridge/manager.rs), linux only
     tnc_init.rs            KISS init by TNC model: th-d74, th-d75, none
     listen.rs              tcp-server binding: address, interface (SO_BINDTODEVICE), allow
+  announce.rs              DNS-SD via Avahi D-Bus: entry groups, collisions, per-interface
   config/
     model.rs               serde types: global, adapters, TNCs, bridges, ports
     load.rs                main file + conf.d + dynamic.toml + overrides → effective set
@@ -1063,6 +1143,9 @@ coexistence is a dead end on Pi hardware, stop here.
       `connect = "always"`.
 - [ ] Per-port adapter tracking in the supervisor.
 - [ ] `-t` warnings for unpaired TNCs and missing serial devices.
+- [ ] DNS-SD announcement of `tcp-server` ports through Avahi: `public_name`,
+      per-interface announcing, collision renaming persisted in `state.toml`
+      and applied to BLE too. Checked with `avahi-browse` and aprs.fi on iOS.
 - [ ] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
       the TCP exposure warning.
 - [ ] Manual hardware test matrix (below).
@@ -1161,6 +1244,7 @@ architecture. The control protocol is the integration point.
 | Pi 4: built-in for radio, RTL8761B dongle for BLE | TH-D75 | aprs.fi iOS | — |
 | x86_64 + dongle | TH-D74 (if available) | aprs.fi iOS | Dire Wolf-style client |
 | Flipper One | TH-D75 | aprs.fi iOS | Pat over Ethernet |
+| Pi 4 as Wi-Fi AP | TH-D75 | — | aprs.fi iOS over Wi-Fi, found by DNS-SD |
 
 Scenarios: cold start with the radio off; radio power-cycled mid-session; radio
 walked out of range and back; KISS mode turned off on the radio; adapter
@@ -1170,7 +1254,9 @@ survive); `switch` between two bridges sharing the same radio; a
 unplugged and replugged mid-session; `switch` between the D75's Bluetooth and
 USB bridges; a BLE client
 sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
-`dynamic.toml` while the daemon runs.
+`dynamic.toml` while the daemon runs; two Pis on one LAN with the same public
+name (collision renaming, and BLE following it); Dire Wolf and a bridge both
+announcing on the same Pi.
 
 ---
 
@@ -1182,9 +1268,7 @@ sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
    `model = "none"` should work for any SPP KISS TNC. Collect testers after
    0.7.
 3. **Flipper OS unknowns:** app SDK, Bluetooth ownership, filesystem layout,
-   package format.
-4. **mDNS service type** for KISS TCP ports: is there existing practice among
-   APRS apps?
+   package format, and whether Avahi is present.
 
 ## After 1.0
 
@@ -1202,5 +1286,12 @@ sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
   can use a bridge. That includes `kissattach`, which would put the Linux
   kernel's own AX.25 networking stack on a bridge.
 - **udev-driven serial hot-plug** in place of path polling.
+- **DNS-SD browsing for `tcp-client`:** `address = "dns-sd:Dire Wolf on
+  raspberrypi"` resolves the instance name at each connect, so a TNC host
+  changing its DHCP address doesn't break the bridge. `ktbctl setup` and the
+  TUI would offer a list of discovered `_kiss-tnc._tcp` services when adding a
+  `tcp-client`.
+- **`pn` TXT record** listing one name per KISS channel, once bridges can have
+  several modems.
 - **App-to-app echo:** an opt-in per-bridge setting that copies each app's
   transmitted frames to the other app sessions, if apps turn out to need it.
