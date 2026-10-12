@@ -46,9 +46,17 @@ hardware you already carry.
 - **New TOML config in a new directory, `/etc/kiss-tnc-bridge/`.** 0.5 INI
   configs aren't read or migrated. There are very few users, and the old file
   at `/etc/kiss-tnc-bridge.conf` is left untouched.
-- **Static bridges** live in `/etc` and can't be changed through management
-  tools. **Dynamic bridges** live in `/var/lib/kiss-tnc-bridge/bridges.toml`
-  and are owned by the daemon.
+- **Static config** (bridges, radios, adapters) lives in `/etc`, in the main
+  file and in `conf.d/`. Its definitions can't be changed through management
+  tools. A static bridge's enabled state can be: `ktbctl enable` / `disable` /
+  `switch` store an override in `/var/lib`, so switching setups never
+  requires editing `/etc`. **Dynamic config** lives in
+  `/var/lib/kiss-tnc-bridge/dynamic.toml` and is owned by the daemon.
+- **Ports are defined inline in bridges.** Hardware with a real identity is
+  defined once at the top level and referenced: **`[[radio]]`** (a Bluetooth
+  radio's address, model, and the adapter it's paired on) and
+  **`[[adapter]]`** (a readable id for a Bluetooth adapter's MAC). TCP ports
+  have no hardware identity and stay entirely inline.
 - **Bridges have an id (`ktbr0`) and a human-friendly name, and can be
   disabled.** You can keep a bridge for each physical setup and enable the one
   that matches what you have with you.
@@ -56,7 +64,10 @@ hardware you already carry.
   a separate unprivileged gateway process, after 1.0. The protocol is
   designed for all of them now.
 - **Names:** the daemon stays `kiss-tnc-bridge`. The CLI/TUI is `ktbctl`, the
-  gateway `ktb-gateway`, and bridge ids default to `ktbrN`.
+  gateway `ktb-gateway`, and bridge ids default to `ktbrN`. Port types are
+  `<transport>-client` / `<transport>-server` (see
+  [Port types](#port-types)), and the attachment points stay "ports" (see
+  [Naming conventions](#naming-conventions)).
 
 ### Non-goals for 1.0
 
@@ -81,29 +92,58 @@ hardware you already carry.
   ("TH-D75 portable") that is human-friendly and shown in UIs. Names must also
   be unique so `ktbctl` can accept either. A bridge is `enabled` or disabled,
   and a disabled bridge holds no resources.
-- **Port**: one attachment point on a bridge, with a port id unique within its
-  bridge, written `ktbr0/radio`. Every connection type is a port type.
-- **Session**: one live connection on a port. A connecting port has at most
-  one session. A listening port has one per connected client
+- **Port**: one attachment point on a bridge, defined inline in the bridge,
+  with a port id unique within its bridge, written `ktbr0/radio`. Every
+  connection type is a port type. Ports carry the settings that vary per
+  setup (idle timeout, max clients, listen address), so the same radio can be
+  used differently by different bridges.
+- **Session**: one live connection on a port. A client port has at most one
+  session. A server port has one per connected client
   (`ktbr0/phones/7C:2A:…`, `ktbr0/lan/192.168.4.20:51515`).
+- **Radio**: a top-level object for a Bluetooth radio (or other Bluetooth
+  Classic KISS TNC): its id, name, address, model (which selects the KISS
+  init sequence), and the adapter it's paired on. `rfcomm-client` ports
+  reference a radio by id. The pairing belongs to the radio, so a radio is
+  `paired` or `unpaired` regardless of which bridges use it.
+- **Adapter**: a top-level object that gives a Bluetooth adapter's MAC a
+  readable id (`builtin`, `dongle`). Anywhere an adapter is accepted, the
+  value can be an adapter id, a MAC, or an `hciN` name.
 - **Role**: each port is either **modem**-side (a frame sent to it means
   "transmit this on the air") or **app**-side (an app that uses the radio).
   Users almost never set this; it defaults from the port type.
 
+### Naming conventions
+
+"Port" has three meanings in this space. The docs and config keep them apart:
+
+- **Port** (or "bridge port") always means our attachment point.
+- **TCP port numbers** never get a bare `port` key. TCP endpoints are written
+  `host:port` in `address` and `listen` keys, and the docs say "TCP port
+  number".
+- The KISS command byte's high nibble, which the KISS spec calls a "port", is
+  a **KISS channel** in our docs and in the post-1.0 multi-modem spec. Dire
+  Wolf uses "channel" for the same thing. The KISS spec's term only appears
+  when quoting it.
+
 ### Port types
+
+Types are named for what the daemon does: a `-client` port connects out, and
+a `-server` port accepts connections. `tcp-client` connects to a KISS TCP
+server like Dire Wolf's; `tcp-server` runs one. BLE keeps the Bluetooth terms
+`peripheral` and `central`, which is what BLE documentation and apps use.
 
 | Type | Default role | Connects to / accepts | 1.0? |
 |---|---|---|---|
-| `rfcomm-connect` | modem | A radio's SPP port (TH-D74/D75, other SPP KISS TNCs) | yes |
-| `tcp-connect` | modem | A TCP KISS server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge | yes |
+| `rfcomm-client` | modem | A radio's SPP port (TH-D74/D75, other SPP KISS TNCs), via a `[[radio]]` | yes |
+| `tcp-client` | modem | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem, another kiss-tnc-bridge's `tcp-server` | yes |
 | `ble-peripheral` | app | Phones and tablets via the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) (today's behavior) | yes |
-| `tcp-listen` | app | Desktop apps connecting in: Pat, Xastir, YAAC | yes |
-| `rfcomm-listen` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
+| `tcp-server` | app | Desktop apps connecting in: Pat, Xastir, YAAC | yes |
+| `rfcomm-server` | app | Android apps that support SPP TNCs (e.g. APRSdroid) | stretch for 1.0, otherwise 1.1 |
 | `ble-central` | modem | BLE KISS TNCs | after 1.0 |
 | `serial` | modem | USB/serial KISS TNCs, possibly the D74/D75 over USB | open question |
 
 A `role = "modem" | "app"` override exists for odd cases, such as a
-`tcp-connect` to an app that runs its own KISS server.
+`tcp-client` to an app that runs its own KISS server.
 
 ### Forwarding rules
 
@@ -130,7 +170,7 @@ acts exactly like 0.5.
               │                                                                        │
  app ports    │ per-session reassembly ─┐                     ┌── per-session queue ───│──> BLE notify
  (ble, tcp-   │ per-session reassembly ─┼─> KISS policy ──┐   ├── per-session queue ───│──> TCP write
-  listen)     │                         │   filter        │   │                        │
+  server)     │                         │   filter        │   │                        │
               │                         │                 v   │                        │
               │                         │          Modem port state machine            │
               │                         │   Unpaired · Idle → Connecting → Connected   │
@@ -159,15 +199,16 @@ back over a channel. Backoff is a `tokio::time::Sleep` stored in the bridge and
 polled as its own select arm. While `Connecting`, uplink frames are queued
 (bounded: 32 frames / 5 s) instead of dropped.
 
-`Unpaired` is a separate state for an `rfcomm-connect` port whose radio has no
-pairing on the port's adapter. The bridge reports it and waits; it doesn't
-retry in a loop. Pairing (below) moves the port on to `Connecting`.
+`Unpaired` is a separate state for an `rfcomm-client` port whose radio isn't
+paired on the radio's adapter. The bridge reports it and waits; it doesn't
+retry in a loop. Pairing the radio (`ktbctl pair d75`) moves every port that
+uses it on to `Connecting`.
 
 ### Modem connection policy
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
-| `connect` | `on_demand`, `always` | `on_demand` | `on_demand` connects the modem when the first app session arrives, as today. `always` keeps it up with no sessions, which is useful for a `tcp-listen` port that should look "live" |
+| `connect` | `on_demand`, `always` | `on_demand` | `on_demand` connects the modem when the first app session arrives, as today. `always` keeps it up with no sessions, which is useful for a `tcp-server` port that should look "live" |
 | `idle_timeout` | duration | `0s` | With `on_demand`, how long to hold the modem after the last session leaves. Keeping an RFCOMM link warm for ~1–2 minutes avoids a slow reconnect when iOS briefly drops BLE |
 
 ---
@@ -178,9 +219,9 @@ retry in a loop. Pairing (below) moves the port on to `Connecting`.
 
 | Path | Owner | Contents |
 |---|---|---|
-| `/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml` | admin; daemon only reads | Global settings. Can also define static bridges |
-| `/etc/kiss-tnc-bridge/bridges.d/*.toml` | admin; daemon only reads | More static bridges, conventionally one bridge per file. Loaded in name order |
-| `/var/lib/kiss-tnc-bridge/bridges.toml` | daemon | Dynamic bridges, created and changed through the control API |
+| `/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml` | admin; daemon only reads | Global settings. Can also define static adapters, radios and bridges |
+| `/etc/kiss-tnc-bridge/conf.d/*.toml` | admin; daemon only reads | More static adapters, radios and bridges, in any mix. Conventionally one bridge per file. Loaded in name order |
+| `/var/lib/kiss-tnc-bridge/dynamic.toml` | daemon | Dynamic adapters, radios and bridges, created and changed through the control API (e.g. by `ktbctl setup`) |
 | `/var/lib/kiss-tnc-bridge/state.toml` | daemon | Runtime state that persists across restarts, such as enable/disable overrides for static bridges (below) |
 | `/var/lib/kiss-tnc-bridge/secrets/` (0700) | daemon | Management tokens and phone credentials, for the gateway in 1.x |
 | `/run/kiss-tnc-bridge/` | daemon | Control socket, lock file |
@@ -210,12 +251,29 @@ migration code.
 
 [global]
 log_level = "info"
-adapter = "00:1A:7D:DA:71:13"     # default for Bluetooth ports; name (hci0) or MAC
+adapter = "builtin"                # default for Bluetooth ports and radios
 
 [control]
 socket = "/run/kiss-tnc-bridge/control.sock"
 group = "kiss-tnc-bridge"
 
+[[adapter]]
+id = "builtin"
+mac = "B8:27:EB:12:34:56"
+
+[[adapter]]
+id = "dongle"
+mac = "00:1A:7D:DA:71:13"
+
+[[radio]]
+id = "d75"
+name = "TH-D75"
+address = "00:11:22:33:44:55"
+model = "th-d75"                   # KISS init/teardown profile: th-d74 | th-d75 | none
+adapter = "builtin"                # the adapter it's paired on
+# channel = 2                      # default: SDP lookup via BlueZ profile connect
+
+# Field: radio over Bluetooth, shared to phones and a laptop on the Pi's Wi-Fi AP
 [[bridge]]
 id = "ktbr0"
 name = "TH-D75 portable"
@@ -223,30 +281,28 @@ enabled = true
 
   [[bridge.port]]
   id = "radio"
-  type = "rfcomm-connect"
-  address = "00:11:22:33:44:55"
-  radio = "th-d75"                # init/teardown profile: th-d74 | th-d75 | none
-  connect = "on_demand"
+  type = "rfcomm-client"
+  radio = "d75"
   idle_timeout = "90s"
-  # channel = 2                   # default: SDP lookup via BlueZ profile connect
 
   [[bridge.port]]
   id = "phones"
   type = "ble-peripheral"
-  advertised_name = "TH-D75"      # default: the bridge name
-  adapter = "hci1"                # USB dongle for phones; built-in chip talks to the radio
+  adapter = "dongle"               # phones on the dongle, radio on the built-in chip
   max_clients = 2
+  # advertised_name defaults to the bridge name
 
   [[bridge.port]]
   id = "lan"
-  type = "tcp-listen"
-  listen = "127.0.0.1:8001"
+  type = "tcp-server"
+  listen = "wlan0:8001"            # only on the Wi-Fi AP interface
   max_clients = 4
 ```
 
 ```toml
-# /etc/kiss-tnc-bridge/bridges.d/home.toml
+# /etc/kiss-tnc-bridge/conf.d/home.toml
 
+# Home: Graywolf on the same Pi, shared to phones (the 0.5 use case)
 [[bridge]]
 id = "ktbr1"
 name = "Graywolf at home"
@@ -254,20 +310,47 @@ enabled = false
 
   [[bridge.port]]
   id = "tnc"
-  type = "tcp-connect"
-  host = "127.0.0.1"
-  port = 6700
+  type = "tcp-client"
+  address = "127.0.0.1:6700"
+  connect = "always"
 
   [[bridge.port]]
   id = "phones"
   type = "ble-peripheral"
+  adapter = "builtin"
   max_clients = 3
+
+  [[bridge.port]]
+  id = "lan"
+  type = "tcp-server"
+  listen = "8001"                  # TCP port number alone binds 127.0.0.1
+
+# Chaining: this Pi's BLE in front of another Pi's ktbr0 "lan" port
+[[bridge]]
+id = "ktbr2"
+name = "Shack relay"
+enabled = false
+
+  [[bridge.port]]
+  id = "upstream"
+  type = "tcp-client"
+  address = "192.168.4.1:8001"
+
+  [[bridge.port]]
+  id = "phones"
+  type = "ble-peripheral"
+  adapter = "builtin"
 ```
 
-Dynamic bridges in `/var/lib/kiss-tnc-bridge/bridges.toml` use the same
-`[[bridge]]` schema.
+Dynamic config in `/var/lib/kiss-tnc-bridge/dynamic.toml` uses the same
+`[[adapter]]`, `[[radio]]` and `[[bridge]]` schema.
 
-### Identifiers
+TCP ports are always inline. A `tcp-client` is just a `host:port`, and a
+`tcp-server` is just a listening socket. Neither has a hardware identity or
+state that outlives a bridge, so repeating `address = "127.0.0.1:6700"` in two
+bridges costs nothing.
+
+### Identifiers and references
 
 - **Bridge ids** use lowercase letters, digits and `-`, at most 15 characters
   (the same limits as Linux interface names). The API assigns `ktbrN` (the
@@ -277,18 +360,32 @@ Dynamic bridges in `/var/lib/kiss-tnc-bridge/bridges.toml` use the same
 - **Port ids** use the same character rules and must be unique within a
   bridge. If omitted, they default to the type plus an index
   (`ble-peripheral0`).
-- **Adapters** can be named by `hciN` or by MAC address. `hciN` numbers depend
-  on the order adapters appear, so plugging in a dongle or a change in USB
-  enumeration can swap them. BlueZ stores pairings by adapter MAC, so a bridge
-  pinned to `hci1` could land on the wrong chip with no pairing. The docs
-  recommend MACs, and `ktbctl setup` writes MACs.
+- **Radio and adapter ids** use the same character rules and are global:
+  unique across static and dynamic config, and in separate namespaces from
+  each other and from bridges.
+- **Adapter values** can be an adapter id, a MAC, or an `hciN` name. `hciN`
+  numbers depend on the order adapters appear, so plugging in a dongle or a
+  change in USB enumeration can swap them. BlueZ stores pairings by adapter
+  MAC, so a port pinned to `hci1` could land on the wrong chip with no
+  pairing. The docs recommend adapter ids (or MACs), and `ktbctl setup`
+  creates adapter objects.
+- **Reference rules:**
+  - A static bridge or radio can only reference static radios and adapters,
+    so `/etc` is self-contained. An image builder's config then can't depend
+    on runtime state, and validating `/etc` alone is meaningful.
+  - Dynamic objects can reference static or dynamic ones. A common setup
+    would have the admin define the radio and adapters in `/etc` and build
+    bridges around them with `ktbctl`.
+  - The API refuses to delete a radio or adapter that's referenced, and lists
+    what references it. Renaming one updates dynamic references, and is
+    refused if anything static references it.
 
 ### Enable, disable, and switching setups
 
 The point of disabling is to keep several bridges defined, one per physical
 setup, and enable whichever matches the hardware you have with you. Several
-bridges can use the same radio, port number, or advertised name, as long as
-**only one of them is enabled at a time**.
+bridges can use the same radio, TCP listen socket, or advertised name, as long
+as **only one of them is enabled at a time**.
 
 - For **dynamic bridges**, `enabled` is part of the definition and is changed
   through the API.
@@ -305,64 +402,100 @@ bridges can use the same radio, port number, or advertised name, as long as
 ### Validation (`kiss-tnc-bridge -t`)
 
 The existing `-t/--test-config` flag (like `nginx -t`) validates the main file,
-`bridges.d/`, and the dynamic `bridges.toml` together. It prints the effective
+`conf.d/`, and the dynamic `dynamic.toml` together. It prints the effective
 set of bridges, with source file and enabled state, and exits 0 if valid.
 
 Errors:
 
 - TOML syntax, unknown keys, bad values.
-- Duplicate bridge ids or names within the static set (main file +
-  `bridges.d/`).
+- Duplicate ids within the static set (main file + `conf.d/`): bridge ids,
+  bridge names, radio ids, adapter ids.
 - Duplicate port ids within a bridge.
+- A reference that doesn't resolve (a port's `radio` or `adapter`, a radio's
+  `adapter`), or a static object referencing a dynamic one.
+- Two radios with the same address on the same adapter, or two adapter
+  objects with the same MAC. These are checked whether or not anything is
+  enabled, because they're duplicate definitions of the same hardware.
 - A bridge without exactly one modem-role port, or without at least one
   app-role port. This also applies to disabled bridges, so a bridge is known
   valid before it's enabled.
 - Among **enabled** bridges only, resource conflicts:
-  - the same radio address on two `rfcomm-connect` ports (a radio accepts one
-    SPP connection),
-  - the same `tcp-listen` address and port,
+  - the same radio on two `rfcomm-client` ports (a radio accepts one SPP
+    connection),
+  - the same `tcp-server` listen socket. An interface binding (`wlan0:8001`)
+    conflicts with an address binding on the same TCP port number if the
+    address is on that interface, or is `0.0.0.0`,
   - the same advertised BLE name on the same adapter.
+
+  `tcp-client` targets never conflict: Dire Wolf and Graywolf accept several
+  KISS clients, so two enabled bridges pointing at the same TNC is
+  legitimate. A TNC that only accepts one client just shows up as a connect
+  failure in that bridge's status.
 
 Warnings:
 
-- An `rfcomm-connect` radio that isn't paired on its adapter, e.g.
-  "ktbr0/radio: 00:11:22:33:44:55 not paired on adapter 00:1A:7D:DA:71:13
-  (run `ktbctl pair ktbr0/radio`)".
-- A `tcp-listen` bound to `0.0.0.0` (see TCP exposure below).
+- A radio that isn't paired on its adapter, e.g. "radio d75 (00:11:22:33:44:55)
+  not paired on adapter builtin (B8:27:EB:12:34:56); run `ktbctl pair d75`".
+  Only for radios used by an enabled bridge.
+- A `tcp-server` bound to `0.0.0.0` without an `allow` list (see
+  [TCP server binding](#tcp-server-binding)).
+- A `tcp-server` bound to an interface that doesn't currently exist.
 - No bridge is enabled.
 
 **Static vs. dynamic collisions:** if a dynamic bridge has the same id or name
 as a static one, the static bridge wins and the dynamic one is disabled (not
-deleted) with a warning. The API refuses to create a dynamic bridge whose id or
-name is taken by a static one.
+deleted) with a warning. A dynamic radio or adapter that collides with a
+static one is ignored with a warning, and dynamic bridges referencing it then
+resolve to the static one. The API refuses to create a dynamic object whose id
+or name is taken by a static one.
 
 `SIGHUP` or `ktbctl reload` re-reads everything and reconciles (below). An
 invalid config on reload is rejected as a whole, and the running bridges keep
 going.
 
-### Dynamic bridges: writing and hand-editing
+### Dynamic config: writing and hand-editing
 
-- The daemon writes `bridges.toml` with `toml_edit`, so comments and formatting
+- The daemon writes `dynamic.toml` with `toml_edit`, so comments and formatting
   survive. Writes are atomic: write to a temp file, fsync, rename. A power cut
   on a battery-powered device can't leave a half-written file.
 - Before every write, the daemon compares the file's hash with what it last
   wrote. If they differ, someone edited it by hand while the daemon was
-  running. The daemon refuses to overwrite it and logs "bridges.toml changed
+  running. The daemon refuses to overwrite it and logs "dynamic.toml changed
   on disk, run `ktbctl reload`" rather than discarding the edit.
 - **`ktbctl edit`** is the documented way to hand-edit, like `visudo` or
   `virsh net-edit`. It opens a copy in `$EDITOR`, validates it through the API
   on save (and reopens the editor on errors), then applies it.
-- `ktbctl edit ktbr2` edits a single dynamic bridge. On a static bridge it
-  refuses and prints the file that defines it.
+- `ktbctl edit ktbr2` edits a single dynamic bridge, and `ktbctl edit radio
+  d75` a single dynamic radio. On a static object it refuses and prints the
+  file that defines it.
 
-### TCP exposure
+### TCP server binding
+
+`listen` on a `tcp-server` accepts:
+
+| Form | Example | Meaning |
+|---|---|---|
+| TCP port number only | `"8001"` | `127.0.0.1:8001`. The safe default |
+| Address and TCP port number | `"192.168.4.1:8001"`, `"[::1]:8001"`, `"0.0.0.0:8001"` | Bind that address |
+| Network interface and TCP port number | `"wlan0:8001"` | Bind on that interface only, whatever its addresses are |
+
+**Interface binding** is the usual intent on a Pi or Flipper One acting as a
+Wi-Fi AP: "only on the AP interface", even if its IP changes between setups.
+The daemon binds to the wildcard address with `SO_BINDTODEVICE`, which it can
+do because it runs as root. If the interface doesn't exist yet (the AP isn't
+up), the port reports `waiting for interface` and retries every 5 s. Watching
+netlink for interface events instead is an easy later improvement. An
+interface name that parses as an IP address is always treated as an address.
 
 **This is a licensing issue, not just a security one.** KISS TCP has no
-authentication. Anyone who can reach a `tcp-listen` port can transmit on your
-radio under your callsign. `listen` with only a port number binds to
-`127.0.0.1`, and binding to `0.0.0.0` is a `-t` warning and logged at startup.
-An optional `allow = ["192.168.4.0/24"]` allowlist on `tcp-listen` is cheap
-and worth it on a Flipper One running as a Wi-Fi AP.
+authentication. Anyone who can reach a `tcp-server` can transmit on your radio
+under your callsign. So:
+
+- The default is `127.0.0.1`.
+- Binding to `0.0.0.0` (or `[::]`) without an `allow` list is a `-t` warning
+  and is logged at startup.
+- An optional `allow = ["192.168.4.0/24"]` allowlist on `tcp-server` rejects
+  other peers at accept time. It works with any binding form.
 
 ---
 
@@ -375,19 +508,19 @@ filter on app-to-modem traffic:
 - **Drop KISS "return" (`C0 FF C0`) from apps.** On Kenwood radios it takes the
   TNC out of KISS mode, which breaks it for everyone. The bridge logs it and
   swallows it. Only the daemon sends it, during teardown, and only if the
-  port's `exit_kiss_on_disconnect = true`.
+  `rfcomm-client` port sets `exit_kiss_on_disconnect = true`.
 - **KISS parameter commands** (TXDELAY, P, SlotTime, TXtail, FullDuplex,
   SetHardware) pass through by default. A per-bridge
   `app_params = "pass" | "drop"` lets an operator pin the radio's settings.
-- **KISS init.** On connect, `radio = "th-d75"` sends the sequence that puts
-  the TNC in KISS mode. Use B.B. Link's firmware (the `halka/bb-link` fork has
+- **KISS init.** On connect, a radio with `model = "th-d75"` gets the sequence
+  that puts its TNC in KISS mode. Use B.B. Link's firmware (the `halka/bb-link` fork has
   explicit KISS-mode initialisation) as the behavioral reference for the exact
   CAT commands, timing, and the D74/D75 differences. Re-implement it from the
   documented behavior rather than porting code, until the license is confirmed
   compatible with GPL-3.0.
-- **Port nibble.** The KISS port number (high nibble of the command byte)
-  passes through untouched in 1.0. It becomes the routing key when bridges get
-  several modems.
+- **KISS channel.** The KISS channel (the command byte's high nibble, which
+  the KISS spec calls a port) passes through untouched in 1.0. It becomes the
+  routing key when bridges get several modems.
 
 ---
 
@@ -398,14 +531,14 @@ filter on app-to-modem traffic:
   `rfcomm::{Profile, Role, Stream}`.
 - **Connect through a BlueZ profile, not a hard-coded channel.** Register a
   `Profile { uuid: SPP 0x1101, role: Client, require_authentication: true }`,
-  call `device.connect_profile(SPP)` on the device under the port's adapter,
+  call `device.connect_profile(SPP)` on the device under the radio's adapter,
   and take the `Stream` from the `ProfileHandle` connect request. BlueZ does
   the SDP lookup. A `channel` override is kept for oddball devices.
-- **Pairings belong to an adapter.** The radio has to be paired with the
-  adapter named on its `rfcomm-connect` port. Moving the port to another
-  adapter means pairing again. `ktbctl pair ktbr0/radio` reads the address and
-  adapter from the port.
-- **Pairing never changes the configuration**, so it works on static bridges
+- **Pairings belong to a radio and an adapter.** BlueZ stores each pairing
+  under one adapter, which is why the `[[radio]]` object names the adapter
+  it's paired on. Changing a radio's adapter means pairing again.
+  `ktbctl pair d75` reads the address and adapter from the radio.
+- **Pairing never changes the configuration**, so it works on static radios
   too. It's an operation on BlueZ. Pre-built Pi or Flipper images can't
   include pairings, because the keys belong to one specific adapter and radio.
   Pairing is always a first-boot step, which `ktbctl setup` walks through.
@@ -417,9 +550,10 @@ filter on app-to-modem traffic:
 - **Classic and BLE on one adapter:** BLE peripheral advertising and BR/EDR
   connections at the same time are normal for dual-mode controllers. Classic
   *inquiry* (scanning) can disturb live links, so `scan` warns when sessions
-  are connected. If one controller can't handle both roles reliably, put the
-  ports on different adapters: every Bluetooth port has its own `adapter`
-  setting, such as the built-in chip for the radio and a USB dongle for phones.
+  are connected. If one controller can't handle both roles reliably, use
+  different adapters: the radio's `adapter` for the Classic link and each
+  `ble-peripheral` port's `adapter` for phones, such as the built-in chip for
+  the radio and a USB dongle for phones.
 - **One GATT application per `ble-peripheral` port**, rather than one per
   adapter as today. Enabling, disabling or changing one bridge then registers
   or unregisters only its own application, and doesn't disconnect phones on
@@ -450,9 +584,12 @@ interaction. Plan:
 
 ### One management core, many front-ends
 
-The daemon owns one object model: **bridges → ports → sessions**. Each object
-has a state and counters, plus a `source` field (`static: <file>` or
-`dynamic`) and an `editable` flag. On top of that sit a set of commands and an
+The daemon owns one object model: **bridges → ports → sessions**, plus the
+top-level **radios** and **adapters** they reference. Adapters are listed
+whether or not an `[[adapter]]` object names them, since the TUI and setup
+wizard need to show the hardware that's actually present. Each object has a
+state and counters, plus a `source` field (`static: <file>` or `dynamic`) and
+an `editable` flag. On top of that sit a set of commands and an
 event stream. Every UI is a client of that model over some transport:
 
 ```
@@ -494,34 +631,44 @@ gateway; a Pi 1 that only needs the CLI doesn't.
 
 ```jsonc
 → {"v":1,"id":1,"cmd":"status"}
-← {"v":1,"id":1,"ok":true,"result":{"bridges":[{
-     "id":"ktbr0","name":"TH-D75 portable","enabled":true,
-     "source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml","editable":false,
-     "ports":[
-       {"id":"radio","type":"rfcomm-connect","role":"modem","state":"connected",
-        "since":"2026-10-12T14:02:11Z","address":"00:11:22:33:44:55"},
-       {"id":"phones","type":"ble-peripheral","role":"app","advertising":false,
-        "sessions":[{"id":"7C:2A:…","since":"2026-10-12T14:02:09Z"}]},
-       {"id":"lan","type":"tcp-listen","role":"app","listen":"127.0.0.1:8001","sessions":[]}],
-     "counters":{"frames_up":12,"frames_down":340,"dropped":0}}]}}
+← {"v":1,"id":1,"ok":true,"result":{
+     "adapters":[
+       {"id":"builtin","mac":"B8:27:EB:12:34:56","hci":"hci0","present":true,"powered":true},
+       {"id":"dongle","mac":"00:1A:7D:DA:71:13","hci":"hci1","present":true,"powered":true}],
+     "radios":[
+       {"id":"d75","name":"TH-D75","address":"00:11:22:33:44:55","model":"th-d75",
+        "adapter":"builtin","paired":true,"source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml"}],
+     "bridges":[{
+       "id":"ktbr0","name":"TH-D75 portable","enabled":true,
+       "source":"static:/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml","editable":false,
+       "ports":[
+         {"id":"radio","type":"rfcomm-client","role":"modem","radio":"d75",
+          "state":"connected","since":"2026-10-12T14:02:11Z"},
+         {"id":"phones","type":"ble-peripheral","role":"app","adapter":"dongle","advertising":false,
+          "sessions":[{"id":"7C:2A:…","since":"2026-10-12T14:02:09Z"}]},
+         {"id":"lan","type":"tcp-server","role":"app","listen":"wlan0:8001","state":"listening",
+          "sessions":[]}],
+       "counters":{"frames_up":12,"frames_down":340,"dropped":0}}]}}
 
 → {"v":1,"id":2,"cmd":"subscribe","topics":["state","activity","pairing"]}
 ← {"v":1,"event":"activity","port":"ktbr0/radio","dir":"rx","bytes":73}
-← {"v":1,"event":"pairing.request_passkey","request":7,"device":"00:11:22:33:44:55"}
+← {"v":1,"event":"pairing.request_passkey","request":7,"radio":"d75"}
 → {"v":1,"id":3,"cmd":"pairing.reply","request":7,"passkey":"0000"}
 ```
 
 | Command | Purpose |
 |---|---|
-| `status` | Bridges, ports, sessions, states, counters, adapters |
+| `status` | Adapters, radios, bridges, ports, sessions, states, counters |
 | `subscribe` | Event topics: `state`, `activity` (coalesced, ≤10/s per port), `frames` (full frames with decoded AX.25 header), `pairing`, `scan` |
-| `bridge.create` / `bridge.update` / `bridge.delete` | Dynamic bridges only |
+| `bridge.create` / `bridge.update` / `bridge.delete` / `bridge.clone` | Dynamic bridges only. `clone` copies any bridge, static or dynamic, into a new dynamic one |
 | `bridge.enable` / `bridge.disable` / `bridge.switch` | Any bridge; on static bridges this sets an override in `state.toml` |
-| `port.add` / `port.update` / `port.remove` | Dynamic bridges only |
+| `port.add` / `port.update` / `port.remove` | Ports on dynamic bridges only |
+| `radio.create` / `radio.update` / `radio.delete` | Dynamic radios only; delete is refused while referenced |
+| `adapter.create` / `adapter.update` / `adapter.delete` | Dynamic adapter objects only; delete is refused while referenced |
 | `port.connect` / `port.disconnect` | Force a modem port up or down |
 | `session.kick` | Disconnect one session |
 | `scan.start` / `scan.stop` | Discovery with `transport: classic \| le \| auto`. Emits `scan.device` events and flags likely radios (SPP UUID, `TH-D7*` names) |
-| `pair` / `unpair` | Pairing window, by port (`ktbr0/radio`) or by address + adapter |
+| `pair` / `unpair` | Pairing window, by radio id (`d75`) or by address + adapter |
 | `config.validate` | Validate a candidate config without applying it (used by `ktbctl edit`) |
 | `reload` | Re-read config and reconcile (also on `SIGHUP`) |
 
@@ -534,8 +681,9 @@ change it starts, stops or restarts only the bridges and ports that differ.
 **Adapters are tracked per port, not per bridge.** Today the supervisor groups
 TNCs by adapter and tears down everything on an adapter when it goes away. In
 the new model, losing a `ble-peripheral` port's adapter stops only that port,
-and the bridge's modem and TCP sessions keep running. Losing the modem port's
-adapter puts the modem into `Backoff` while app sessions stay connected. When
+and the bridge's modem and TCP sessions keep running. Losing a radio's
+adapter puts the `rfcomm-client` port into `Backoff` while app sessions stay
+connected. When
 the adapter returns, only the affected ports restart. Adapter hot-plug and
 power on/off detection (today's supervisor loop) stays as it is and feeds the
 reconciler.
@@ -549,42 +697,59 @@ directly.
 ```
 ktbctl status [BRIDGE]
 ktbctl setup                                   # interactive wizard (below)
+
+ktbctl adapter list                            # hardware present + adapter objects
+ktbctl adapter add ID --mac MAC | adapter rm ID
+ktbctl radio list
+ktbctl radio add ID --address ADDR --model th-d75 --adapter ADAPTER [--name NAME]
+ktbctl radio rm RADIO
+ktbctl scan [--classic|--le] [--adapter ADAPTER] [--timeout 15s]
+ktbctl pair RADIO | unpair RADIO
+
 ktbctl bridge add [ID] --name NAME             # dynamic; id defaults to next free ktbrN
+ktbctl bridge clone BRIDGE [NEW_ID] --name NAME
 ktbctl bridge rm BRIDGE
 ktbctl bridge rename BRIDGE NAME
 ktbctl enable BRIDGE | disable BRIDGE | switch BRIDGE
 ktbctl port add BRIDGE TYPE [--id ID] [type options]
-    e.g. ktbctl port add ktbr0 rfcomm-connect --address 00:11:… --radio th-d75
-         ktbctl port add ktbr0 ble-peripheral --advertised-name "TH-D75" --adapter 00:1A:…
-         ktbctl port add ktbr0 tcp-listen --listen 127.0.0.1:8001
+    e.g. ktbctl port add ktbr0 rfcomm-client --radio d75 --idle-timeout 90s
+         ktbctl port add ktbr0 ble-peripheral --adapter dongle --max-clients 2
+         ktbctl port add ktbr0 tcp-server --listen wlan0:8001
+         ktbctl port add ktbr1 tcp-client --address 127.0.0.1:6700
 ktbctl port rm BRIDGE/PORT
 ktbctl connect BRIDGE/PORT | disconnect BRIDGE/PORT
 ktbctl kick BRIDGE/PORT/SESSION
-ktbctl scan [--classic|--le] [--timeout 15s]
-ktbctl pair BRIDGE/PORT | pair ADDR --adapter ADAPTER
-ktbctl unpair BRIDGE/PORT | unpair ADDR --adapter ADAPTER
-ktbctl edit [BRIDGE]                           # dynamic bridges only
+
+ktbctl edit [BRIDGE | radio RADIO | adapter ADAPTER]   # dynamic objects only
 ktbctl monitor [BRIDGE]                        # live frames: W1AW-9>APDR16,WIDE1-1: ...
 ktbctl reload
 ktbctl tui                                     # also: ktbctl with no arguments
 ```
 
-Bridges can be referred to by id or by name.
+Bridges and radios can be referred to by id or by name.
 
 **`setup` wizard** (the B.B. Link Configurator equivalent):
 
 1. Tell the user to put the radio in Bluetooth pairing mode and turn on KISS
    (with menu paths for the D74 and D75).
-2. Pick adapters (listing them by name, MAC, and whether they're built-in or
-   USB), then scan for Classic devices, listing likely radios first.
-3. Pair, relaying any PIN or confirm prompt.
-4. Ask for a bridge name (the default is the radio's name), whether to share
+2. Pick the adapter for the radio from the adapters present (listed by
+   `hciN`, MAC, and whether they're built-in or USB). Create an
+   `[[adapter]]` object for it if none exists, offering `builtin` or
+   `dongle` as the id.
+3. Scan for Classic devices on that adapter, listing likely radios first.
+   Create a dynamic `[[radio]]` for the chosen one.
+4. Pair, relaying any PIN or confirm prompt.
+5. Ask for a bridge name (the default is the radio's name), whether to share
    over BLE (yes) and on which adapter, and whether to share over TCP (no, or
-   which port, with the exposure warning).
-5. Create a dynamic bridge with adapter MACs. If another enabled bridge
-   conflicts with it, offer `switch`.
-6. Connect, then wait for the first received frame or 30 s of silence, and
+   which interface or address and TCP port number, with the exposure
+   warning).
+6. Create a dynamic bridge. If another enabled bridge conflicts with it, offer
+   `switch`.
+7. Connect, then wait for the first received frame or 30 s of silence, and
    report the result.
+
+If the radio already exists (static or dynamic), the wizard skips steps 2–4
+unless the radio is unpaired.
 
 ### `ktbctl tui`: full-screen TUI
 
@@ -593,12 +758,16 @@ Built with `ratatui`, in the same binary as the CLI (the same relationship as
 
 ```
 ┌ kiss-tnc-bridge ─ pi-zero ─────────────────────────────────────────────────┐
-│ ktbr0  TH-D75 portable                                         ● enabled  │
-│   radio   rfcomm-connect  00:11:22:33:44:55  connected 2h14m   ■ rx ■ tx  │
-│   phones  ble-peripheral  hci1 "TH-D75"      1/2 sessions      ■ rx ■ tx  │
-│             └ 7C:2A:…  iPhone                                  ■ rx ■ tx  │
-│   lan     tcp-listen      127.0.0.1:8001     0/4 sessions                  │
-│ ktbr1  Graywolf at home                                        ○ disabled │
+│ ktbr0  TH-D75 portable                                         ● enabled   │
+│   radio   rfcomm-client   d75 (TH-D75)       connected 2h14m   ■ rx ■ tx   │
+│   phones  ble-peripheral  dongle "TH-D75"    1/2 sessions      ■ rx ■ tx   │
+│             └ 7C:2A:…  iPhone                                  ■ rx ■ tx   │
+│   lan     tcp-server      wlan0:8001         0/4 sessions                  │
+│ ktbr1  Graywolf at home                                        ○ disabled  │
+│ ktbr2  Shack relay                                             ○ disabled  │
+├────────────────────────────────────────────────────────────────────────────┤
+│ radios   d75 TH-D75 paired on builtin                                      │
+│ adapters builtin hci0 B8:27:EB:… on · dongle hci1 00:1A:7D:… on            │
 ├────────────────────────────────────────────────────────────────────────────┤
 │ 14:22:07 rx ktbr0/radio  W1AW-9>APDR16,WIDE1-1:!4237.14N/07120.83W>        │
 │ 14:22:09 tx ktbr0/phones KD2ABC>APRS,WIDE1-1::W1AW-9   :hello{12           │
@@ -607,13 +776,15 @@ Built with `ratatui`, in the same binary as the CLI (the same relationship as
 └────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- A tree of bridges → ports → sessions, with state, adapter, and uptime.
+- A tree of bridges → ports → sessions, with state, adapter, and uptime, and
+  a strip showing radios (paired or not) and adapters (present, powered).
 - Activity squares per port and per session that flash on rx and tx in
   different colors, driven by `activity` events.
 - A live frame pane at the bottom, from `frames` events.
 - Actions: enable, disable, switch, connect, disconnect, kick, pair (with the
-  pairing prompts in a dialog), and add or remove dynamic bridges and ports.
-  Static bridges are shown read-only, labeled with their source file.
+  pairing prompts in a dialog), and add or remove dynamic bridges, ports,
+  radios and adapters. Static objects are shown read-only, labeled with their
+  source file.
 - It has to work over SSH and at 80×24, because the main use is a headless
   Pi.
 
@@ -627,7 +798,7 @@ and each off unless configured:
 - **LAN TCP + mDNS:** the protocol over TCP for phone apps on the LAN,
   advertised through Avahi over D-Bus. Avahi ships with Raspberry Pi OS, and
   running a second mDNS responder alongside it gets messy. It could also
-  advertise `tcp-listen` KISS ports; first check whether any APRS apps
+  advertise `tcp-server` ports; first check whether any APRS apps
   already browse for a service type.
 - **BLE management GATT:** a separate 128-bit service UUID (not the KISS
   service), carrying the protocol as described above.
@@ -665,16 +836,18 @@ src/
   port/
     mod.rs                 port types, roles, session ids
     stream.rs              KissConnection<S: AsyncRead + AsyncWrite> (from bridge/tcp.rs)
-    tcp_connect.rs
-    tcp_listen.rs
-    rfcomm_connect.rs      linux only
+    tcp_client.rs
+    tcp_server.rs
+    rfcomm_client.rs       linux only
     ble_peripheral.rs      GATT service + advertising (from bridge/manager.rs), linux only
-    radio_init.rs          th-d74, th-d75, none
+    radio_init.rs          KISS init by radio model: th-d74, th-d75, none
+    listen.rs              tcp-server binding: address, interface (SO_BINDTODEVICE), allow
   config/
-    model.rs               serde types
-    load.rs                main file + bridges.d + dynamic file + overrides → effective set
+    model.rs               serde types: global, adapters, radios, bridges, ports
+    load.rs                main file + conf.d + dynamic.toml + overrides → effective set
+    resolve.rs             adapter values (id, MAC, hciN) and radio references
     validate.rs            shared by -t, reload, and config.validate
-    store.rs               dynamic bridges.toml: toml_edit, atomic writes, hash check
+    store.rs               dynamic.toml: toml_edit, atomic writes, hash check
   control/
     protocol.rs            serde types + JSON Schema export
     server.rs              Unix socket server
@@ -730,27 +903,30 @@ coexistence is a dead end on Pi hardware, stop here.
       [kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)
       if it hasn't already been patched in 0.5.x.
 - [ ] Port types `ble-peripheral` (moved out of `BridgeManager`, one GATT app
-      per port), `tcp-connect`, and `tcp-listen` (with the localhost default
-      and `allow`).
-- [ ] TOML config: main file + `bridges.d/`, ids and names, `enabled`,
-      adapters by name or MAC, `-t` validation with conflict checks among
-      enabled bridges, and the 0.5 config warning.
+      per port), `tcp-client`, and `tcp-server` (localhost default, address
+      and interface binding, `allow`).
+- [ ] TOML config: main file + `conf.d/`, bridges with ids, names and
+      `enabled`, inline ports, `[[adapter]]` objects and adapter values (id,
+      MAC, `hciN`), `-t` validation with reference checks and conflict
+      checks among enabled bridges, and the 0.5 config warning.
 - [ ] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
       `RuntimeDirectory=`, `ProtectSystem=strict`, and moving the lock file to
       the runtime dir. Package the new example config.
 - [ ] Bridge unit tests with `tokio::io::duplex` modems and fake app ports.
       This is the first time routing is testable without BlueZ.
-- [ ] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-connect` →
-      bridge → `tcp-listen` → several clients, checking broadcast, uplink
+- [ ] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-client` →
+      bridge → `tcp-server` → several clients, checking broadcast, uplink
       serialization, and `C0 FF C0` filtering.
 - [ ] Add a PR CI workflow (`cargo test`, `clippy`, `fmt --check`). Today only
       the release workflow exists.
 
 ### Phase 2: RFCOMM modem port (→ 0.7.0)
 
-- [ ] `rfcomm-connect` using the profile approach, with the `Unpaired` state.
-      Pairing is still manual (`bluetoothctl`) in this release.
-- [ ] `radio_init` for th-d74/th-d75, `idle_timeout`, `connect = "always"`.
+- [ ] `[[radio]]` objects and `rfcomm-client` using the profile approach,
+      with the `Unpaired` state. Pairing is still manual (`bluetoothctl`) in
+      this release.
+- [ ] `radio_init` for th-d74/th-d75 models, `idle_timeout`,
+      `connect = "always"`.
 - [ ] Per-port adapter tracking in the supervisor.
 - [ ] `-t` warning for unpaired radios.
 - [ ] README: TH-D75 walkthrough, hardware notes, and the TCP exposure warning.
@@ -759,15 +935,16 @@ coexistence is a dead end on Pi hardware, stop here.
 At this point the core value is shipped: a Pi replaces a B.B. Link and also
 shares the radio over TCP, configured by hand.
 
-### Phase 3: Control API, dynamic bridges, reconciler (→ 0.8.0)
+### Phase 3: Control API, dynamic config, reconciler (→ 0.8.0)
 
 - [ ] `control::server`, protocol types, JSON Schema export, `subscribe` with
       `state`, `activity` and `frames` events, and counters.
 - [ ] Reconciler: start, stop or restart only what changed; `reload`/`SIGHUP`.
-- [ ] Dynamic `bridges.toml` store (toml_edit, atomic writes, hash check) and
+- [ ] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check) and
       `state.toml` enable overrides.
-- [ ] `bridge.*`, `port.*` and `config.validate` commands, with static
-      bridges read-only.
+- [ ] `bridge.*`, `port.*`, `radio.*`, `adapter.*` and `config.validate`
+      commands, with static objects read-only, reference-integrity checks,
+      and `bridge.clone`.
 - [ ] `docs/control-api.md`.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI (→ 0.9.0)
@@ -789,7 +966,7 @@ shares the radio over TCP, configured by hand.
       the modem is up.
 - [ ] Check the daemon's footprint on a Pi 1 (armhf) still fits the README's
       "~5MB" claim.
-- [ ] Stretch: `rfcomm-listen` for Android SPP apps.
+- [ ] Stretch: `rfcomm-server` for Android SPP apps.
 - [ ] Rewrite the README around bridges and ports, with new architecture
       diagrams and a "coming from 0.5" section showing the equivalent TOML.
 - [ ] Flipper One validation, if hardware is available by then. Otherwise 1.0
@@ -850,9 +1027,10 @@ architecture. The control protocol is the integration point.
 Scenarios: cold start with the radio off; radio power-cycled mid-session; radio
 walked out of range and back; KISS mode turned off on the radio; adapter
 unplugged; adapters re-enumerated so `hci0`/`hci1` swap (MAC-pinned config must
-survive); `switch` between two bridges sharing the same radio; a BLE client
+survive); `switch` between two bridges sharing the same radio; a
+`tcp-server` bound to `wlan0` while the AP goes down and comes back; a BLE client
 sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
-`bridges.toml` while the daemon runs.
+`dynamic.toml` while the daemon runs.
 
 ---
 
@@ -860,25 +1038,22 @@ sends `C0 FF C0`; a client floods the uplink; a slow TCP client; a hand edit to
 
 1. **D75 pairing model** (Phase 0). This decides whether the pairing-window
    agent is needed at all.
-2. **Enable overrides on static bridges:** this plan lets `ktbctl enable` /
-   `disable` / `switch` override a static bridge's `enabled` value through
-   `state.toml`, so switching setups doesn't require editing `/etc`. The
-   alternative is strictly read-only static bridges. Confirm.
-3. **Serial modem port** (`serial`, e.g. the D74/D75 over USB). It's nearly
+2. **Serial modem port** (`serial`, e.g. the D74/D75 over USB). It's nearly
    free once ports are just streams (`tokio-serial`). In 1.0, or 1.1?
-4. **Other SPP KISS devices** besides the D74/D75. `radio = "none"` should
-   work for any SPP KISS TNC. Collect testers after 0.7.
-5. **Flipper OS unknowns:** app SDK, Bluetooth ownership, filesystem layout,
+3. **Other SPP KISS devices** besides the D74/D75. A radio with
+   `model = "none"` should work for any SPP KISS TNC. Collect testers after
+   0.7.
+4. **Flipper OS unknowns:** app SDK, Bluetooth ownership, filesystem layout,
    package format.
-6. **mDNS service type** for KISS TCP ports: is there existing practice among
+5. **mDNS service type** for KISS TCP ports: is there existing practice among
    APRS apps?
 
 ## After 1.0
 
 - **Several modems per bridge**, presented to apps as a multi-port KISS TNC.
-  The bridge rewrites the KISS port number in both directions: the D75 is
-  port 0 and Dire Wolf port 1, so apps that support KISS ports can pick a
-  radio.
+  The bridge rewrites the KISS channel in both directions: the D75 is
+  channel 0 and Dire Wolf channel 1, so apps that support KISS channels can
+  pick a radio.
 - **`ble-central` port:** connect *to* BLE KISS TNCs (Mobilinkd TNC4, radios
   that implement the BLE KISS API) and share them like any other modem.
 - **Per-session transmit permissions** (receive-only apps) on top of the KISS
