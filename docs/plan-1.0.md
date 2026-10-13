@@ -1484,9 +1484,38 @@ Pi without the radio: the unit tests natively (including a pty round trip
 for `serial`), `-t` against the live BlueZ (the D75 paired on hci0, not on
 hci1), and DNS-SD with `avahi-browse`: a local name collision moved the
 bridge to "… (2)", saved in `state.toml` and kept across a restart, and an
-interface binding announced only on that interface. Still to check by hand,
-with the matrix: the radio over SPP and USB, and aprs.fi on iOS finding a
-bridge by DNS-SD. Notes from the work:
+interface binding announced only on that interface.
+
+First hardware round, October 13, 2026, on the dev Pi 4 with the TH-D75,
+aprs.fi on an iPad over BLE (the RTL8761B dongle) and on an iPhone over
+TCP (`wlan0:8001` with an `allow` list):
+
+- **SPP** (radio on the built-in chip): connected on the first app in
+  2.7 s; KISS init took 85 ms from APRS mode. Packets reached both apps,
+  and a beacon from each keyed the radio. aprs.fi found the bridge by
+  DNS-SD on its own. A radio power-cycle backed off (1–30 s, each attempt
+  failing cleanly at the 5 s page timeout), reconnected, and re-ran init
+  with the apps still attached; the radio comes back up in APRS mode, so
+  init on every connect is needed. `idle_timeout = "90s"` closed the link
+  90 s after the last app left.
+- **USB**: waited for the device, then connected with `connect = "always"`
+  and no apps. Packets and beacons on both apps; a second open of the port
+  failed with "Device or resource busy". After a cable replug the D75
+  answers nothing on its serial port until the port is reopened; the
+  bridge gives up after two silent probes and reconnects on the next
+  attempt, 6 s after the replug.
+- `-t` rejects the D75 in two enabled bridges, and two `ble-server` ports
+  on one adapter.
+- Bugs found and fixed: the daemon ignored SIGTERM once its stderr's reader
+  was gone (the signal task panicked logging through tracing-subscriber's
+  `eprintln!`); tokio-serial's flush is a blocking `tcdrain()`, which hung
+  KISS init on the deaf radio with no timeout able to fire; and closing a
+  port with unsent output blocked for the tty's 30 s closing wait.
+
+Still to check by hand, with the matrix: the other rows and scenarios
+(Pi Zero 2 W, Pat, a serial TNC, a Pi as the Wi-Fi AP, cold start with the
+radio off, `C0 FF C0` from an app, `exit_kiss_on_disconnect` on the radio,
+an unpaired TNC). Notes from the work:
 
 - `model` resolves to one `th-d7x` profile; `th-d74` and `th-d75` are
   aliases, as Phase 0 suggested.
