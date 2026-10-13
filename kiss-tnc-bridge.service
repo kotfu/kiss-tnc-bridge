@@ -18,6 +18,9 @@ StateDirectory=kiss-tnc-bridge
 StateDirectoryMode=0750
 RuntimeDirectory=kiss-tnc-bridge
 RuntimeDirectoryMode=0755
+# Kept across a restart after a crash, so the new daemon can drop BLE links
+# the old one left behind; removed when the service stops.
+RuntimeDirectoryPreserve=restart
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

@@ -23,6 +23,7 @@
 //! the notification MTU.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -77,6 +78,8 @@ pub struct BleServerPort {
     pub max_clients: u32,
     pub app_tx: mpsc::Sender<AppEvent>,
     pub shutdown: CancellationToken,
+    /// Where the port lists the phones it serves (see [`drop_stale`](Self::drop_stale)).
+    pub runtime_dir: PathBuf,
 }
 
 pub struct BleServerHandle {
@@ -156,6 +159,8 @@ impl BleServerPort {
             fail(&state_tx, e);
             return;
         }
+        let clients_file = self.clients_file().await;
+        self.drop_stale(clients_file.as_deref()).await;
         let (app, mut tx_control, mut rx_control) = build_application();
         let _app_handle = match self.adapter.serve_gatt_application(app).await {
             Ok(h) => h,
@@ -217,6 +222,7 @@ impl BleServerPort {
                             }
                         };
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
+                        record_clients(clients_file.as_deref(), &clients);
                         let id = self.session_id(addr);
                         tokio::spawn(reader_task(reader, id, self.app_tx.clone(), ev_tx.clone(), addr, generation));
                     }
@@ -234,6 +240,7 @@ impl BleServerPort {
                             continue;
                         }
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
+                        record_clients(clients_file.as_deref(), &clients);
                         let client = clients.get_mut(&addr).expect("just ensured");
                         match client.downlink_rx.take() {
                             Some(rx) => {
@@ -260,6 +267,7 @@ impl BleServerPort {
                         continue; // a stale report from a session already replaced
                     }
                     clients.remove(&addr);
+                    record_clients(clients_file.as_deref(), &clients);
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
                     let _ = self.app_tx.send(AppEvent::SessionClosed { id: self.session_id(addr) }).await;
@@ -280,6 +288,9 @@ impl BleServerPort {
         // and apps like aprs.fi then carry on as if the bridge were still
         // there. Dropping the link tells them it isn't.
         futures::future::join_all(clients.keys().map(|addr| self.disconnect(*addr))).await;
+        if let Some(f) = &clients_file {
+            let _ = std::fs::remove_file(f);
+        }
         for addr in clients.keys() {
             let _ = self
                 .app_tx
@@ -310,6 +321,43 @@ impl BleServerPort {
         false
     }
 
+    /// `ble-clients-<adapter MAC>` in the runtime directory. One file per
+    /// adapter is enough: an adapter carries one enabled `ble-server`.
+    async fn clients_file(&self) -> Option<PathBuf> {
+        let mac = self.adapter.address().await.ok()?;
+        Some(
+            self.runtime_dir
+                .join(format!("ble-clients-{}", mac.to_string().replace(':', ""))),
+        )
+    }
+
+    /// Drop phones that a previous run of the daemon served and that are
+    /// still connected. A daemon that was killed couldn't drop their links,
+    /// so they're still subscribed to a GATT service that no longer exists:
+    /// connected as far as they know, but deaf and mute. Dropping the link
+    /// makes them reconnect to this run's service. Only phones the list
+    /// names are touched, never other devices on the adapter.
+    async fn drop_stale(&self, file: Option<&Path>) {
+        let Some(file) = file else { return };
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return;
+        };
+        for addr in text
+            .lines()
+            .filter_map(|l| l.trim().parse::<Address>().ok())
+        {
+            let connected = match self.adapter.device(addr) {
+                Ok(d) => d.is_connected().await.unwrap_or(false),
+                Err(_) => false,
+            };
+            if connected {
+                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping a phone still connected to the previous run, so it reconnects");
+                self.disconnect(addr).await;
+            }
+        }
+        let _ = std::fs::remove_file(file);
+    }
+
     /// Drop a phone at the link layer.
     async fn disconnect(&self, addr: Address) {
         let Ok(device) = self.adapter.device(addr) else {
@@ -323,7 +371,8 @@ impl BleServerPort {
                 tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "can't drop the link: {e}")
             }
             Err(_) => {
-                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping the link timed out")
+                // BlueZ goes on with it; it just hasn't confirmed yet.
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "link drop requested; BlueZ hasn't confirmed it yet")
             }
         }
     }
@@ -373,6 +422,20 @@ impl BleServerPort {
                 .await;
         });
         g
+    }
+}
+
+/// Keep the list of phones a port serves, for [`BleServerPort::drop_stale`]
+/// after a crash.
+fn record_clients<C>(file: Option<&Path>, clients: &HashMap<Address, C>) {
+    let Some(file) = file else { return };
+    let mut text = String::new();
+    for addr in clients.keys() {
+        text.push_str(&addr.to_string());
+        text.push('\n');
+    }
+    if let Err(e) = crate::config::state::write_atomic(file, text.as_bytes()) {
+        tracing::debug!("can't write {}: {e}", file.display());
     }
 }
 

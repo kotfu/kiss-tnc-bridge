@@ -339,7 +339,7 @@ fn main() {
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     rt.block_on(async {
-        if let Err(e) = run(cfg, &state_dir).await {
+        if let Err(e) = run(cfg, &state_dir, &runtime_dir).await {
             tracing::error!("fatal: {e}");
             std::process::exit(1);
         }
@@ -391,7 +391,11 @@ fn bluetooth_host_checks(cfg: &config::Config, _report: &mut config::Report) -> 
 }
 
 /// Run the supervisor until SIGINT or SIGTERM.
-async fn run(cfg: config::Config, state_dir: &Path) -> Result<(), error::Error> {
+async fn run(
+    cfg: config::Config,
+    state_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let stop = shutdown.clone();
     tokio::spawn(async move {
@@ -416,5 +420,5 @@ async fn run(cfg: config::Config, state_dir: &Path) -> Result<(), error::Error> 
         stop.cancel();
         tracing::info!("{why}, shutting down");
     });
-    kiss_tnc_bridge::supervisor::run(cfg, state_dir, shutdown).await
+    kiss_tnc_bridge::supervisor::run(cfg, state_dir, runtime_dir, shutdown).await
 }

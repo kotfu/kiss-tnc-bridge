@@ -72,8 +72,13 @@ pub struct RunningBridge {
 }
 
 /// Run every enabled bridge until `shutdown` is cancelled. `state_dir` holds
-/// `state.toml`.
-pub async fn run(cfg: Config, state_dir: &Path, shutdown: CancellationToken) -> Result<(), Error> {
+/// `state.toml`; `runtime_dir` holds what only matters until a reboot.
+pub async fn run(
+    cfg: Config,
+    state_dir: &Path,
+    runtime_dir: &Path,
+    shutdown: CancellationToken,
+) -> Result<(), Error> {
     let enabled: Vec<&config::Bridge> = cfg.bridges.iter().filter(|b| b.enabled).collect();
 
     let (mut store, problem) = StateStore::open(state_dir);
@@ -186,12 +191,13 @@ pub async fn run(cfg: Config, state_dir: &Path, shutdown: CancellationToken) -> 
     #[cfg(target_os = "linux")]
     {
         match &bt.session {
-            Some(session) => ble::run(session, ble_slots, shutdown.clone()).await?,
+            Some(session) => ble::run(session, ble_slots, runtime_dir, shutdown.clone()).await?,
             None => shutdown.cancelled().await,
         }
     }
     #[cfg(not(target_os = "linux"))]
     {
+        let _ = runtime_dir;
         for s in &ble_slots {
             tracing::warn!(bridge = %s.bridge_id, port = %s.port_id, "ble-server ports need Linux; not started");
         }
@@ -410,6 +416,7 @@ mod ble {
     //! and retry ports that failed to start.
 
     use std::collections::HashMap;
+    use std::path::Path;
     use std::time::Duration;
 
     use bluer::{AdapterEvent, AdapterProperty, SessionEvent};
@@ -448,6 +455,7 @@ mod ble {
     pub async fn run(
         session: &bluer::Session,
         mut slots: Vec<BleSlot>,
+        runtime_dir: &Path,
         shutdown: CancellationToken,
     ) -> Result<(), Error> {
         if slots.is_empty() {
@@ -484,7 +492,7 @@ mod ble {
 
         let mut monitors: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
         loop {
-            reconcile(session, &mut slots, &mut monitors, &ev_tx).await;
+            reconcile(session, &mut slots, &mut monitors, &ev_tx, runtime_dir).await;
             let ev = tokio::select! {
                 _ = shutdown.cancelled() => break,
                 ev = ev_rx.recv() => match ev { Some(ev) => ev, None => break },
@@ -553,6 +561,7 @@ mod ble {
         slots: &mut [BleSlot],
         monitors: &mut HashMap<String, tokio::task::JoinHandle<()>>,
         ev_tx: &mpsc::Sender<Event>,
+        runtime_dir: &Path,
     ) {
         let mut present: HashMap<String, Present> = HashMap::new();
         let mut names = session.adapter_names().await.unwrap_or_default();
@@ -615,6 +624,7 @@ mod ble {
                         max_clients: slot.max_clients,
                         app_tx: slot.app_tx.clone(),
                         shutdown: token.clone(),
+                        runtime_dir: runtime_dir.to_path_buf(),
                     }
                     .spawn();
                     slot.last_adapter = Some(name.clone());
