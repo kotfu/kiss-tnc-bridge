@@ -18,6 +18,7 @@ uuid = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 ipnet = "2.12.2"
+tokio-util = { version = "0.7.20", features = ["rt"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd"] }
@@ -25,6 +26,7 @@ libdbus-sys = { version = "0.2", features = ["vendored"] }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { version = "1", features = ["test-util"] }
 
 [profile.release]
 strip = true
