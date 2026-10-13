@@ -31,7 +31,6 @@
 //! 3. [`validate`]: structural rules and resource conflicts among enabled
 //!    bridges, plus warnings, including best-effort host checks.
 
-pub mod legacy;
 pub mod load;
 pub mod model;
 pub mod resolve;

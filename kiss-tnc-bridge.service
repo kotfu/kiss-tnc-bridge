@@ -1,13 +1,26 @@
 [Unit]
-Description=KISS TNC BLE-to-TCP Bridge
+Description=KISS switchboard: bridges KISS TNCs to apps over BLE and TCP
+Documentation=https://github.com/kotfu/kiss-tnc-bridge
 After=bluetooth.target network.target
-Requires=bluetooth.target
+Wants=bluetooth.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/kiss-tnc-bridge
 Restart=on-failure
 RestartSec=5
+
+# /etc/kiss-tnc-bridge, /var/lib/kiss-tnc-bridge and /run/kiss-tnc-bridge,
+# passed to the daemon as $CONFIGURATION_DIRECTORY etc. The daemon only ever
+# writes the last two, so the rest of the filesystem can be read-only to it.
+ConfigurationDirectory=kiss-tnc-bridge
+StateDirectory=kiss-tnc-bridge
+StateDirectoryMode=0750
+RuntimeDirectory=kiss-tnc-bridge
+RuntimeDirectoryMode=0755
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

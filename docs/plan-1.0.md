@@ -1424,30 +1424,30 @@ Findings: [Phase 0 findings](#phase-0-findings).
 
 ### Phase 1: Bridge core + new config
 
-- [ ] Extract `KissConnection<S>` from `TcpKissConnection`.
-- [ ] Bridge task with port roles, forwarding rules, KISS policy filter, and
+- [x] Extract `KissConnection<S>` from `TcpKissConnection`.
+- [x] Bridge task with port roles, forwarding rules, KISS policy filter, and
       the non-blocking TNC port state machine. This fixes
       [kotfu/kiss-tnc-bridge#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)
       if it hasn't already been fixed on the `0.5.x` branch.
-- [ ] Port types `ble-server` (moved out of `BridgeManager`, one GATT app
+- [x] Port types `ble-server` (moved out of `BridgeManager`, one GATT app
       per port, advertising the bridge's `public_name`, setting the adapter
       alias), `tcp-client`, and `tcp-server` (localhost default, address and
       interface binding, `allow`).
-- [ ] TOML config: main file + `conf.d/`, bridges with ids, names and
+- [x] TOML config: main file + `conf.d/`, bridges with ids, names and
       `enabled`, inline ports, `[[adapter]]` objects and adapter values (id,
       MAC, `hciN`), `public_name`, `[control] group`, `-t` validation with
       reference checks and conflict checks among enabled bridges (including
       one `ble-server` per adapter), and the 0.5 config warning.
-- [ ] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
+- [x] systemd unit: `ConfigurationDirectory=`, `StateDirectory=`,
       `RuntimeDirectory=`, `ProtectSystem=strict`, and moving the lock file to
       the runtime dir. Package the new example config. No `ExecReload=` yet:
       `SIGHUP` would terminate the daemon until Phase 3 implements reload.
-- [ ] Bridge unit tests with `tokio::io::duplex` TNCs and fake app ports.
+- [x] Bridge unit tests with `tokio::io::duplex` TNCs and fake app ports.
       This is the first time routing is testable without BlueZ.
-- [ ] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-client` →
+- [x] End-to-end CI test with no Bluetooth: fake TNC server → `tcp-client` →
       bridge → `tcp-server` → several clients, checking broadcast, uplink
       serialization, and `C0 FF C0` filtering.
-- [ ] Add a PR CI workflow (`cargo test`, `clippy`, `fmt --check`). Today only
+- [x] Add a PR CI workflow (`cargo test`, `clippy`, `fmt --check`). Today only
       the release workflow exists.
 
 ### Phase 2: TNCs over Bluetooth and serial

@@ -16,6 +16,8 @@
 //! Ports: the attachment points on a bridge. Every connection type is a
 //! port type. This module holds what all of them share.
 
+#[cfg(target_os = "linux")]
+pub mod ble_server;
 pub mod listen;
 pub mod stream;
 pub mod tcp_client;

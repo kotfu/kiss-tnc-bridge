@@ -1,6 +1,6 @@
 # kiss-tnc-bridge
 
-Daemon to bridge and multiplex Bluetooth KISS TNCs to TCP KISS TNCs.
+A KISS switchboard: bridges one KISS TNC to any number of apps, over Bluetooth LE and TCP.
 
 Advertises Bluetooth Low Energy (BLE) General Attribute Profile (GATT) following
 the [BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
@@ -91,24 +91,25 @@ $ sudo cp target/release/kiss-tnc-bridge /usr/bin/
 kiss-tnc-bridge [OPTIONS]
 
 Options:
-  -c, --config <FILE>   Path to config file [default: /etc/kiss-tnc-bridge.conf]
-  -t, --test-config     Parse the config file and exit (0 = valid, 1 = error)
-  -d, --debug           Increase log verbosity (-d = debug, -dd = trace)
-  -v, --version         Show version and exit
-  -h, --help            Show help and exit
+  -c, --config <FILE>      Main config file; conf.d/ next to it is read too
+                           [default: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml]
+      --state-dir <DIR>    State that persists across restarts [default: /var/lib/kiss-tnc-bridge]
+      --runtime-dir <DIR>  Lock file and control socket [default: /run/kiss-tnc-bridge]
+  -t, --test-config        Check the config, print the effective bridges and exit
+  -d, --debug              Increase log verbosity (-d = debug, -dd = trace)
+  -V, --version            Show version and exit
+  -h, --help               Show help and exit
 ```
 
-When running from the command line, `kiss-tnc-bridge` will show the log
-of events in the terminal. Type `Control-C` to quit.
-
-The `-d` option overrides the log level in the configuration file.
+When running from the command line, `kiss-tnc-bridge` shows its log in the
+terminal. Type `Control-C` to quit. The `-d` option overrides the log level in
+the configuration file.
 
 ### Running as a systemd service
 
 You probably want `kiss-tnc-bridge` to run in the background when the system
-starts. If you install from deb or rpm packages, this will be automatically set
-up for you. If you build from source or install a tarball, you'll need to
-manually install the included service file:
+starts. The deb and rpm packages set this up. If you build from source or
+install a tarball, install the included service file:
 
 ```
 $ sudo cp kiss-tnc-bridge.service /etc/systemd/system/
@@ -116,75 +117,114 @@ $ sudo systemctl daemon-reload
 $ sudo systemctl enable --now kiss-tnc-bridge
 ```
 
-View logs: `journalctl -u kiss-tnc-bridge -f`
+The unit passes the config, state and runtime directories to the daemon and
+makes the rest of the filesystem read-only to it. View logs with
+`journalctl -u kiss-tnc-bridge -f`.
 
 
 ## Configuration
 
-The config file is `/etc/kiss-tnc-bridge.conf` (INI format):
+The configuration is TOML in `/etc/kiss-tnc-bridge/`: the main file
+`kiss-tnc-bridge.toml`, plus any `conf.d/*.toml` next to it (read in name
+order, conventionally one bridge per file). The daemon never writes these
+files. Check them with `kiss-tnc-bridge -t`.
 
-```ini
+A **bridge** connects one KISS TNC to any number of apps. It has an id
+(`ktbr0`), a name (what phones see), and ports: exactly one **TNC port**,
+where the TNC is, and one or more **app ports**, where apps attach. Bridges
+can be disabled and kept around for another setup.
+
+```toml
 [global]
-log_level = info
-# adapter = hci0
+log_level = "info"
+# adapter = "builtin"              # default adapter for ble-server ports
 
-[Graywolf TNC]
-host = 127.0.0.1
-port = 6700
-max_clients = 3
+[[adapter]]                        # a readable id for an adapter's MAC
+id = "builtin"
+mac = "B8:27:EB:12:34:56"
 
-[Winlink TNC]
-host = 192.168.1.50
-port = 8001
+[[bridge]]
+id = "ktbr0"
+name = "Graywolf"
+enabled = true
+
+  [[bridge.port]]
+  id = "tnc"
+  type = "tcp-client"              # the TNC: a KISS TCP server
+  address = "127.0.0.1:6700"
+
+  [[bridge.port]]
+  id = "phones"
+  type = "ble-server"              # apps on phones, over BLE
+  adapter = "builtin"
+  max_clients = 2
+
+  [[bridge.port]]
+  id = "local"
+  type = "tcp-server"              # apps over TCP
+  listen = "8001"                  # a TCP port number alone binds 127.0.0.1
 ```
-
-Each section (other than `[global]`) defines a KISS TNC TCP server to bridge. The section
-name is used as the BLE advertised name.
 
 ### Configuration keys
 
-**`[global]` section:**
+**`[global]`**
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `log_level` | `info` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
-| `adapter` | system default | BlueZ adapter name (e.g., `hci0`) |
+| `log_level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
+| `adapter` | first adapter | Default Bluetooth adapter for `ble-server` ports: an `[[adapter]]` id, a MAC, or `hciN` |
 
-Most computers only have a single Bluetooth adapter, and `kiss-tnc-bridge` can reliably
-find it. In most scenarios, you can just omit the adapter and everything will work great.
-If you have multiple adapters, or want to specify it, you can get a list:
-```
-$ hciconfig -a
-```
+**`[[adapter]]`** gives an adapter's MAC a readable id. `hciN` numbers can
+change when a dongle is plugged in; MACs don't, so ids or MACs are the
+reliable way to pick an adapter.
 
-**TNC sections:**
+| Key | Description |
+|-----|-------------|
+| `id` | Lowercase letters, digits and `-`, at most 15 characters |
+| `mac` | The adapter's address, `XX:XX:XX:XX:XX:XX` (`bluetoothctl list` shows them) |
 
-Every additional section you create in the config file represents
-a new BLE GATT service advertisement. The name of the section is what
-consumers will see in their applications when scanning for services.
+**`[[bridge]]`**
 
-| Key | Required | Default | Description |
-|-----|----------|---------|-------------|
-| `host` | yes | — | TCP host of the KISS TNC server |
-| `port` | yes | — | TCP port of the KISS TNC server |
-| `max_clients` | no | `1` | Maximum concurrent BLE clients |
-| `adapter` | no | global setting | BlueZ adapter for this TNC (overrides `[global]` adapter) |
+| Key | Default | Description |
+|-----|---------|-------------|
+| `id` | required | Unique, short and stable: `ktbr0`, `ktbr1`, … |
+| `name` | required | Human-friendly and unique; what phones see |
+| `public_name` | the name | The BLE advertised name, if it should differ from `name` |
+| `enabled` | `true` | A disabled bridge holds no resources |
+| `app_params` | `pass` | `drop` stops apps from changing the TNC's KISS parameters (TXDELAY and friends) |
 
-When the maximum number of clients are connected, `kiss-tnc-bridge` will
-stop advertising the service and not allow any additional clients to connect
-until one of the existing clients has disconnected. Some Bluetooth chips do
-not allow multiple clients to connect. See
-[Limitations and Caveats](#limitations-and-caveats) below for more info about
-maximum clients.
+**`[[bridge.port]]`**, with `type` one of:
 
+| Type | Role | Keys |
+|------|------|------|
+| `tcp-client` | TNC | `address` (`host:port` of a KISS TCP server such as Dire Wolf or Graywolf); `connect` (`on_demand`, the default: connect when the first app attaches; `always`); `idle_timeout` (how long to keep the TNC connected after the last app leaves, e.g. `"90s"`; default `0s`) |
+| `ble-server` | app | `adapter` (default: `[global] adapter`); `max_clients` (default `1`; many Bluetooth chips can't serve more, see below) |
+| `tcp-server` | app | `listen` (required: a TCP port number, which binds `127.0.0.1`, an `address:port`, or an `interface:port` such as `wlan0:8001`); `max_clients` (default: no limit); `allow` (a list of addresses or networks, e.g. `["192.168.4.0/24"]`; default: any peer that can reach the socket) |
+
+Every port may set `id` (default: the type plus an index, `ble-server0`) and
+`role` (`tnc` or `app`, normally implied by the type).
+
+KISS TCP has no authentication: anyone who can reach a `tcp-server` can
+transmit on your radio under your callsign. That is why a bare port number
+binds loopback, and why binding to `0.0.0.0` without an `allow` list gets a
+warning. Frames from apps are also filtered: the KISS "return" command
+(`C0 FF C0`), which takes some radios out of KISS mode, never reaches the TNC.
+
+When a `ble-server` port has `max_clients` connected, the daemon stops
+advertising until one leaves. Several bridges can be defined, but among the
+enabled ones a listen socket, a public name and a BLE adapter can each be
+used only once.
 
 ### Validate config
 
 ```
-$ kiss-tnc-bridge -t -c /etc/kiss-tnc-bridge.conf
+$ kiss-tnc-bridge -t
 ```
 
-Exits 0 if valid, 1 if there are errors.
+Prints the effective bridges with their source files, and warnings such as a
+`tcp-server` open to the whole network. Exits 0 if valid, 1 if there are
+errors. A leftover 0.5 config at `/etc/kiss-tnc-bridge.conf` is ignored with
+a warning; it isn't migrated.
 
 
 ## Limitations and Caveats

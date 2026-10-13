@@ -3,7 +3,7 @@ name = "kiss-tnc-bridge"
 version = "0.5.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
-description = "Daemon to bridge Bluetooth KISS TNCs to TCP KISS TNCs"
+description = "KISS switchboard: bridges KISS TNCs to apps over BLE and TCP"
 publish = false
 
 [dependencies]
@@ -40,7 +40,7 @@ depends = "$auto, bluez"
 section = "net"
 assets = [
     ["target/release/kiss-tnc-bridge", "usr/bin/", "755"],
-    ["kiss-tnc-bridge.example.conf", "usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.conf", "644"],
+    ["kiss-tnc-bridge.example.toml", "usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", "644"],
     ["kiss-tnc-bridge.service", "lib/systemd/system/", "644"],
 ]
 maintainer-scripts = "debian/"
@@ -49,7 +49,8 @@ maintainer-scripts = "debian/"
 release = "1"
 assets = [
     { source = "target/release/kiss-tnc-bridge", dest = "/usr/bin/kiss-tnc-bridge", mode = "755" },
-    { source = "kiss-tnc-bridge.example.conf", dest = "/etc/kiss-tnc-bridge.conf", mode = "644", config = "noreplace" },
+    { source = "kiss-tnc-bridge.example.toml", dest = "/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml", mode = "644", config = "noreplace" },
+    { source = "kiss-tnc-bridge.example.toml", dest = "/usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", mode = "644" },
     { source = "kiss-tnc-bridge.service", dest = "/lib/systemd/system/kiss-tnc-bridge.service", mode = "644" },
 ]
 requires = { bluez = "*" }

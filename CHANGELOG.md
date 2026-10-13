@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased (1.0 in progress)
+
+The 1.0 work in [docs/plan-1.0.md](docs/plan-1.0.md) lands on `main` in
+phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
+
+### Changed
+
+- **New configuration**: TOML in `/etc/kiss-tnc-bridge/` (`kiss-tnc-bridge.toml`
+  plus `conf.d/*.toml`) describing bridges with inline ports, replacing the
+  INI file. `/etc/kiss-tnc-bridge.conf` is ignored with a warning.
+- The daemon is a KISS switchboard: each bridge connects one TNC port
+  (`tcp-client` for now) to any number of app ports (`ble-server`,
+  `tcp-server`). Frames from apps go to the TNC through one serialized
+  writer; frames from the TNC are broadcast to every app; apps never hear
+  each other.
+- The TNC connection no longer blocks BLE handling: connecting runs in its
+  own task with exponential backoff, uplink frames are queued while it
+  comes up, and a flood from one app backs up to that app instead of
+  being dropped.
+- The KISS "return" command (`C0 FF C0`) from an app is dropped;
+  `app_params = "drop"` also drops KISS parameter commands.
+- Each `ble-server` port registers its own GATT application and
+  advertisement, named after the bridge's `public_name`.
+- systemd: `ConfigurationDirectory=`, `StateDirectory=`, `RuntimeDirectory=`
+  and `ProtectSystem=strict`; the lock file moved to `/run/kiss-tnc-bridge/`.
+- The daemon handles SIGTERM as well as SIGINT.
+
+### Added
+
+- `tcp-server` ports: KISS over TCP for apps, bound to loopback by default,
+  an address, or an interface (`wlan0:8001`), with an `allow` list and
+  `max_clients`.
+- `[[adapter]]` objects give adapter MACs readable ids; adapter values can
+  be an id, a MAC or `hciN`.
+- `kiss-tnc-bridge -t` prints the effective bridges with their source files
+  and warnings, and checks references and conflicts among enabled bridges.
+- Bridges can be disabled and kept for another setup.
+- A PR CI workflow (fmt, clippy, tests on Linux and macOS) and an
+  end-to-end TCP test with no Bluetooth.
+
 ## 0.5.1 (30 May 2026)
 
 ### Fixed

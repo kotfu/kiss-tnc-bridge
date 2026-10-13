@@ -32,10 +32,7 @@
 //! task, backoff is a timer polled as its own arm, and the link's reader and
 //! writer are tasks that report back over a channel.
 
-#[cfg(target_os = "linux")]
-pub mod manager;
 pub mod policy;
-pub mod tcp;
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -245,16 +242,18 @@ pub struct Bridge {
 }
 
 impl Bridge {
+    /// `shutdown` stops the bridge when cancelled; ports get child tokens of
+    /// it, so cancelling it takes the whole bridge down.
     pub fn new(
         id: impl Into<String>,
         connector: Box<dyn TncConnector>,
         settings: TncSettings,
+        shutdown: CancellationToken,
     ) -> (Bridge, BridgeHandle) {
         let id = id.into();
         let (app_tx, app_rx) = mpsc::channel(APP_QUEUE);
         let (state_tx, state_rx) = watch::channel(TncState::Idle);
         let counters = Arc::new(Counters::default());
-        let shutdown = CancellationToken::new();
         let handle = BridgeHandle {
             id: id.clone(),
             app_tx,
@@ -768,6 +767,7 @@ mod tests {
                 idle_timeout,
                 app_params,
             },
+            CancellationToken::new(),
         );
         let task = tokio::spawn(bridge.run());
         Harness {

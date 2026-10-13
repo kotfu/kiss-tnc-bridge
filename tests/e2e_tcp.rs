@@ -63,6 +63,7 @@ async fn setup(app_params: AppParams, max_clients: Option<u32>, allow: Vec<ipnet
             idle_timeout: Duration::ZERO,
             app_params,
         },
+        tokio_util::sync::CancellationToken::new(),
     );
     tokio::spawn(bridge.run());
     let listen: Listen = "127.0.0.1:0".parse().unwrap();
