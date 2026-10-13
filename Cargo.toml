@@ -19,10 +19,15 @@ serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
 ipnet = "2.12.2"
 tokio-util = { version = "0.7.20", features = ["rt"] }
+# No libudev: devices are found by path, so cross builds need no C library.
+tokio-serial = { version = "5.4", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-bluer = { version = "0.17", features = ["bluetoothd"] }
+bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
 libdbus-sys = { version = "0.2", features = ["vendored"] }
+# Avahi for DNS-SD; the same versions bluer uses.
+dbus = { version = "0.9", features = ["futures"] }
+dbus-tokio = "0.7"
 
 [dev-dependencies]
 tempfile = "3"
@@ -42,6 +47,7 @@ assets = [
     ["target/release/kiss-tnc-bridge", "usr/bin/", "755"],
     ["kiss-tnc-bridge.example.toml", "usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", "644"],
     ["kiss-tnc-bridge.service", "lib/systemd/system/", "644"],
+    ["70-kiss-tnc-bridge.rules", "lib/udev/rules.d/", "644"],
 ]
 maintainer-scripts = "debian/"
 
@@ -52,5 +58,6 @@ assets = [
     { source = "kiss-tnc-bridge.example.toml", dest = "/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml", mode = "644", config = "noreplace" },
     { source = "kiss-tnc-bridge.example.toml", dest = "/usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", mode = "644" },
     { source = "kiss-tnc-bridge.service", dest = "/lib/systemd/system/kiss-tnc-bridge.service", mode = "644" },
+    { source = "70-kiss-tnc-bridge.rules", dest = "/usr/lib/udev/rules.d/70-kiss-tnc-bridge.rules", mode = "644" },
 ]
 requires = { bluez = "*" }

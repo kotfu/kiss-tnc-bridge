@@ -15,29 +15,43 @@
 //! The supervisor: starts the enabled bridges and their ports from the
 //! config, and on Linux tracks Bluetooth adapters so `ble-server` ports
 //! start when their adapter is present and powered, stop when it goes away,
-//! and come back when it returns. Bridges and TCP ports don't depend on any
-//! adapter and keep running throughout.
+//! and come back when it returns. Adapters are tracked per port: a TNC's
+//! adapter is looked up at every connect, so losing it puts only that
+//! bridge's TNC port into backoff, and app sessions stay connected.
+//!
+//! It also owns the bridges' public names (from `state.toml` after a DNS-SD
+//! collision) and the DNS-SD announcer for `tcp-server` ports.
 //!
 //! Phase 3 turns this into the reconciler that also applies config changes.
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use crate::announce::{self, Service};
 use crate::bridge::{Bridge, BridgeHandle, TncConnector, TncSettings};
-use crate::config::{AdapterSel, Config, PortKind};
+use crate::config::state::StateStore;
+use crate::config::{self, AdapterSel, Config, Listen, PortKind};
 use crate::error::Error;
-use crate::port::tcp_client;
-use crate::port::tcp_server::{TcpServerHandle, TcpServerPort};
+use crate::port::tcp_server::{ServerState, TcpServerHandle, TcpServerPort};
+use crate::port::{serial, tcp_client};
+
+/// How long shutdown waits for bridges to close their TNC links (and send
+/// any teardown) before the process exits anyway.
+const SHUTDOWN_WAIT: Duration = Duration::from_secs(3);
 
 /// A `ble-server` port waiting for, or running on, its adapter.
 pub struct BleSlot {
     pub bridge_id: String,
     pub port_id: String,
     pub adapter: AdapterSel,
-    pub public_name: String,
+    /// The bridge's effective public name, which can change at runtime.
+    pub public_name: watch::Receiver<String>,
     pub max_clients: u32,
     pub app_tx: mpsc::Sender<crate::bridge::AppEvent>,
     pub bridge_shutdown: CancellationToken,
@@ -53,35 +67,44 @@ pub struct BleSlot {
 
 pub struct RunningBridge {
     pub handle: BridgeHandle,
+    pub task: JoinHandle<()>,
     pub tcp_servers: Vec<TcpServerHandle>,
 }
 
-/// Run every enabled bridge until `shutdown` is cancelled.
-pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> {
+/// Run every enabled bridge until `shutdown` is cancelled. `state_dir` holds
+/// `state.toml`.
+pub async fn run(cfg: Config, state_dir: &Path, shutdown: CancellationToken) -> Result<(), Error> {
+    let enabled: Vec<&config::Bridge> = cfg.bridges.iter().filter(|b| b.enabled).collect();
+
+    let (mut store, problem) = StateStore::open(state_dir);
+    if let Some(p) = problem {
+        tracing::warn!("{p}");
+    }
+    let mut names: HashMap<String, watch::Sender<String>> = HashMap::new();
+    for b in &enabled {
+        let name = announce::effective_public_name(&mut store, &b.id, &b.public_name);
+        if name != b.public_name {
+            tracing::info!(bridge = %b.id, configured = %b.public_name, name = %name, "using the public name adjusted after a DNS-SD collision");
+        }
+        names.insert(b.id.clone(), watch::channel(name).0);
+    }
+    let store = Arc::new(Mutex::new(store));
+
+    let bt = Bt::start(&enabled).await?;
+    let announcer = start_announcer(&enabled, &names, store, &shutdown).await;
+
     let mut bridges: Vec<RunningBridge> = Vec::new();
     let mut ble_slots: Vec<BleSlot> = Vec::new();
-
-    for b in cfg.bridges.iter().filter(|b| b.enabled) {
+    for b in &enabled {
         let Some(tnc) = b.tnc_ports().next() else {
             continue; // validation guarantees one; be safe
         };
-        let connector: Box<dyn TncConnector> = match &tnc.kind {
-            PortKind::TcpClient { host, port, .. } => {
-                Box::new(tcp_client::connector(host.clone(), *port))
-            }
-            other => {
-                tracing::warn!(bridge = %b.id, port = %tnc.id, "TNC port type {} isn't supported yet; skipping this bridge", type_name(other));
-                continue;
-            }
+        let Some(connector) = connector_for(b, tnc, &bt) else {
+            continue;
         };
-        let (connect, idle_timeout) = match &tnc.kind {
-            PortKind::TcpClient {
-                connect,
-                idle_timeout,
-                ..
-            } => (*connect, *idle_timeout),
-            _ => unreachable!(),
-        };
+        let (connect, idle_timeout) = tnc
+            .connect_policy()
+            .expect("every TNC port type has a connect policy");
         let (bridge, handle) = Bridge::new(
             b.id.clone(),
             connector,
@@ -93,7 +116,7 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
             },
             shutdown.child_token(),
         );
-        tokio::spawn(bridge.run());
+        let task = tokio::spawn(bridge.run());
 
         let mut tcp_servers = Vec::new();
         for p in b.app_ports() {
@@ -102,7 +125,7 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
                     listen,
                     max_clients,
                     allow,
-                    ..
+                    announce,
                 } => {
                     let (h, _task) = TcpServerPort {
                         bridge_id: b.id.clone(),
@@ -114,6 +137,15 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
                         shutdown: handle.shutdown.child_token(),
                     }
                     .spawn();
+                    if *announce && let Some(tx) = &announcer {
+                        tokio::spawn(follow_listening(
+                            h.state.clone(),
+                            listen.clone(),
+                            b.id.clone(),
+                            p.id.clone(),
+                            tx.clone(),
+                        ));
+                    }
                     tcp_servers.push(h);
                 }
                 PortKind::BleServer {
@@ -123,7 +155,7 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
                     bridge_id: b.id.clone(),
                     port_id: p.id.clone(),
                     adapter: adapter.clone(),
-                    public_name: b.public_name.clone(),
+                    public_name: names[&b.id].subscribe(),
                     max_clients: *max_clients,
                     app_tx: handle.app_tx.clone(),
                     bridge_shutdown: handle.shutdown.clone(),
@@ -132,13 +164,16 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
                     last_adapter: None,
                     seen_off: false,
                 }),
-                PortKind::TcpClient { .. } => {
-                    tracing::warn!(bridge = %b.id, port = %p.id, "a tcp-client app port isn't supported yet; skipping");
+                PortKind::TcpClient { .. }
+                | PortKind::SppClient { .. }
+                | PortKind::Serial { .. } => {
+                    tracing::warn!(bridge = %b.id, port = %p.id, "a {} app port isn't supported yet; skipping", p.type_name());
                 }
             }
         }
         bridges.push(RunningBridge {
             handle,
+            task,
             tcp_servers,
         });
     }
@@ -150,7 +185,10 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
 
     #[cfg(target_os = "linux")]
     {
-        ble::run(ble_slots, shutdown.clone()).await?;
+        match &bt.session {
+            Some(session) => ble::run(session, ble_slots, shutdown.clone()).await?,
+            None => shutdown.cancelled().await,
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -160,17 +198,212 @@ pub async fn run(cfg: Config, shutdown: CancellationToken) -> Result<(), Error> 
         shutdown.cancelled().await;
     }
 
-    // Give bridges a moment to close their links cleanly.
-    let _ = Arc::new(bridges);
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // Bridges close their TNC links, sending any teardown, before we exit.
+    let tasks = bridges.into_iter().map(|b| b.task);
+    if tokio::time::timeout(SHUTDOWN_WAIT, futures::future::join_all(tasks))
+        .await
+        .is_err()
+    {
+        tracing::warn!("bridges didn't stop in time");
+    }
     Ok(())
 }
 
-fn type_name(kind: &PortKind) -> &'static str {
-    match kind {
-        PortKind::TcpClient { .. } => "tcp-client",
-        PortKind::TcpServer { .. } => "tcp-server",
-        PortKind::BleServer { .. } => "ble-server",
+/// The TNC side of a bridge, or `None` (logged) if this build can't reach it.
+fn connector_for(b: &config::Bridge, tnc: &config::Port, bt: &Bt) -> Option<Box<dyn TncConnector>> {
+    match &tnc.kind {
+        PortKind::TcpClient { host, port, .. } => {
+            Some(Box::new(tcp_client::connector(host.clone(), *port)))
+        }
+        PortKind::Serial {
+            tnc: tnc_id,
+            model,
+            serial: device,
+            exit_kiss_on_disconnect,
+            ..
+        } => Some(Box::new(serial::connector(
+            tnc_id.clone(),
+            device.clone(),
+            *model,
+            *exit_kiss_on_disconnect,
+        ))),
+        PortKind::SppClient { .. } => bt.spp_connector(b, tnc),
+        PortKind::TcpServer { .. } | PortKind::BleServer { .. } => {
+            tracing::warn!(bridge = %b.id, port = %tnc.id, "a {} TNC port isn't supported; skipping this bridge", tnc.type_name());
+            None
+        }
+    }
+}
+
+/// Tell the announcer when a `tcp-server` port starts or stops listening.
+async fn follow_listening(
+    mut state: watch::Receiver<ServerState>,
+    listen: Listen,
+    bridge: String,
+    port: String,
+    tx: mpsc::Sender<announce::Cmd>,
+) {
+    loop {
+        let cmd = match &*state.borrow_and_update() {
+            ServerState::Listening(bound) => announce::Cmd::Up {
+                bridge: bridge.clone(),
+                port: port.clone(),
+                service: Service::for_listen(&listen, *bound),
+            },
+            _ => announce::Cmd::Down {
+                bridge: bridge.clone(),
+                port: port.clone(),
+            },
+        };
+        if tx.send(cmd).await.is_err() {
+            return;
+        }
+        if state.changed().await.is_err() {
+            let _ = tx.send(announce::Cmd::Down { bridge, port }).await;
+            return;
+        }
+    }
+}
+
+/// Start the DNS-SD announcer if any enabled `tcp-server` port announces.
+async fn start_announcer(
+    enabled: &[&config::Bridge],
+    names: &HashMap<String, watch::Sender<String>>,
+    store: Arc<Mutex<StateStore>>,
+    shutdown: &CancellationToken,
+) -> Option<mpsc::Sender<announce::Cmd>> {
+    let announcing: Vec<&config::Bridge> = enabled
+        .iter()
+        .copied()
+        .filter(|b| {
+            b.ports
+                .iter()
+                .any(|p| matches!(p.kind, PortKind::TcpServer { announce: true, .. }))
+        })
+        .collect();
+    if announcing.is_empty() {
+        return None;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let (ev_tx, ev_rx) = mpsc::channel(32);
+        let (backend, running) = match announce::avahi::connect(ev_tx).await {
+            Ok(x) => x,
+            Err(e) => {
+                tracing::warn!(
+                    "can't reach Avahi over D-Bus, so tcp-server ports aren't announced: {e}"
+                );
+                return None;
+            }
+        };
+        if !running {
+            tracing::warn!(
+                "Avahi isn't running, so tcp-server ports aren't announced until it starts"
+            );
+        }
+        let (tx, rx) = mpsc::channel(32);
+        for b in announcing {
+            let _ = tx
+                .send(announce::Cmd::Bridge {
+                    id: b.id.clone(),
+                    configured: b.public_name.clone(),
+                    name: names[&b.id].clone(),
+                })
+                .await;
+        }
+        let announcer = announce::Announcer::new(backend, store, running);
+        tokio::spawn(announcer.run(rx, ev_rx, shutdown.child_token()));
+        Some(tx)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (names, store, shutdown);
+        tracing::warn!("DNS-SD announcing needs Avahi on Linux; tcp-server ports aren't announced");
+        None
+    }
+}
+
+/// What the Bluetooth ports share: one BlueZ session, the agent phones pair
+/// with, and the SPP profile TNC links go through.
+struct Bt {
+    #[cfg(target_os = "linux")]
+    session: Option<bluer::Session>,
+    #[cfg(target_os = "linux")]
+    _agent: Option<bluer::agent::AgentHandle>,
+    #[cfg(target_os = "linux")]
+    spp: Option<Arc<crate::port::spp_client::SppProfile>>,
+}
+
+impl Bt {
+    #[cfg(target_os = "linux")]
+    async fn start(enabled: &[&config::Bridge]) -> Result<Bt, Error> {
+        let kinds = || enabled.iter().flat_map(|b| b.ports.iter().map(|p| &p.kind));
+        let ble = kinds().any(|k| matches!(k, PortKind::BleServer { .. }));
+        let spp = kinds().any(|k| matches!(k, PortKind::SppClient { .. }));
+        if !ble && !spp {
+            return Ok(Bt {
+                session: None,
+                _agent: None,
+                spp: None,
+            });
+        }
+        let session = bluer::Session::new().await?;
+        // Phones pair with Just Works: an agent with no callbacks is
+        // NoInputNoOutput. Radios need numeric comparison, which is a
+        // pairing step (bluetoothctl for now, `ktbctl pair` later).
+        let agent = session
+            .register_agent(bluer::agent::Agent {
+                request_default: true,
+                ..Default::default()
+            })
+            .await?;
+        let spp = if spp {
+            Some(crate::port::spp_client::SppProfile::register(&session).await?)
+        } else {
+            None
+        };
+        Ok(Bt {
+            session: Some(session),
+            _agent: Some(agent),
+            spp,
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    async fn start(_enabled: &[&config::Bridge]) -> Result<Bt, Error> {
+        Ok(Bt {})
+    }
+
+    #[cfg(target_os = "linux")]
+    fn spp_connector(&self, b: &config::Bridge, p: &config::Port) -> Option<Box<dyn TncConnector>> {
+        let PortKind::SppClient {
+            tnc,
+            model,
+            spp,
+            exit_kiss_on_disconnect,
+            ..
+        } = &p.kind
+        else {
+            return None;
+        };
+        let (Some(session), Some(profile)) = (&self.session, &self.spp) else {
+            tracing::error!(bridge = %b.id, port = %p.id, "no Bluetooth session; skipping this bridge");
+            return None;
+        };
+        Some(Box::new(crate::port::spp_client::connector(
+            session.clone(),
+            profile.clone(),
+            tnc.clone(),
+            spp.clone(),
+            *model,
+            *exit_kiss_on_disconnect,
+        )))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn spp_connector(&self, b: &config::Bridge, p: &config::Port) -> Option<Box<dyn TncConnector>> {
+        tracing::warn!(bridge = %b.id, port = %p.id, "spp-client ports need Linux; skipping this bridge");
+        None
     }
 }
 
@@ -213,21 +446,15 @@ mod ble {
         pub state: watch::Receiver<BleState>,
     }
 
-    pub async fn run(mut slots: Vec<BleSlot>, shutdown: CancellationToken) -> Result<(), Error> {
+    pub async fn run(
+        session: &bluer::Session,
+        mut slots: Vec<BleSlot>,
+        shutdown: CancellationToken,
+    ) -> Result<(), Error> {
         if slots.is_empty() {
             shutdown.cancelled().await;
             return Ok(());
         }
-        let session = bluer::Session::new().await?;
-        // Phones pair with Just Works: an agent with no callbacks is
-        // NoInputNoOutput. The radio's pairing window (Phase 2) swaps this out
-        // while pairing.
-        let _agent = session
-            .register_agent(bluer::agent::Agent {
-                request_default: true,
-                ..Default::default()
-            })
-            .await?;
 
         let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(32);
         let session_events = session.events().await?;
@@ -258,7 +485,7 @@ mod ble {
 
         let mut monitors: HashMap<String, tokio::task::JoinHandle<()>> = HashMap::new();
         loop {
-            reconcile(&session, &mut slots, &mut monitors, &ev_tx).await;
+            reconcile(session, &mut slots, &mut monitors, &ev_tx).await;
             let ev = tokio::select! {
                 _ = shutdown.cancelled() => break,
                 ev = ev_rx.recv() => match ev { Some(ev) => ev, None => break },

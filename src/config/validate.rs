@@ -21,7 +21,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::resolve::{AdapterSel, Config, Listen, PortKind};
+use super::resolve::{AdapterSel, Config, Listen, Mac, PortKind};
 use super::{Problem, Source};
 
 /// BLE advertising limits the name to about this many bytes of UTF-8.
@@ -75,6 +75,46 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
         }
     }
 
+    let mut seen_tnc_ids: HashMap<&str, &Source> = HashMap::new();
+    let mut seen_spp: HashMap<(&Mac, &AdapterSel), (&str, &Source)> = HashMap::new();
+    let mut seen_paths: HashMap<&str, (&str, &Source)> = HashMap::new();
+    for t in &cfg.tncs {
+        let object = format!("tnc {}", t.id);
+        if let Some(first) = seen_tnc_ids.insert(&t.id, &t.source) {
+            err(
+                &mut r,
+                &t.source,
+                &object,
+                format!("duplicate tnc id (also defined in {first})"),
+            );
+        }
+        if let Some(spp) = &t.spp
+            && let Some((id, first)) =
+                seen_spp.insert((&spp.address, &spp.adapter), (&t.id, &t.source))
+        {
+            err(
+                &mut r,
+                &t.source,
+                &object,
+                format!(
+                    "Bluetooth address {} on {} is already tnc {id} ({first})",
+                    spp.address,
+                    describe_adapter(&spp.adapter)
+                ),
+            );
+        }
+        if let Some(serial) = &t.serial
+            && let Some((id, first)) = seen_paths.insert(&serial.path, (&t.id, &t.source))
+        {
+            err(
+                &mut r,
+                &t.source,
+                &object,
+                format!("serial path {} is already tnc {id} ({first})", serial.path),
+            );
+        }
+    }
+
     let mut seen_bridge_ids: HashMap<&str, &Source> = HashMap::new();
     let mut seen_bridge_names: HashMap<&str, (&str, &Source)> = HashMap::new();
     for b in &cfg.bridges {
@@ -116,7 +156,7 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
                 &b.source,
                 &object,
                 format!(
-                    "a bridge needs exactly one TNC port (a tcp-client, or a port with role = \"tnc\"); this one has {tnc}"
+                    "a bridge needs exactly one TNC port (spp-client, serial, tcp-client, or a port with role = \"tnc\"); this one has {tnc}"
                 ),
             );
         }
@@ -148,6 +188,32 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
         }
         for p in &b.ports {
             let pobject = format!("{object} port {}", p.id);
+            if b.enabled
+                && let PortKind::Serial { tnc, serial, .. } = &p.kind
+            {
+                if !is_stable_serial_path(&serial.path) {
+                    warn(
+                        &mut r,
+                        &b.source,
+                        &pobject,
+                        format!(
+                            "tnc {tnc} serial path {} can change between boots or when devices are plugged in; use its /dev/serial/by-id/ or /dev/serial/by-path/ name",
+                            serial.path
+                        ),
+                    );
+                }
+                if host_checks && !std::path::Path::new(&serial.path).exists() {
+                    warn(
+                        &mut r,
+                        &b.source,
+                        &pobject,
+                        format!(
+                            "tnc {tnc} serial device {} isn't present right now; the port will wait for it",
+                            serial.path
+                        ),
+                    );
+                }
+            }
             if let PortKind::TcpServer {
                 listen,
                 allow,
@@ -208,6 +274,19 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
             }
             for pa in &a.ports {
                 for pb in &b.ports {
+                    if let (Some(ta), Some(tb)) = (pa.tnc_id(), pb.tnc_id())
+                        && ta == tb
+                    {
+                        err(
+                            &mut r,
+                            &b.source,
+                            &format!("bridge {} port {}", b.id, pb.id),
+                            format!(
+                                "tnc {tb} is also used by enabled bridge {} port {}; a TNC can be in only one enabled bridge, over whichever transport",
+                                a.id, pa.id
+                            ),
+                        );
+                    }
                     match (&pa.kind, &pb.kind) {
                         (
                             PortKind::TcpServer { listen: la, .. },
@@ -263,6 +342,13 @@ fn describe_adapter(a: &AdapterSel) -> String {
         AdapterSel::Default => "the default adapter".into(),
         other => format!("adapter {other}"),
     }
+}
+
+/// udev's stable names survive reboots and re-plugging; `/dev/ttyACM0`
+/// doesn't. by-id names are per model for radios with no USB serial number
+/// (the TH-D75), so by-path is the tiebreaker for two of them.
+pub fn is_stable_serial_path(path: &str) -> bool {
+    path.starts_with("/dev/serial/by-id/") || path.starts_with("/dev/serial/by-path/")
 }
 
 fn interface_exists(name: &str) -> bool {
@@ -468,6 +554,128 @@ name = "Graywolf at home"
             w.iter().any(|m| m.contains("no bridges are defined")),
             "{w:?}"
         );
+    }
+
+    const MINIMAL: &str = r#"
+[[tnc]]
+id = "d75"
+model = "th-d75"
+spp = { address = "00:11:22:33:44:55" }
+serial = { path = "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00" }
+
+[[bridge]]
+id = "ktbr0"
+name = "TH-D75"
+  [[bridge.port]]
+  type = "spp-client"
+  tnc = "d75"
+  [[bridge.port]]
+  type = "ble-server"
+"#;
+
+    const USB: &str = r#"
+[[bridge]]
+id = "ktbr3"
+name = "TH-D75 USB"
+  [[bridge.port]]
+  type = "serial"
+  tnc = "d75"
+  [[bridge.port]]
+  type = "tcp-server"
+  listen = "8001"
+"#;
+
+    #[test]
+    fn the_minimal_example_is_valid() {
+        let report = validate(&cfg(MINIMAL), false);
+        assert!(report.is_ok(), "{:?}", report.errors);
+        assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    }
+
+    #[test]
+    fn a_tnc_is_in_one_enabled_bridge_whatever_the_transport() {
+        let e = errors(&format!("{MINIMAL}{USB}"));
+        assert!(
+            e.iter().any(
+                |m| m.contains("tnc d75 is also used by enabled bridge ktbr0 port spp-client0")
+            ),
+            "{e:?}"
+        );
+        let e = errors(&format!(
+            "{MINIMAL}{}",
+            USB.replace(
+                "name = \"TH-D75 USB\"",
+                "name = \"TH-D75 USB\"\nenabled = false"
+            )
+        ));
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn duplicate_tnc_hardware() {
+        let e = errors(&format!(
+            "{MINIMAL}[[tnc]]\nid = \"d75\"\nserial = {{ path = \"/dev/serial/by-id/other\" }}\n"
+        ));
+        assert!(e.iter().any(|m| m.contains("duplicate tnc id")), "{e:?}");
+        let e = errors(&format!(
+            "{MINIMAL}[[tnc]]\nid = \"again\"\nspp = {{ address = \"00:11:22:33:44:55\" }}\nserial = {{ path = \"/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00\" }}\n"
+        ));
+        assert!(
+            e.iter()
+                .any(|m| m.contains("00:11:22:33:44:55 on the default adapter is already tnc d75")),
+            "{e:?}"
+        );
+        assert!(
+            e.iter().any(|m| m.contains(
+                "serial path /dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00 is already tnc d75"
+            )),
+            "{e:?}"
+        );
+        // The same radio paired on two adapters is two TNCs.
+        let e = errors(&format!(
+            "{MINIMAL}[[tnc]]\nid = \"again\"\nspp = {{ address = \"00:11:22:33:44:55\", adapter = \"hci1\" }}\n"
+        ));
+        assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn serial_path_warnings() {
+        let disabled_spp =
+            MINIMAL.replace("name = \"TH-D75\"", "name = \"TH-D75\"\nenabled = false");
+        let w = warnings(&format!("{disabled_spp}{USB}"));
+        assert!(w.is_empty(), "{w:?}");
+        let unstable = disabled_spp.replace(
+            "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00",
+            "/dev/ttyACM0",
+        );
+        let w = warnings(&format!("{unstable}{USB}"));
+        assert!(
+            w.iter().any(|m| m.contains("can change between boots")),
+            "{w:?}"
+        );
+        // Only for enabled bridges.
+        let w = warnings(&format!(
+            "{unstable}{}",
+            USB.replace(
+                "name = \"TH-D75 USB\"",
+                "name = \"TH-D75 USB\"\nenabled = false"
+            )
+        ));
+        assert!(!w.iter().any(|m| m.contains("can change")), "{w:?}");
+        // Presence is a host check.
+        let text = format!("{disabled_spp}{USB}");
+        let w: Vec<String> = validate(&cfg(&text), true)
+            .warnings
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        assert!(
+            w.iter().any(|m| m.contains("isn't present right now")),
+            "{w:?}"
+        );
+        assert!(is_stable_serial_path(
+            "/dev/serial/by-path/platform-fd500000.pcie-usb-0:1.4:1.0"
+        ));
     }
 
     #[test]

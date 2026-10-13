@@ -27,6 +27,16 @@ pub enum Error {
     #[error("TCP connection failed: {0}")]
     #[allow(dead_code)]
     TcpConnect(String),
+    /// Connecting to a TNC failed; worth retrying with backoff.
+    #[error("{0}")]
+    Connect(String),
+    /// An `spp-client` TNC isn't paired on its adapter. Retrying won't help
+    /// until someone pairs it.
+    #[error("{0}")]
+    Unpaired(String),
+    /// A `serial` TNC's device isn't there (cable unplugged, radio off).
+    #[error("{0}")]
+    DeviceAbsent(String),
     #[error("KISS frame error: {0}")]
     #[allow(dead_code)]
     KissFrame(String),

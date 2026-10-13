@@ -25,12 +25,13 @@ use std::time::Duration;
 
 use ipnet::IpNet;
 
-use super::model::{AdapterDef, AppParams, ConfigFile, ConnectPolicy, PortDef, Role};
+use super::model::{AdapterDef, AppParams, ConfigFile, ConnectPolicy, PortDef, Role, TncDef};
 use super::{Problem, Source};
 
 pub const DEFAULT_LOG_LEVEL: &str = "info";
 pub const DEFAULT_CONTROL_GROUP: &str = "kiss-tnc-bridge";
 pub const DEFAULT_BLE_MAX_CLIENTS: u32 = 1;
+pub const DEFAULT_SERIAL_BAUD: u32 = 9600;
 /// Longest id for bridges, ports and adapters, same as a Linux interface name.
 pub const MAX_ID_LEN: usize = 15;
 
@@ -263,6 +264,37 @@ pub fn parse_host_port(s: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
+/// Which KISS init sequence a TNC gets when it connects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum TncModel {
+    /// Kenwood TH-D74 and TH-D75: the same command set, so one profile.
+    ThD7x,
+    /// Always in KISS mode; nothing to send.
+    None,
+}
+
+impl FromStr for TncModel {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "th-d7x" | "th-d74" | "th-d75" => Ok(TncModel::ThD7x),
+            "none" => Ok(TncModel::None),
+            _ => Err(format!(
+                "model {s:?} is not one of th-d74, th-d75, th-d7x, none"
+            )),
+        }
+    }
+}
+
+impl fmt::Display for TncModel {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            TncModel::ThD7x => "th-d7x",
+            TncModel::None => "none",
+        })
+    }
+}
+
 // ── Effective config ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,7 +302,25 @@ pub struct Config {
     pub global: Global,
     pub control: Control,
     pub adapters: Vec<Adapter>,
+    pub tncs: Vec<Tnc>,
     pub bridges: Vec<Bridge>,
+}
+
+impl Config {
+    pub fn tnc(&self, id: &str) -> Option<&Tnc> {
+        self.tncs.iter().find(|t| t.id == id)
+    }
+
+    /// An adapter as the user named it: `builtin (B8:27:EB:…)` when an
+    /// `[[adapter]]` id covers the MAC, otherwise the MAC or `hciN` itself.
+    pub fn describe_adapter(&self, sel: &AdapterSel) -> String {
+        if let AdapterSel::Mac(mac) = sel
+            && let Some(a) = self.adapters.iter().find(|a| a.mac == *mac)
+        {
+            return format!("{} ({mac})", a.id);
+        }
+        sel.to_string()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +339,34 @@ pub struct Adapter {
     pub id: String,
     pub mac: Mac,
     pub source: Source,
+}
+
+/// A hardware KISS TNC.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tnc {
+    pub id: String,
+    pub name: String,
+    pub model: TncModel,
+    pub spp: Option<Spp>,
+    pub serial: Option<SerialDevice>,
+    pub source: Source,
+}
+
+/// How to reach a TNC over Bluetooth Classic SPP.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Spp {
+    pub address: Mac,
+    /// The adapter it's paired on, after the adapter fallback.
+    pub adapter: AdapterSel,
+    /// `None`: found by SDP through BlueZ.
+    pub channel: Option<u8>,
+}
+
+/// How to reach a TNC over a serial device.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SerialDevice {
+    pub path: String,
+    pub baud: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -330,6 +408,38 @@ impl Port {
             PortKind::TcpClient { .. } => "tcp-client",
             PortKind::TcpServer { .. } => "tcp-server",
             PortKind::BleServer { .. } => "ble-server",
+            PortKind::SppClient { .. } => "spp-client",
+            PortKind::Serial { .. } => "serial",
+        }
+    }
+
+    /// The `[[tnc]]` this port uses, if any.
+    pub fn tnc_id(&self) -> Option<&str> {
+        match &self.kind {
+            PortKind::SppClient { tnc, .. } | PortKind::Serial { tnc, .. } => Some(tnc),
+            _ => None,
+        }
+    }
+
+    /// `connect` and `idle_timeout`, for the port types that have them.
+    pub fn connect_policy(&self) -> Option<(ConnectPolicy, Duration)> {
+        match &self.kind {
+            PortKind::TcpClient {
+                connect,
+                idle_timeout,
+                ..
+            }
+            | PortKind::SppClient {
+                connect,
+                idle_timeout,
+                ..
+            }
+            | PortKind::Serial {
+                connect,
+                idle_timeout,
+                ..
+            } => Some((*connect, *idle_timeout)),
+            PortKind::TcpServer { .. } | PortKind::BleServer { .. } => None,
         }
     }
 }
@@ -353,6 +463,24 @@ pub enum PortKind {
     BleServer {
         adapter: AdapterSel,
         max_clients: u32,
+    },
+    /// The TNC's settings are copied in, so a change to the `[[tnc]]` is a
+    /// change to every port that uses it.
+    SppClient {
+        tnc: String,
+        model: TncModel,
+        spp: Spp,
+        connect: ConnectPolicy,
+        idle_timeout: Duration,
+        exit_kiss_on_disconnect: bool,
+    },
+    Serial {
+        tnc: String,
+        model: TncModel,
+        serial: SerialDevice,
+        connect: ConnectPolicy,
+        idle_timeout: Duration,
+        exit_kiss_on_disconnect: bool,
     },
 }
 
@@ -427,6 +555,21 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
         None => AdapterSel::Default,
     };
 
+    let mut tncs: Vec<Tnc> = Vec::new();
+    for (source, file) in files {
+        for def in &file.tnc {
+            let object = format!("tnc {}", def.id);
+            let spp_adapter = def.spp.as_ref().map(|spp| match &spp.adapter {
+                Some(a) => resolve_adapter_value(a, source, &object, &mut errors),
+                None => global_sel.clone(),
+            });
+            match resolve_tnc(def, source, spp_adapter) {
+                Ok(t) => tncs.push(t),
+                Err(mut e) => errors.append(&mut e),
+            }
+        }
+    }
+
     let mut bridges: Vec<Bridge> = Vec::new();
     for (source, file) in files {
         for def in &file.bridge {
@@ -496,18 +639,8 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                                 (String::new(), 0)
                             }
                         };
-                        let idle_timeout = match idle_timeout.as_deref().map(parse_duration) {
-                            Some(Ok(d)) => d,
-                            Some(Err(e)) => {
-                                errors.push(Problem::new(
-                                    Some(source.clone()),
-                                    &pobject,
-                                    format!("idle_timeout: {e}"),
-                                ));
-                                Duration::ZERO
-                            }
-                            None => Duration::ZERO,
-                        };
+                        let idle_timeout =
+                            resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
                         PortKind::TcpClient {
                             host,
                             port,
@@ -583,6 +716,64 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                             max_clients,
                         }
                     }
+                    PortDef::SppClient {
+                        tnc,
+                        connect,
+                        idle_timeout,
+                        exit_kiss_on_disconnect,
+                        ..
+                    } => {
+                        let idle_timeout =
+                            resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
+                        let found = tncs.iter().find(|t| t.id == *tnc);
+                        match found.map(|t| (t, &t.spp)) {
+                            Some((t, Some(spp))) => PortKind::SppClient {
+                                tnc: t.id.clone(),
+                                model: t.model,
+                                spp: spp.clone(),
+                                connect: connect.unwrap_or_default(),
+                                idle_timeout,
+                                exit_kiss_on_disconnect: exit_kiss_on_disconnect.unwrap_or(false),
+                            },
+                            other => {
+                                errors.push(Problem::new(
+                                    Some(source.clone()),
+                                    &pobject,
+                                    tnc_reference_error(tnc, other.is_some(), "spp"),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
+                    PortDef::Serial {
+                        tnc,
+                        connect,
+                        idle_timeout,
+                        exit_kiss_on_disconnect,
+                        ..
+                    } => {
+                        let idle_timeout =
+                            resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
+                        let found = tncs.iter().find(|t| t.id == *tnc);
+                        match found.map(|t| (t, &t.serial)) {
+                            Some((t, Some(serial))) => PortKind::Serial {
+                                tnc: t.id.clone(),
+                                model: t.model,
+                                serial: serial.clone(),
+                                connect: connect.unwrap_or_default(),
+                                idle_timeout,
+                                exit_kiss_on_disconnect: exit_kiss_on_disconnect.unwrap_or(false),
+                            },
+                            other => {
+                                errors.push(Problem::new(
+                                    Some(source.clone()),
+                                    &pobject,
+                                    tnc_reference_error(tnc, other.is_some(), "serial"),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                 };
                 ports.push(Port {
                     id: pid,
@@ -613,7 +804,119 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                 group: control_group,
             },
             adapters,
+            tncs,
             bridges,
+        })
+    } else {
+        Err(errors)
+    }
+}
+
+fn resolve_idle_timeout(
+    value: &Option<String>,
+    source: &Source,
+    object: &str,
+    errors: &mut Vec<Problem>,
+) -> Duration {
+    match value.as_deref().map(parse_duration) {
+        Some(Ok(d)) => d,
+        Some(Err(e)) => {
+            errors.push(Problem::new(
+                Some(source.clone()),
+                object,
+                format!("idle_timeout: {e}"),
+            ));
+            Duration::ZERO
+        }
+        None => Duration::ZERO,
+    }
+}
+
+fn tnc_reference_error(tnc: &str, defined: bool, section: &str) -> String {
+    if defined {
+        format!("tnc {tnc:?} has no [tnc.{section}] section, which this port type needs")
+    } else {
+        format!("tnc {tnc:?} is not defined (no [[tnc]] with that id)")
+    }
+}
+
+/// `spp_adapter` is the `[tnc.spp]` adapter, already resolved with the
+/// fallback to `[global] adapter`.
+fn resolve_tnc(
+    def: &TncDef,
+    source: &Source,
+    spp_adapter: Option<AdapterSel>,
+) -> Result<Tnc, Vec<Problem>> {
+    let object = format!("tnc {}", def.id);
+    let mut errors = Vec::new();
+    let mut err = |msg: String| errors.push(Problem::new(Some(source.clone()), &object, msg));
+    if let Err(e) = check_id(&def.id, "tnc") {
+        err(e);
+    }
+    let name = def.name.clone().unwrap_or_else(|| def.id.clone());
+    if name.trim().is_empty() {
+        err("name must not be empty".into());
+    }
+    let model = match def.model.as_deref().map(str::parse::<TncModel>) {
+        None => TncModel::None,
+        Some(Ok(m)) => m,
+        Some(Err(e)) => {
+            err(e);
+            TncModel::None
+        }
+    };
+    let spp = match &def.spp {
+        None => None,
+        Some(spp) => {
+            let address = match spp.address.parse::<Mac>() {
+                Ok(a) => a,
+                Err(e) => {
+                    err(format!("spp.address: {e}"));
+                    Mac([0; 6])
+                }
+            };
+            if let Some(ch) = spp.channel
+                && !(1..=30).contains(&ch)
+            {
+                err(format!("spp.channel: {ch} is not an RFCOMM channel (1-30)"));
+            }
+            Some(Spp {
+                address,
+                adapter: spp_adapter.unwrap_or(AdapterSel::Default),
+                channel: spp.channel,
+            })
+        }
+    };
+    let serial = match &def.serial {
+        None => None,
+        Some(serial) => {
+            if !serial.path.starts_with('/') {
+                err(format!(
+                    "serial.path {:?} must be an absolute path, e.g. /dev/serial/by-id/…",
+                    serial.path
+                ));
+            }
+            let baud = serial.baud.unwrap_or(DEFAULT_SERIAL_BAUD);
+            if baud == 0 {
+                err("serial.baud must be more than 0".into());
+            }
+            Some(SerialDevice {
+                path: serial.path.clone(),
+                baud,
+            })
+        }
+    };
+    if spp.is_none() && serial.is_none() {
+        err("a tnc needs at least one of [tnc.spp] or [tnc.serial]".into());
+    }
+    if errors.is_empty() {
+        Ok(Tnc {
+            id: def.id.clone(),
+            name,
+            model,
+            spp,
+            serial,
+            source: source.clone(),
         })
     } else {
         Err(errors)
@@ -731,6 +1034,139 @@ mod tests {
         assert!(check_id("a-very-long-bridge-id", "bridge").is_err());
         assert!(check_id("", "bridge").is_err());
         assert!(check_id("with space", "bridge").is_err());
+    }
+
+    fn resolve_text(text: &str) -> Result<Config, Vec<String>> {
+        let file = crate::config::load::parse_str(text).unwrap();
+        resolve(&[(Source::Static("test.toml".into()), file)])
+            .map_err(|e| e.iter().map(|p| p.to_string()).collect())
+    }
+
+    const D75: &str = r#"
+[global]
+adapter = "builtin"
+
+[[adapter]]
+id = "builtin"
+mac = "B8:27:EB:12:34:56"
+
+[[tnc]]
+id = "d75"
+name = "TH-D75"
+model = "th-d75"
+spp = { address = "00:11:22:33:44:55" }
+  [tnc.serial]
+  path = "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00"
+
+[[bridge]]
+id = "ktbr0"
+name = "TH-D75"
+  [[bridge.port]]
+  type = "spp-client"
+  tnc = "d75"
+  idle_timeout = "90s"
+  [[bridge.port]]
+  type = "ble-server"
+
+[[bridge]]
+id = "ktbr3"
+name = "TH-D75 USB"
+enabled = false
+  [[bridge.port]]
+  id = "radio"
+  type = "serial"
+  tnc = "d75"
+  connect = "always"
+  exit_kiss_on_disconnect = true
+  [[bridge.port]]
+  type = "tcp-server"
+  listen = "8001"
+"#;
+
+    #[test]
+    fn tncs_resolve_and_ports_carry_their_settings() {
+        let cfg = resolve_text(D75).unwrap();
+        let builtin = AdapterSel::Mac("B8:27:EB:12:34:56".parse().unwrap());
+        let tnc = cfg.tnc("d75").unwrap();
+        assert_eq!(tnc.name, "TH-D75");
+        assert_eq!(tnc.model, TncModel::ThD7x);
+        let spp = tnc.spp.clone().unwrap();
+        // No [tnc.spp] adapter: [global] adapter applies.
+        assert_eq!(spp.adapter, builtin);
+        assert_eq!(spp.channel, None);
+        assert_eq!(tnc.serial.as_ref().unwrap().baud, DEFAULT_SERIAL_BAUD);
+
+        let p = &cfg.bridges[0].ports[0];
+        assert_eq!(p.id, "spp-client0");
+        assert_eq!(p.role, Role::Tnc);
+        assert_eq!(p.tnc_id(), Some("d75"));
+        assert_eq!(
+            p.kind,
+            PortKind::SppClient {
+                tnc: "d75".into(),
+                model: TncModel::ThD7x,
+                spp,
+                connect: ConnectPolicy::OnDemand,
+                idle_timeout: Duration::from_secs(90),
+                exit_kiss_on_disconnect: false,
+            }
+        );
+        let p = &cfg.bridges[1].ports[0];
+        assert!(matches!(
+            &p.kind,
+            PortKind::Serial { serial, connect: ConnectPolicy::Always, exit_kiss_on_disconnect: true, .. }
+                if serial.path == "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00"
+        ));
+        assert_eq!(
+            p.connect_policy(),
+            Some((ConnectPolicy::Always, Duration::ZERO))
+        );
+    }
+
+    #[test]
+    fn tnc_models() {
+        for m in ["th-d74", "th-d75", "th-d7x"] {
+            assert_eq!(m.parse::<TncModel>().unwrap(), TncModel::ThD7x);
+        }
+        assert_eq!("none".parse::<TncModel>().unwrap(), TncModel::None);
+        assert!("th-d72".parse::<TncModel>().is_err());
+    }
+
+    #[test]
+    fn tnc_errors() {
+        let e = resolve_text(&D75.replace("tnc = \"d75\"\n  idle", "tnc = \"d74\"\n  idle"))
+            .unwrap_err();
+        assert!(
+            e.iter().any(|m| m.contains("tnc \"d74\" is not defined")),
+            "{e:?}"
+        );
+
+        let no_serial = D75.replace(
+            "  [tnc.serial]\n  path = \"/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00\"\n",
+            "",
+        );
+        let e = resolve_text(&no_serial).unwrap_err();
+        assert!(
+            e.iter().any(|m| m.contains("has no [tnc.serial] section")),
+            "{e:?}"
+        );
+
+        let e = resolve_text("[[tnc]]\nid = \"x\"\nmodel = \"ic-705\"\n").unwrap_err();
+        assert!(e.iter().any(|m| m.contains("ic-705")), "{e:?}");
+        assert!(e.iter().any(|m| m.contains("at least one of")), "{e:?}");
+
+        let e = resolve_text(
+            "[[tnc]]\nid = \"x\"\nspp = { address = \"00:11\", adapter = \"nope\", channel = 31 }\n",
+        )
+        .unwrap_err();
+        assert!(e.iter().any(|m| m.contains("spp.address")), "{e:?}");
+        assert!(e.iter().any(|m| m.contains("adapter \"nope\"")), "{e:?}");
+        assert!(e.iter().any(|m| m.contains("spp.channel")), "{e:?}");
+
+        let e = resolve_text("[[tnc]]\nid = \"x\"\nserial = { path = \"ttyACM0\", baud = 0 }\n")
+            .unwrap_err();
+        assert!(e.iter().any(|m| m.contains("absolute path")), "{e:?}");
+        assert!(e.iter().any(|m| m.contains("serial.baud")), "{e:?}");
     }
 
     #[test]
