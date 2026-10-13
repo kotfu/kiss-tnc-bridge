@@ -53,6 +53,8 @@ pub const KISS_RX_CHAR_UUID: Uuid = Uuid::from_u128(0x00000003_ba2a_46c9_ae49_01
 const SESSION_QUEUE: usize = 64;
 /// A notification that takes longer than this means the phone is gone.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long to wait for BlueZ to drop a phone's link.
+const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BleState {
@@ -274,6 +276,10 @@ impl BleServerPort {
             }
         }
 
+        // BlueZ keeps a phone's LE link up after our GATT service goes away,
+        // and apps like aprs.fi then carry on as if the bridge were still
+        // there. Dropping the link tells them it isn't.
+        futures::future::join_all(clients.keys().map(|addr| self.disconnect(*addr))).await;
         for addr in clients.keys() {
             let _ = self
                 .app_tx
@@ -300,10 +306,26 @@ impl BleServerPort {
             return true;
         }
         tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, max, "rejecting client: max clients reached");
-        if let Ok(device) = self.adapter.device(addr) {
-            let _ = device.disconnect().await;
-        }
+        self.disconnect(addr).await;
         false
+    }
+
+    /// Drop a phone at the link layer.
+    async fn disconnect(&self, addr: Address) {
+        let Ok(device) = self.adapter.device(addr) else {
+            return;
+        };
+        match tokio::time::timeout(DISCONNECT_WAIT, device.disconnect()).await {
+            Ok(Ok(())) => {
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "link dropped")
+            }
+            Ok(Err(e)) => {
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "can't drop the link: {e}")
+            }
+            Err(_) => {
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping the link timed out")
+            }
+        }
     }
 
     /// Register a session for `addr` if there isn't one, and tell the bridge.

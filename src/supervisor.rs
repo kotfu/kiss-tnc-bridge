@@ -427,6 +427,9 @@ mod ble {
     use crate::error::Error;
     use crate::port::ble_server::{BleServerPort, BleState};
 
+    /// How long shutdown waits for `ble-server` ports to disconnect phones.
+    const PORT_STOP_WAIT: Duration = Duration::from_secs(3);
+
     enum Event {
         Added(String),
         Removed(String),
@@ -444,6 +447,7 @@ mod ble {
         pub adapter: String,
         pub token: CancellationToken,
         pub state: watch::Receiver<BleState>,
+        pub task: tokio::task::JoinHandle<()>,
     }
 
     pub async fn run(
@@ -532,10 +536,19 @@ mod ble {
                 Event::Tick => {}
             }
         }
+        // Let the ports drop their phones' links before the daemon exits.
+        let mut tasks = Vec::new();
         for slot in &mut slots {
             if let Some(r) = slot.running.take() {
                 r.token.cancel();
+                tasks.push(r.task);
             }
+        }
+        if tokio::time::timeout(PORT_STOP_WAIT, futures::future::join_all(tasks))
+            .await
+            .is_err()
+        {
+            tracing::warn!("ble-server ports didn't stop in time");
         }
         Ok(())
     }
@@ -599,7 +612,7 @@ mod ble {
             match want {
                 Some(name) if present[&name].powered || !slot.seen_off => {
                     let token = slot.bridge_shutdown.child_token();
-                    let (handle, _task) = BleServerPort {
+                    let (handle, task) = BleServerPort {
                         bridge_id: slot.bridge_id.clone(),
                         port_id: slot.port_id.clone(),
                         adapter: present[&name].adapter.clone(),
@@ -614,6 +627,7 @@ mod ble {
                         adapter: name,
                         token,
                         state: handle.state,
+                        task,
                     });
                 }
                 Some(name) => {
