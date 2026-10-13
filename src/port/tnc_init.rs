@@ -46,6 +46,9 @@ use crate::kiss::frame::FEND;
 pub const KISS_RETURN: [u8; 3] = [FEND, 0xFF, FEND];
 /// How long to wait for a reply to a radio command.
 const REPLY_WAIT: Duration = Duration::from_secs(1);
+/// How long a TNC that just entered KISS mode must stay silent to a probe.
+/// A TH-D75 answers commands in under 10 ms, so this is generous.
+const KISS_CHECK_WAIT: Duration = Duration::from_millis(500);
 /// The most init may take: a TNC that stops answering or stops taking
 /// bytes fails the connect, and the next attempt opens the link afresh.
 /// The full TH-D7x sequence from KISS mode takes about 1.4 s.
@@ -139,6 +142,17 @@ async fn init_th_d7x<S: AsyncRead + AsyncWrite + Unpin>(
             )));
         }
     }
+    // The radio accepts `TN 2` on any of its interfaces but goes KISS only
+    // on the one its KISS interface setting names; anywhere else it keeps
+    // answering commands and no KISS data ever crosses the link. A TNC
+    // really in KISS mode ignores the probe.
+    if radio.command_within("BT", KISS_CHECK_WAIT).await?.is_some() {
+        return Err(Error::Connect(
+            "the radio took KISS mode, but not on this link: set Menu > Configuration > \
+             Interface > KISS (983) to this interface (Bluetooth or USB)"
+                .into(),
+        ));
+    }
 
     let radio_id = id.map(|s| s.strip_prefix("ID ").unwrap_or(&s).trim().to_string());
     tracing::info!(
@@ -203,10 +217,14 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> Radio<'a, S> {
     /// Send `cmd` and return its reply, or `None` if there's none within
     /// [`REPLY_WAIT`]. A busy reply (`?`) is retried.
     async fn command(&mut self, cmd: &str) -> Result<Option<String>, Error> {
+        self.command_within(cmd, REPLY_WAIT).await
+    }
+
+    async fn command_within(&mut self, cmd: &str, wait: Duration) -> Result<Option<String>, Error> {
         for attempt in 0..=BUSY_RETRIES {
             self.replies.clear();
             self.send_raw(format!("{cmd}\r").as_bytes()).await?;
-            let reply = self.reply().await?;
+            let reply = self.reply(wait).await?;
             tracing::debug!(cmd, reply = ?reply, "TNC command");
             match reply {
                 Some(r) if r == "?" && attempt < BUSY_RETRIES => {
@@ -218,8 +236,8 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> Radio<'a, S> {
         Ok(None)
     }
 
-    async fn reply(&mut self) -> Result<Option<String>, Error> {
-        let deadline = tokio::time::Instant::now() + REPLY_WAIT;
+    async fn reply(&mut self, wait: Duration) -> Result<Option<String>, Error> {
+        let deadline = tokio::time::Instant::now() + wait;
         let mut buf = [0u8; 512];
         loop {
             if let Some(r) = self.replies.pop_front() {
@@ -381,6 +399,9 @@ pub(crate) mod fake {
         pub band: u8,
         /// Everything the radio was sent, as text where it is text.
         pub log: Vec<String>,
+        /// The radio's KISS interface setting names another interface: KISS
+        /// mode doesn't change this link, which keeps answering commands.
+        pub kiss_elsewhere: bool,
     }
 
     /// Run the radio on `io` until the other end closes. In KISS mode it
@@ -397,8 +418,11 @@ pub(crate) mod fake {
                 Ok(n) => n,
             };
             for &b in &buf[..n] {
-                let mode = state.lock().unwrap().mode;
-                if mode == 2 {
+                let (mode, elsewhere) = {
+                    let st = state.lock().unwrap();
+                    (st.mode, st.kiss_elsewhere)
+                };
+                if mode == 2 && !elsewhere {
                     // KISS mode: collect frames; text is ignored.
                     kiss.push(b);
                     if kiss.ends_with(&[FEND, 0xFF, FEND]) {
@@ -406,6 +430,15 @@ pub(crate) mod fake {
                         st.mode = 0;
                         st.log.push("KISS return".into());
                         kiss.clear();
+                    } else if b == b'\r' && kiss.ends_with(b"BT\r") {
+                        state.lock().unwrap().log.push("BT ignored".into());
+                        kiss.clear();
+                        if let Some(f) = heard.take() {
+                            let mut wire = vec![FEND];
+                            wire.extend_from_slice(&f);
+                            wire.push(FEND);
+                            let _ = wr.write_all(&wire).await;
+                        }
                     } else if b == b'\r'
                         && let Some(f) = heard.take()
                     {
@@ -463,11 +496,29 @@ mod tests {
         let state = Arc::new(Mutex::new(RadioState {
             mode,
             band: 1,
-            log: Vec::new(),
+            ..Default::default()
         }));
         tokio::spawn(radio(theirs, state.clone(), heard));
         let out = init(&mut ours, model, exit_kiss).await.unwrap();
         (out, state)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn kiss_mode_on_another_interface_is_an_error() {
+        let (mut ours, theirs) = tokio::io::duplex(1024);
+        let state = Arc::new(Mutex::new(RadioState {
+            mode: 0,
+            band: 1,
+            kiss_elsewhere: true,
+            ..Default::default()
+        }));
+        tokio::spawn(radio(theirs, state.clone(), None));
+        let err = init(&mut ours, TncModel::ThD7x, false).await.unwrap_err();
+        assert!(err.to_string().contains("KISS (983)"), "{err}");
+        assert_eq!(
+            state.lock().unwrap().log,
+            vec!["BT", "ID", "TN", "TN 2,1", "BT"]
+        );
     }
 
     #[tokio::test(start_paused = true)]
@@ -479,7 +530,15 @@ mod tests {
         assert_eq!(st.band, 1);
         assert_eq!(
             st.log,
-            vec!["KISS return", "BT", "ID", "TN", "TN 2,1"],
+            vec![
+                "BT ignored",
+                "KISS return",
+                "BT",
+                "ID",
+                "TN",
+                "TN 2,1",
+                "BT ignored"
+            ],
             "{:?}",
             st.log
         );
@@ -493,7 +552,7 @@ mod tests {
     async fn from_aprs_mode_restores_it_on_teardown() {
         let (out, state) = run(1, TncModel::ThD7x, true, None).await;
         let st = state.lock().unwrap();
-        assert_eq!(st.log, vec!["BT", "ID", "TN", "TN 2,1"]);
+        assert_eq!(st.log, vec!["BT", "ID", "TN", "TN 2,1", "BT ignored"]);
         assert_eq!(st.mode, 2);
         assert_eq!(
             out.teardown,
