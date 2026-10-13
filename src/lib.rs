@@ -20,6 +20,8 @@
 //! Only the Bluetooth code (behind `cfg(target_os = "linux")`) needs BlueZ;
 //! KISS framing, configuration, bridging and TCP build and test anywhere.
 
+#[cfg(target_os = "linux")]
+pub mod agent;
 pub mod announce;
 #[cfg(target_os = "linux")]
 pub mod bluetooth;
