@@ -116,9 +116,11 @@ async fn init_th_d7x<S: AsyncRead + AsyncWrite + Unpin>(
         radio.send_raw(&KISS_RETURN).await?;
         tokio::time::sleep(AFTER_KISS_RETURN).await;
         if radio.command("BT").await?.is_none() {
-            tracing::warn!(
-                "the TNC doesn't answer the TH-D7x command set; is it a TH-D74/D75? Carrying on"
-            );
+            // Nothing else will get an answer either. A TH-D75 just plugged
+            // back in over USB can be like this until the port is reopened.
+            return Err(Error::Connect(
+                "the TNC doesn't answer TH-D7x commands, in or out of KISS mode".into(),
+            ));
         }
     }
     let id = radio.command("ID").await?;
@@ -515,10 +517,17 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_silent_tnc_fails_init() {
-        let (mut ours, _theirs) = tokio::io::duplex(1024);
+    async fn a_silent_tnc_fails_init_fast() {
+        let (mut ours, mut theirs) = tokio::io::duplex(1024);
+        let t0 = tokio::time::Instant::now();
         let err = init(&mut ours, TncModel::ThD7x, false).await.unwrap_err();
-        assert!(err.to_string().contains("didn't accept KISS mode"), "{err}");
+        assert!(err.to_string().contains("doesn't answer"), "{err}");
+        // Probe, KISS return, probe again; nothing more.
+        assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+        drop(ours);
+        let mut sent = Vec::new();
+        theirs.read_to_end(&mut sent).await.unwrap();
+        assert_eq!(sent, b"BT\r\xC0\xFF\xC0BT\r".to_vec());
     }
 
     #[test]

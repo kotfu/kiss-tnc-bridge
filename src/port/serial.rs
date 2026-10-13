@@ -66,6 +66,19 @@ pub fn connector(
 /// complete, which async code can time out.
 struct NoDrain(SerialStream);
 
+/// Unsent output is discarded on close. Otherwise Linux holds `close()` for
+/// up to 30 s (the tty's closing wait) trying to deliver it to a device
+/// that isn't reading, which is exactly when the bridge closes the port to
+/// try again.
+#[cfg(unix)]
+impl Drop for NoDrain {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // SAFETY: the fd is open until the SerialStream drops, after this.
+        unsafe { libc::tcflush(self.0.as_raw_fd(), libc::TCOFLUSH) };
+    }
+}
+
 impl AsyncRead for NoDrain {
     fn poll_read(
         mut self: Pin<&mut Self>,
