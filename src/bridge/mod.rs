@@ -345,6 +345,7 @@ impl Bridge {
             pending: VecDeque::new(),
             idle_timer: None,
             waiting: None,
+            link_start: (0, 0),
         };
         run.main().await;
     }
@@ -421,6 +422,9 @@ struct Run {
     idle_timer: Option<Pin<Box<Sleep>>>,
     /// Set while polling for pairing or a device instead of backing off.
     waiting: Option<Wait>,
+    /// Frames up and down when the link came up, for the totals logged when
+    /// it goes.
+    link_start: (u64, u64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -554,7 +558,8 @@ impl Run {
                 // Dropping the sender tells the writer to tear down and stop.
                 self.writer_tx = None;
                 reader.abort();
-                tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC disconnected");
+                let (up, down) = self.link_frames();
+                tracing::info!(bridge = %self.id, port = %self.settings.port_id, frames_up = up, frames_down = down, "TNC disconnected");
                 Some(writer)
             }
             TncLink::Backoff { .. } | TncLink::Idle => None,
@@ -564,6 +569,14 @@ impl Run {
         self.waiting = None;
         self.set_state(TncState::Idle);
         writer
+    }
+
+    /// Frames up and down since the link came up.
+    fn link_frames(&self) -> (u64, u64) {
+        (
+            self.counters.frames_up() - self.link_start.0,
+            self.counters.frames_down() - self.link_start.1,
+        )
     }
 
     fn wants_link(&self) -> bool {
@@ -618,11 +631,13 @@ impl Run {
     }
 
     fn uplink(&mut self, frame: Frame) {
+        let frame_len = frame.len();
         match &self.link {
             TncLink::Connected { .. } => match self.writer_tx.as_ref().map(|tx| tx.try_send(frame))
             {
                 Some(Ok(())) => {
                     self.counters.frames_up.fetch_add(1, Ordering::Relaxed);
+                    tracing::trace!(bridge = %self.id, bytes = frame_len, "frame to the TNC");
                 }
                 _ => {
                     // Only reachable if the writer went away under us.
@@ -655,6 +670,7 @@ impl Run {
                     return;
                 }
                 self.counters.frames_down.fetch_add(1, Ordering::Relaxed);
+                tracing::trace!(bridge = %self.id, bytes = frame.len(), sessions = self.sessions.len(), "frame from the TNC");
                 for (id, tx) in &self.sessions {
                     if tx.try_send(frame.clone()).is_err() {
                         tracing::warn!(bridge = %self.id, session = %id, "session can't keep up, dropping a frame");
@@ -667,7 +683,8 @@ impl Run {
                 {
                     return;
                 }
-                tracing::warn!(bridge = %self.id, port = %self.settings.port_id, "TNC link lost: {error}");
+                let (up, down) = self.link_frames();
+                tracing::warn!(bridge = %self.id, port = %self.settings.port_id, frames_up = up, frames_down = down, "TNC link lost: {error}");
                 if let TncLink::Connected { reader, writer } =
                     std::mem::replace(&mut self.link, TncLink::Idle)
                 {
@@ -709,6 +726,7 @@ impl Run {
                 self.writer_tx = Some(writer_tx);
                 self.attempt = 0;
                 self.counters.tnc_connects.fetch_add(1, Ordering::Relaxed);
+                self.link_start = (self.counters.frames_up(), self.counters.frames_down());
                 self.set_state(TncState::Connected);
                 tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC connected");
                 // Frames that arrived while connecting, if they're still fresh.

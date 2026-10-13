@@ -310,6 +310,11 @@ fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
+        // A log line that can't be written (stderr's reader went away, e.g.
+        // journald restarting) is dropped. Otherwise tracing-subscriber
+        // reports it with eprintln!, which panics on the same dead stderr
+        // and takes down whichever task was logging.
+        .log_internal_errors(false)
         .init();
 
     tracing::info!(
@@ -392,21 +397,24 @@ async fn run(cfg: config::Config, state_dir: &Path) -> Result<(), error::Error> 
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
-        {
+        let why = {
             let mut term =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("SIGTERM handler");
             tokio::select! {
-                _ = ctrl_c => tracing::info!("interrupted, shutting down"),
-                _ = term.recv() => tracing::info!("terminated, shutting down"),
+                _ = ctrl_c => "interrupted",
+                _ = term.recv() => "terminated",
             }
-        }
+        };
         #[cfg(not(unix))]
-        {
+        let why = {
             let _ = ctrl_c.await;
-            tracing::info!("interrupted, shutting down");
-        }
+            "interrupted"
+        };
+        // Stop first, log second: nothing that goes wrong while logging may
+        // keep the daemon from stopping.
         stop.cancel();
+        tracing::info!("{why}, shutting down");
     });
     kiss_tnc_bridge::supervisor::run(cfg, state_dir, shutdown).await
 }
