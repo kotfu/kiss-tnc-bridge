@@ -1,0 +1,22 @@
+# Phase 0 spike: throwaway code. See spikes/README.md.
+[package]
+name = "spp-spike"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+anyhow = "1"
+bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
+libdbus-sys = { version = "0.2", features = ["vendored"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+tokio-serial = { version = "5", default-features = false }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = "1"
+
+[profile.release]
+strip = true

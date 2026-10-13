@@ -3,3 +3,6 @@
 
 # Local settings for scripts/pi-deploy.sh
 /scripts/pi-deploy.local
+
+# Spike build outputs
+/spikes/*/target

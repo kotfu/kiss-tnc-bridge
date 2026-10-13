@@ -1398,28 +1398,29 @@ applies. Testers who want to try 1.0 work early build from `main` (see
 Use throwaway code on a branch to answer the questions that could sink the
 plan:
 
-- [ ] TH-D75 pairs with BlueZ (`bluetoothctl`) on a Pi 4, and on an RTL8761B
+- [x] TH-D75 pairs with BlueZ (`bluetoothctl`) on a Pi 4, and on an RTL8761B
       dongle. Record exactly which agent callbacks fire (PIN? passkey? Just
       Works?).
-- [ ] A bluer `register_profile` + `connect_profile(SPP)` program connects and
+- [x] A bluer `register_profile` + `connect_profile(SPP)` program connects and
       reads KISS frames from the radio.
-- [ ] Same controller: run today's BLE GATT bridge and the RFCOMM link
+- [x] Same controller: run today's BLE GATT bridge and the RFCOMM link
       concurrently for 1 hour with aprs.fi connected. Watch for drops.
-- [ ] Repeat with the radio and BLE on different adapters (built-in +
+- [x] Repeat with the radio and BLE on different adapters (built-in +
       RTL8761B dongle), to confirm that fallback works.
-- [ ] Read the bb-link source (both forks): KISS init commands, reconnect
+- [x] Read the bb-link source (both forks): KISS init commands, reconnect
       behavior, D74 vs D75 differences, license.
-- [ ] Measure RFCOMM connect time and behavior when the radio is off or out of
+- [x] Measure RFCOMM connect time and behavior when the radio is off or out of
       range (page timeout).
-- [ ] Plug the D75 into a Pi over USB: what `lsusb` and `/dev/serial/by-id/`
+- [x] Plug the D75 into a Pi over USB: what `lsusb` and `/dev/serial/by-id/`
       show (it may expose more than one interface), which interface carries
       the TNC, and the radio's USB menu settings for KISS.
-- [ ] Whether KISS over USB uses the same init commands as over Bluetooth.
-- [ ] Whether the D75 allows its TNC on Bluetooth and USB at the same time,
+- [x] Whether KISS over USB uses the same init commands as over Bluetooth.
+- [x] Whether the D75 allows its TNC on Bluetooth and USB at the same time,
       or only one. This confirms or relaxes the one-bridge-per-TNC rule.
 
 **Exit:** a short findings section appended to this doc. If pairing or
 coexistence is a dead end on Pi hardware, stop here.
+Findings: [Phase 0 findings](#phase-0-findings).
 
 ### Phase 1: Bridge core + new config
 
@@ -1685,3 +1686,63 @@ announcing on the same Pi.
   - **What 1.0 should get right so this is easy later:** complete and stable
     `--json` output, stable error codes with actionable messages, and the
     published schema. All three are already in the plan.
+
+---
+
+## Phase 0 findings
+
+Done October 12–13, 2026 on a Raspberry Pi 4 (Debian 13, BlueZ 5.82) with
+the built-in Cypress adapter (`hci0`) and a TP-Link UB500 (RTL8761B) dongle
+(`hci1`), against a Kenwood TH-D75. The spike code and the full notes are on
+the `phase0-spikes` branch under `spikes/`. Nothing is a dead end; the plan
+stands, with the adjustments listed at the end.
+
+| Question | Answer |
+|---|---|
+| D75 pairs with BlueZ on the Pi 4 and on the RTL8761B? Which callbacks? | Yes on both (the built-in chip was paired before Phase 0; the dongle pairing was recorded). SSP **numeric comparison**: BlueZ calls `request_confirmation` once with the six-digit passkey the radio shows, our side confirms at once, and the operator presses OK on the radio within 30 s. No PIN, no passkey entry. **Just Works is refused** (`Authentication Failed` in 5 s with a `NoInputNoOutput` agent), so the pairing-window agent is required |
+| bluer `register_profile` + `connect_profile(SPP)` reads KISS? | Yes. BlueZ does the SDP lookup and hands over the RFCOMM fd; the link is authenticated and encrypted. No channel number needed |
+| RFCOMM connect time; radio off or out of range | 4.8 s cold, 0.6–1.5 s warm, 38 ms with the ACL link still up. Radio unreachable: a fixed 5.13 s page timeout per attempt, no hang |
+| BLE GATT + RFCOMM on one controller for an hour with aprs.fi | Clean: 61 min with an iPad on aprs.fi attached, radio link up 65 min without a drop, 398 frames forwarded, no daemon errors or BLE disconnects, daemon RSS 5.3 MB. Receive-only traffic |
+| Radio on the built-in chip, BLE on the dongle | Works. The radio link on hci0 ran 1 h 51 min across both coexistence runs without a drop; with the daemon on the dongle, an iPad and an iPhone were attached at once, 0 errors. Stopped after a few minutes by choice |
+| bb-link source: init, reconnect, D74 vs D75, license | All three forks GPL-3.0. KISS init is `BT` (silent ⇒ already in KISS ⇒ `C0 FF C0`), `TN` to read mode and band, `TN 2,<band>`; teardown restores the previous mode. Reconnect every 15 s. **No D74/D75 difference in the code** |
+| D75 over USB | `2166:9023`, one CDC-ACM port plus USB audio; `/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00`. The radio reports no USB serial number |
+| KISS over USB uses the same init? | Yes, byte for byte; replies under 1 ms over USB, ~6 ms over RFCOMM |
+| TNC on Bluetooth and USB at once? | No. `Menu > Configuration > Interface > KISS (983)` selects one. Confirms the one-enabled-bridge-per-TNC rule |
+
+Adjustments to the plan:
+
+- **`model`:** one `th-d7x` profile, with `th-d74` and `th-d75` accepted as
+  aliases. Init runs on every TNC connect, as halka's fork does, since the
+  radio comes up in whatever mode it was left in. `TN` after a KISS exit
+  reports mode 0, so the mode to restore is remembered from the `BT` probe,
+  not read back.
+- **Init reader:** frames arrive while probing with `BT`, so the reply parser
+  has to strip KISS frames from the stream rather than read lines.
+- **Pairing flow:** needs `request_confirmation` only (DisplayYesNo is
+  enough). The daemon should show the passkey it confirmed, tell the operator
+  to dismiss any stale prompt and re-enter Pairing Mode first, and treat
+  `Authentication Failed` after about 30 s as "OK wasn't pressed in time".
+- **Advertising while connected:** the Pi 4's built-in controller stops
+  advertising while one BLE central is connected, even with the advertisement
+  registered, so a second phone can't discover the bridge there.
+  The RTL8761B dongle does keep advertising with one central attached and
+  served two phones at once, so `max_clients > 1` works on a dongle and the
+  recommended layout for more than one phone is radio on the built-in chip,
+  phones on a dongle. `status`/`doctor` should report whether the
+  advertisement is active, not just registered. BlueZ puts
+  the local name in the scan response, which is where the 29-byte
+  `public_name` limit comes from; confirmed from the dongle.
+- **Radio-side reconnects:** after a teardown the D75 was unreachable for
+  about a minute, then connected on its own (the ACL showed as incoming). The
+  retry loop recovered without help; nothing to add beyond the state machine
+  already planned.
+- **rfkill:** adapters can be soft-blocked (`PowerState: off-blocked`), and
+  `Powered = true` then fails with a bare `org.bluez.Error.Failed`. The daemon
+  runs as root and should clear the block itself; `-t` and `status` should
+  name it.
+- **Serial paths:** by-id names are per model for the D75, so two of them on
+  one host need by-path. `-t` accepts both; the udev rule matches
+  `2166:9023`.
+- **State machine:** a connect is one D-Bus call that blocks up to about 5 s,
+  and every long await needs a single cancellation point (the spike learned
+  this the hard way with SIGINT).
