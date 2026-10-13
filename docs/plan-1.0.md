@@ -1450,6 +1450,12 @@ Findings: [Phase 0 findings](#phase-0-findings).
 - [x] Add a PR CI workflow (`cargo test`, `clippy`, `fmt --check`). Today only
       the release workflow exists.
 
+Done October 13, 2026 on the `phase1-bridge-core` branch. Verified on the
+dev Pi with a synthetic KISS TNC behind a `tcp-client` port: a `tcp-server`
+port broadcasting to two clients with uplink and KISS-return filtering, and a
+`ble-server` port on the RTL8761B dongle with aprs.fi on an iPad receiving
+packets and sending beacons through the serialized uplink.
+
 ### Phase 2: TNCs over Bluetooth and serial
 
 - [ ] `[[tnc]]` objects with `spp` and `serial` sections, and the
