@@ -298,6 +298,7 @@ impl Bridge {
             tnc_rx,
             sessions: HashMap::new(),
             link: TncLink::Idle,
+            writer_tx: None,
             generation: 0,
             attempt: 0,
             pending: VecDeque::new(),
@@ -320,7 +321,6 @@ enum TncLink {
         task: JoinHandle<Result<BoxLink, Error>>,
     },
     Connected {
-        writer_tx: mpsc::Sender<Frame>,
         reader: JoinHandle<()>,
         writer: JoinHandle<()>,
     },
@@ -368,6 +368,8 @@ struct Run {
     tnc_rx: mpsc::Receiver<TncEvent>,
     sessions: HashMap<SessionId, mpsc::Sender<Frame>>,
     link: TncLink,
+    /// Frames to the link's writer task; `Some` while connected.
+    writer_tx: Option<mpsc::Sender<Frame>>,
     /// Bumped on every connect, so events from a dead link are ignored.
     generation: u64,
     /// Consecutive failed connects, for backoff.
@@ -386,13 +388,17 @@ impl Run {
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => break,
-                ev = self.app_rx.recv() => match ev {
+                // App events are taken only while the TNC writer has room, so
+                // a flood from one app backs up to its own socket instead of
+                // being dropped here or stalling TNC-to-app traffic.
+                ev = self.app_rx.recv(), if self.app_ready() => match ev {
                     Some(ev) => self.on_app(ev),
                     None => {
                         tracing::debug!(bridge = %self.id, "all app ports gone");
                         break;
                     }
                 },
+                _ = writer_slot(&self.writer_tx), if !self.app_ready() => {}
                 Some(ev) = self.tnc_rx.recv() => self.on_tnc(ev),
                 ev = link_event(&mut self.link), if self.link.is_waiting() => self.on_link(ev),
                 _ = idle_elapsed(&mut self.idle_timer), if self.idle_timer.is_some() => {
@@ -406,6 +412,12 @@ impl Run {
         }
         self.disconnect();
         tracing::info!(bridge = %self.id, "bridge stopped");
+    }
+
+    /// Whether the next app event can be taken: always, unless the TNC
+    /// writer's queue is full.
+    fn app_ready(&self) -> bool {
+        self.writer_tx.as_ref().is_none_or(|tx| tx.capacity() > 0)
     }
 
     fn set_state(&self, state: TncState) {
@@ -442,12 +454,8 @@ impl Run {
     fn disconnect(&mut self) {
         match std::mem::replace(&mut self.link, TncLink::Idle) {
             TncLink::Connecting { task } => task.abort(),
-            TncLink::Connected {
-                writer_tx,
-                reader,
-                writer,
-            } => {
-                drop(writer_tx);
+            TncLink::Connected { reader, writer } => {
+                self.writer_tx = None;
                 reader.abort();
                 writer.abort();
                 tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC disconnected");
@@ -512,12 +520,14 @@ impl Run {
 
     fn uplink(&mut self, frame: Frame) {
         match &self.link {
-            TncLink::Connected { writer_tx, .. } => match writer_tx.try_send(frame) {
-                Ok(()) => {
+            TncLink::Connected { .. } => match self.writer_tx.as_ref().map(|tx| tx.try_send(frame))
+            {
+                Some(Ok(())) => {
                     self.counters.frames_up.fetch_add(1, Ordering::Relaxed);
                 }
-                Err(_) => {
-                    tracing::warn!(bridge = %self.id, "TNC writer queue full, dropping a frame");
+                _ => {
+                    // Only reachable if the writer went away under us.
+                    tracing::warn!(bridge = %self.id, "TNC writer unavailable, dropping a frame");
                     self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 }
             },
@@ -557,12 +567,13 @@ impl Run {
                     return;
                 }
                 tracing::warn!(bridge = %self.id, port = %self.settings.port_id, "TNC link lost: {error}");
-                if let TncLink::Connected { reader, writer, .. } =
+                if let TncLink::Connected { reader, writer } =
                     std::mem::replace(&mut self.link, TncLink::Idle)
                 {
                     reader.abort();
                     writer.abort();
                 }
+                self.writer_tx = None;
                 self.generation += 1;
                 if self.wants_link() {
                     self.attempt = 0;
@@ -591,11 +602,8 @@ impl Run {
                     self.tnc_tx.clone(),
                     generation,
                 ));
-                self.link = TncLink::Connected {
-                    writer_tx,
-                    reader,
-                    writer,
-                };
+                self.link = TncLink::Connected { reader, writer };
+                self.writer_tx = Some(writer_tx);
                 self.attempt = 0;
                 self.counters.tnc_connects.fetch_add(1, Ordering::Relaxed);
                 self.set_state(TncState::Connected);
@@ -635,6 +643,18 @@ impl Run {
                 }
             }
         }
+    }
+}
+
+/// Resolves once the TNC writer can take a frame again. Only polled while
+/// it can't (see the select guard), and never while disconnected.
+async fn writer_slot(writer_tx: &Option<mpsc::Sender<Frame>>) {
+    match writer_tx {
+        Some(tx) => {
+            // The permit is dropped at once: this is a wakeup, not a send.
+            let _ = tx.reserve().await;
+        }
+        None => std::future::pending().await,
     }
 }
 

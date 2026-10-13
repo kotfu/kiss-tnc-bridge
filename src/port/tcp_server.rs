@@ -1,0 +1,193 @@
+// Copyright (C) 2026 Jared Crapo
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+//! `tcp-server`: an app port that accepts KISS TCP clients (Pat, Xastir,
+//! YAAC, aprs.fi over Wi-Fi) and turns each into a bridge session.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use ipnet::IpNet;
+use tokio::net::TcpStream;
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
+
+use crate::bridge::{AppEvent, Frame, SessionId};
+use crate::config::Listen;
+use crate::port::listen::{BindError, allowed, bind};
+use crate::port::stream::{KissReader, KissWriter};
+
+/// Frames queued per session on the way to the client.
+const SESSION_QUEUE: usize = 64;
+/// How often a port waiting for its interface tries again.
+pub const INTERFACE_RETRY: Duration = Duration::from_secs(5);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerState {
+    Starting,
+    Listening(std::net::SocketAddr),
+    WaitingForInterface(String),
+    Failed(String),
+    Stopped,
+}
+
+pub struct TcpServerPort {
+    pub bridge_id: String,
+    pub port_id: String,
+    pub listen: Listen,
+    pub max_clients: Option<u32>,
+    pub allow: Vec<IpNet>,
+    pub app_tx: mpsc::Sender<AppEvent>,
+    pub shutdown: CancellationToken,
+}
+
+pub struct TcpServerHandle {
+    pub state: watch::Receiver<ServerState>,
+    pub sessions: Arc<AtomicUsize>,
+}
+
+impl TcpServerPort {
+    /// Spawn the port. It binds (retrying every 5 s while an interface is
+    /// missing), accepts clients, and runs until shut down.
+    pub fn spawn(self) -> (TcpServerHandle, tokio::task::JoinHandle<()>) {
+        let (state_tx, state_rx) = watch::channel(ServerState::Starting);
+        let sessions = Arc::new(AtomicUsize::new(0));
+        let handle = TcpServerHandle {
+            state: state_rx,
+            sessions: sessions.clone(),
+        };
+        let task = tokio::spawn(self.run(state_tx, sessions));
+        (handle, task)
+    }
+
+    async fn run(self, state_tx: watch::Sender<ServerState>, sessions: Arc<AtomicUsize>) {
+        let listener = loop {
+            match bind(&self.listen).await {
+                Ok(l) => break l,
+                Err(BindError::NoInterface(name)) => {
+                    tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, "waiting for interface {name}");
+                    state_tx.send_replace(ServerState::WaitingForInterface(name));
+                    tokio::select! {
+                        _ = tokio::time::sleep(INTERFACE_RETRY) => {}
+                        _ = self.shutdown.cancelled() => {
+                            state_tx.send_replace(ServerState::Stopped);
+                            return;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(bridge = %self.bridge_id, port = %self.port_id, listen = %self.listen, "can't listen: {e}");
+                    state_tx.send_replace(ServerState::Failed(e.to_string()));
+                    return;
+                }
+            }
+        };
+        let local = listener.local_addr().ok();
+        tracing::info!(bridge = %self.bridge_id, port = %self.port_id, listen = %self.listen, "listening");
+        if let Some(local) = local {
+            state_tx.send_replace(ServerState::Listening(local));
+        }
+        if self.listen.is_unspecified() && self.allow.is_empty() {
+            tracing::warn!(
+                bridge = %self.bridge_id, port = %self.port_id,
+                "listening on all addresses with no allow list: anyone who can connect can transmit on your radio"
+            );
+        }
+
+        loop {
+            let (stream, peer) = tokio::select! {
+                _ = self.shutdown.cancelled() => break,
+                res = listener.accept() => match res {
+                    Ok(x) => x,
+                    Err(e) => {
+                        tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, "accept failed: {e}");
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        continue;
+                    }
+                },
+            };
+            if !allowed(&self.allow, peer.ip()) {
+                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
+                continue;
+            }
+            if let Some(max) = self.max_clients
+                && sessions.load(Ordering::Relaxed) >= max as usize
+            {
+                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
+                continue;
+            }
+            let _ = stream.set_nodelay(true);
+            let id = SessionId::new(self.port_id.clone(), peer.to_string());
+            sessions.fetch_add(1, Ordering::Relaxed);
+            tokio::spawn(session(
+                stream,
+                id,
+                self.app_tx.clone(),
+                sessions.clone(),
+                self.shutdown.clone(),
+            ));
+        }
+        state_tx.send_replace(ServerState::Stopped);
+        tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "stopped listening");
+    }
+}
+
+/// One client: frames from it go to the bridge, frames from the bridge go
+/// to it, until either side closes or the port shuts down.
+async fn session(
+    stream: TcpStream,
+    id: SessionId,
+    app_tx: mpsc::Sender<AppEvent>,
+    sessions: Arc<AtomicUsize>,
+    shutdown: CancellationToken,
+) {
+    let (rd, wr) = stream.into_split();
+    let mut reader = KissReader::new(rd);
+    let mut writer = KissWriter::new(wr);
+    let (tx, mut rx) = mpsc::channel::<Frame>(SESSION_QUEUE);
+    if app_tx
+        .send(AppEvent::SessionOpened { id: id.clone(), tx })
+        .await
+        .is_err()
+    {
+        sessions.fetch_sub(1, Ordering::Relaxed);
+        return;
+    }
+    loop {
+        tokio::select! {
+            _ = shutdown.cancelled() => break,
+            res = reader.read_frame() => match res {
+                Ok(frame) => {
+                    if app_tx.send(AppEvent::Frame { id: id.clone(), frame }).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::debug!(session = %id, "client gone: {e}");
+                    break;
+                }
+            },
+            Some(frame) = rx.recv() => {
+                if let Err(e) = writer.write_frame(&frame).await {
+                    tracing::debug!(session = %id, "write failed: {e}");
+                    break;
+                }
+            }
+        }
+    }
+    let _ = writer.shutdown().await;
+    sessions.fetch_sub(1, Ordering::Relaxed);
+    let _ = app_tx.send(AppEvent::SessionClosed { id }).await;
+}
