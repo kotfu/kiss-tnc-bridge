@@ -1511,6 +1511,24 @@ TCP (`wlan0:8001` with an `allow` list):
   `eprintln!`); tokio-serial's flush is a blocking `tcdrain()`, which hung
   KISS init on the deaf radio with no timeout able to fire; and closing a
   port with unsent output blocked for the tty's 30 s closing wait.
+- **Stopping the daemon**: apps over TCP notice at once, even after
+  SIGKILL. Over BLE, BlueZ keeps a phone's link up when the daemon's GATT
+  service goes away, so aprs.fi stayed "Connected" to nothing. A stopping
+  `ble-server` port now drops its phones' links (aprs.fi shows "Searching"
+  within a second or two and reconnects about a second after a restart).
+  After a SIGKILL the restarted daemon drops the links of the phones the
+  old one served, listed in the runtime directory (the unit now has
+  `RuntimeDirectoryPreserve=restart`), and the iPad reconnected on its own.
+- **Phone pairing never worked, in 0.5 either.** A Bluetooth trace showed
+  BlueZ reading a protected attribute on the iPad, the iPad starting a
+  Just Works pairing, and bluetoothd asking the default agent's
+  `RequestAuthorization`, which bluer's callback-less agent rejects. So
+  phones prompted on every connection, stalled 10–15 s while retrying,
+  and showed up under a new private address each time. The daemon now
+  registers its own `NoInputNoOutput` agent over D-Bus (bluer would make an
+  authorization callback `DisplayYesNo`), authorizing LE devices with
+  random addresses only. The iPad bonded with one prompt and reconnects
+  without one, across daemon restarts.
 
 Still to check by hand, with the matrix: the other rows and scenarios
 (Pi Zero 2 W, Pat, a serial TNC, a Pi as the Wi-Fi AP, cold start with the

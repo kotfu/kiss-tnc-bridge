@@ -68,6 +68,17 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   `/dev/ttyACM0`, and serial devices that aren't present.
 - A udev rule that keeps ModemManager away from the TH-D75's USB port.
 
+### Fixed
+
+- Phones bond with the bridge: pairing used to fail every time (the
+  daemon's agent refused the authorization bluetoothd asks for), so
+  phones were asked to pair on every connection and could take 10-15 s
+  to connect. Now they're asked once.
+- When the daemon stops, phones connected over BLE are disconnected, so
+  apps like aprs.fi notice instead of staying "connected" to nothing.
+  After a crash, the restarted daemon disconnects the phones the old one
+  left connected, so they reconnect to it.
+
 ## 0.5.1 (30 May 2026)
 
 ### Fixed
