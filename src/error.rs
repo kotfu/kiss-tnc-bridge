@@ -30,4 +30,6 @@ pub enum Error {
     #[error("KISS frame error: {0}")]
     #[allow(dead_code)]
     KissFrame(String),
+    #[error("link closed by peer")]
+    LinkClosed,
 }

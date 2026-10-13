@@ -13,24 +13,39 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-#[cfg(target_os = "linux")]
-mod ble;
-mod bridge;
-mod config;
-mod error;
-mod kiss;
+use std::path::{Path, PathBuf};
 
 use clap::Parser;
+use kiss_tnc_bridge::{config, error};
 use tracing_subscriber::EnvFilter;
 
-#[derive(Parser)]
-#[command(version, about = "Bridge BLE KISS TNCs to TCP KISS TNCs")]
-struct Cli {
-    /// Path to config file
-    #[arg(short, long, default_value = "/etc/kiss-tnc-bridge.conf")]
-    config: String,
+const DEFAULT_CONFIG_DIR: &str = "/etc/kiss-tnc-bridge";
+const DEFAULT_STATE_DIR: &str = "/var/lib/kiss-tnc-bridge";
+const DEFAULT_RUNTIME_DIR: &str = "/run/kiss-tnc-bridge";
+const LOCK_FILE_NAME: &str = "kiss-tnc-bridge.lock";
 
-    /// Parse the config file and exit (0 = valid, 1 = error)
+#[derive(Parser)]
+#[command(
+    version,
+    about = "KISS switchboard: bridges a KISS TNC to apps over BLE and TCP"
+)]
+struct Cli {
+    /// Main config file; conf.d/ next to it is read too
+    /// [default: $CONFIGURATION_DIRECTORY/kiss-tnc-bridge.toml, else /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml]
+    #[arg(short, long, value_name = "FILE")]
+    config: Option<PathBuf>,
+
+    /// Directory for state that persists across restarts
+    /// [default: $STATE_DIRECTORY, else /var/lib/kiss-tnc-bridge]
+    #[arg(long, value_name = "DIR")]
+    state_dir: Option<PathBuf>,
+
+    /// Directory for the lock file and control socket
+    /// [default: $RUNTIME_DIRECTORY, else /run/kiss-tnc-bridge]
+    #[arg(long, value_name = "DIR")]
+    runtime_dir: Option<PathBuf>,
+
+    /// Check the config, print the effective bridges and exit (0 = valid, 1 = errors)
     #[arg(short = 't', long = "test-config")]
     test_config: bool,
 
@@ -39,59 +54,197 @@ struct Cli {
     debug: u8,
 }
 
-/// Try to acquire a global exclusive lock to prevent multiple instances.
-/// Returns the open `File` handle (which must be kept alive to hold
-/// the lock) or an error message if another instance is already running.
-fn acquire_instance_lock() -> Result<std::fs::File, String> {
+/// A directory from a systemd `*Directory=` environment variable, else the
+/// default. systemd may list several directories separated by ':'; the
+/// first is ours.
+fn dir_from_env(var: &str, default: &str) -> PathBuf {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.split(':').next().map(str::to_string))
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(default))
+}
+
+/// Take the exclusive instance lock in the runtime directory. The returned
+/// file must stay open for the lifetime of the process; the lock goes away
+/// with it, including on crashes and SIGKILL.
+fn acquire_instance_lock(runtime_dir: &Path) -> Result<std::fs::File, String> {
     use std::fs::File;
 
-    const LOCK_PATH: &str = "/run/kiss-tnc-bridge.lock";
-
-    let file = File::create(LOCK_PATH)
-        .map_err(|e| format!("cannot create lock file '{LOCK_PATH}': {e}"))?;
+    std::fs::create_dir_all(runtime_dir).map_err(|e| {
+        format!(
+            "cannot create runtime directory '{}': {e}",
+            runtime_dir.display()
+        )
+    })?;
+    let lock_path = runtime_dir.join(LOCK_FILE_NAME);
+    let file = File::create(&lock_path)
+        .map_err(|e| format!("cannot create lock file '{}': {e}", lock_path.display()))?;
 
     // LOCK_EX = exclusive, LOCK_NB = non-blocking (fail immediately)
-    let rc = unsafe { libc::flock(std::os::unix::io::AsRawFd::as_raw_fd(&file), libc::LOCK_EX | libc::LOCK_NB) };
+    let rc = unsafe {
+        libc::flock(
+            std::os::unix::io::AsRawFd::as_raw_fd(&file),
+            libc::LOCK_EX | libc::LOCK_NB,
+        )
+    };
     if rc != 0 {
         let err = std::io::Error::last_os_error();
         if err.kind() == std::io::ErrorKind::WouldBlock {
-            return Err(
-                "another kiss-tnc-bridge instance is already running".into()
-            );
+            return Err(format!(
+                "another instance of kiss-tnc-bridge is already running (lock held on '{}')",
+                lock_path.display()
+            ));
         }
-        return Err(format!("failed to acquire lock '{LOCK_PATH}': {err}"));
+        return Err(format!(
+            "failed to acquire lock '{}': {err}",
+            lock_path.display()
+        ));
     }
 
     Ok(file)
 }
 
+/// An adapter as the user named it: `dongle (AC:A7:…)` when an
+/// `[[adapter]]` id covers the MAC, otherwise the MAC or hciN itself.
+fn describe_adapter(cfg: &config::Config, sel: &config::AdapterSel) -> String {
+    if let config::AdapterSel::Mac(mac) = sel
+        && let Some(a) = cfg.adapters.iter().find(|a| a.mac == *mac)
+    {
+        return format!("{} ({mac})", a.id);
+    }
+    sel.to_string()
+}
+
+fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
+    match &p.kind {
+        config::PortKind::TcpClient {
+            host,
+            port,
+            connect,
+            idle_timeout,
+        } => {
+            let mut s = format!("{host}:{port}");
+            if *connect == config::ConnectPolicy::Always {
+                s.push_str(", connect always");
+            }
+            if !idle_timeout.is_zero() {
+                s.push_str(&format!(", idle timeout {}s", idle_timeout.as_secs()));
+            }
+            s
+        }
+        config::PortKind::TcpServer {
+            listen,
+            max_clients,
+            allow,
+            announce,
+        } => {
+            let mut s = format!("listen {listen}");
+            if let Some(m) = max_clients {
+                s.push_str(&format!(", max {m} clients"));
+            }
+            if !allow.is_empty() {
+                s.push_str(&format!(
+                    ", allow {}",
+                    allow
+                        .iter()
+                        .map(|n| n.to_string())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                ));
+            }
+            if *announce {
+                s.push_str(", announced");
+            }
+            s
+        }
+        config::PortKind::BleServer {
+            adapter,
+            max_clients,
+        } => {
+            let noun = if *max_clients == 1 {
+                "client"
+            } else {
+                "clients"
+            };
+            format!(
+                "{}, max {max_clients} {noun}",
+                describe_adapter(cfg, adapter)
+            )
+        }
+    }
+}
+
+fn print_summary(cfg: &config::Config, report: &config::Report) {
+    println!(
+        "config ok: {} bridge(s), {} adapter(s), {} warning(s)",
+        cfg.bridges.len(),
+        cfg.adapters.len(),
+        report.warnings.len()
+    );
+    for a in &cfg.adapters {
+        println!("  adapter {:<10} {}  ({})", a.id, a.mac, a.source);
+    }
+    for b in &cfg.bridges {
+        println!(
+            "  {:<10} {:<28} {:<8} ({})",
+            b.id,
+            format!("\"{}\"", b.name),
+            if b.enabled { "enabled" } else { "disabled" },
+            b.source
+        );
+        if b.public_name != b.name {
+            println!("    public name \"{}\"", b.public_name);
+        }
+        for p in &b.ports {
+            println!(
+                "    {:<10} {:<11} {:<4} {}",
+                p.id,
+                p.type_name(),
+                p.role,
+                describe_port(cfg, p)
+            );
+        }
+    }
+    for w in &report.warnings {
+        println!("warning: {w}");
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    let cfg = match config::Config::load(&cli.config) {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            eprintln!("error: {e}");
+    let config_file = cli.config.clone().unwrap_or_else(|| {
+        dir_from_env("CONFIGURATION_DIRECTORY", DEFAULT_CONFIG_DIR)
+            .join(config::load::MAIN_FILE_NAME)
+    });
+    let state_dir = cli
+        .state_dir
+        .clone()
+        .unwrap_or_else(|| dir_from_env("STATE_DIRECTORY", DEFAULT_STATE_DIR));
+    let runtime_dir = cli
+        .runtime_dir
+        .clone()
+        .unwrap_or_else(|| dir_from_env("RUNTIME_DIRECTORY", DEFAULT_RUNTIME_DIR));
+
+    let (cfg, report) = match config::load_all(&config_file, true) {
+        Ok(x) => x,
+        Err(problems) => {
+            for p in &problems {
+                eprintln!("error: {p}");
+            }
+            eprintln!("{}: {} error(s)", config_file.display(), problems.len());
             std::process::exit(1);
         }
     };
 
     if cli.test_config {
-        println!("config ok: {} TNC(s) defined", cfg.tncs.len());
-        for tnc in &cfg.tncs {
-            println!(
-                "  [{}] {}:{} (max {} clients)",
-                tnc.name, tnc.host, tnc.port, tnc.max_clients
-            );
-        }
+        print_summary(&cfg, &report);
         std::process::exit(0);
     }
 
-    // Acquire an exclusive lock on the config file to prevent multiple
-    // instances from running with the same configuration.  The lock is
-    // held for the lifetime of the process and released automatically
-    // on exit (including crashes and SIGKILL).
-    let _lock_file = match acquire_instance_lock() {
+    let _lock_file = match acquire_instance_lock(&runtime_dir) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("error: {e}");
@@ -107,19 +260,26 @@ fn main() {
 
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
-        .with_env_filter(
-            EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
-    tracing::info!("kiss-tnc-bridge starting");
-    for tnc in &cfg.tncs {
+    tracing::info!(
+        config = %config_file.display(),
+        state_dir = %state_dir.display(),
+        runtime_dir = %runtime_dir.display(),
+        "kiss-tnc-bridge starting"
+    );
+    for w in &report.warnings {
+        tracing::warn!("{w}");
+    }
+    for b in &cfg.bridges {
         tracing::info!(
-            name = tnc.name,
-            host = tnc.host,
-            port = tnc.port,
-            max_clients = tnc.max_clients,
-            "configured TNC"
+            bridge = %b.id,
+            name = %b.name,
+            enabled = b.enabled,
+            ports = b.ports.len(),
+            source = %b.source,
+            "configured bridge"
         );
     }
 
@@ -132,13 +292,18 @@ fn main() {
     });
 }
 
-async fn run(_cfg: config::Config) -> Result<(), error::Error> {
+// The 0.5 adapter supervisor and bridge manager, driven from the new config
+// until the Phase 1 bridge core, ports and reconciler replace them. Not worth
+// polishing: it goes away whole.
+#[allow(clippy::collapsible_if, clippy::map_entry, clippy::extend_with_drain)]
+async fn run(cfg: config::Config) -> Result<(), error::Error> {
     #[cfg(not(target_os = "linux"))]
     {
-        tracing::error!("BLE support requires Linux — this build can only test config and KISS/TCP layers");
-        return Err(error::Error::Config(
-            "BLE support requires Linux".into(),
-        ));
+        let _ = &cfg;
+        tracing::error!(
+            "BLE support requires Linux — this build can only test config and KISS/TCP layers"
+        );
+        Err(error::Error::Config("BLE support requires Linux".into()))
     }
 
     #[cfg(target_os = "linux")]
@@ -146,18 +311,20 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         use std::collections::HashMap;
         use std::time::Duration;
 
-        use crate::ble::gatt;
-        use crate::bridge::manager::BridgeManager;
         use futures::StreamExt;
+        use kiss_tnc_bridge::ble::gatt;
+        use kiss_tnc_bridge::bridge::manager::BridgeManager;
+        use kiss_tnc_bridge::config::legacy::TncConfig;
+        use kiss_tnc_bridge::config::{AdapterSel, PortKind};
         use tokio::sync::mpsc;
 
         // Events flowing from adapter monitors and session watcher into
         // the supervisor loop.
         enum SupervisorEvent {
-            AdapterAdded(String),
-            AdapterRemoved(String),
-            AdapterPoweredOff(String),
-            AdapterPoweredOn(String),
+            Added(String),
+            Removed(String),
+            PoweredOff(String),
+            PoweredOn(String),
         }
 
         // GATT application + bridge manager tasks for one adapter.
@@ -180,7 +347,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
         async fn setup_bridge(
             session: &bluer::Session,
             adapter_name: &str,
-            tncs: &[config::TncConfig],
+            tncs: &[TncConfig],
         ) -> Result<BridgeState, error::Error> {
             let adapter = session.adapter(adapter_name)?;
             adapter.set_powered(true).await.map_err(|e| {
@@ -252,10 +419,10 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                 while let Some(evt) = events.next().await {
                     let msg = match evt {
                         AdapterEvent::PropertyChanged(AdapterProperty::Powered(false)) => {
-                            Some(SupervisorEvent::AdapterPoweredOff(adapter_name.clone()))
+                            Some(SupervisorEvent::PoweredOff(adapter_name.clone()))
                         }
                         AdapterEvent::PropertyChanged(AdapterProperty::Powered(true)) => {
-                            Some(SupervisorEvent::AdapterPoweredOn(adapter_name.clone()))
+                            Some(SupervisorEvent::PoweredOn(adapter_name.clone()))
                         }
                         _ => None,
                     };
@@ -299,8 +466,8 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
             tokio::pin!(session_events);
             while let Some(evt) = session_events.next().await {
                 let msg = match evt {
-                    SessionEvent::AdapterAdded(name) => SupervisorEvent::AdapterAdded(name),
-                    SessionEvent::AdapterRemoved(name) => SupervisorEvent::AdapterRemoved(name),
+                    SessionEvent::AdapterAdded(name) => SupervisorEvent::Added(name),
+                    SessionEvent::AdapterRemoved(name) => SupervisorEvent::Removed(name),
                 };
                 if tx.send(msg).await.is_err() {
                     break;
@@ -308,43 +475,99 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
             }
         });
 
-        // ── Resolve adapter names ────────────────────────────────────
+        // ── Map bridges onto the 0.5 bridge manager ──────────────────
+        // Temporary, until the Phase 1 bridge core and ports land: each
+        // enabled bridge with a tcp-client TNC port becomes one 0.5 "TNC"
+        // per ble-server port. tcp-server ports aren't served yet.
 
         let available = session.adapter_names().await.unwrap_or_default();
-
-        let resolved_default: Option<String> = if let Some(ref name) = _cfg.global.adapter {
-            if !available.is_empty() && !available.contains(name) {
-                tracing::warn!(
-                    adapter = %name,
-                    available = ?available,
-                    "configured Bluetooth adapter not found, waiting for it to appear"
-                );
+        let mut by_mac: HashMap<kiss_tnc_bridge::config::Mac, String> = HashMap::new();
+        for name in &available {
+            if let Ok(a) = session.adapter(name)
+                && let Ok(addr) = a.address().await
+            {
+                by_mac.insert(kiss_tnc_bridge::config::Mac(addr.0), name.clone());
             }
-            Some(name.clone())
-        } else if !available.is_empty() {
-            tracing::debug!(adapter = %available[0], "using default Bluetooth adapter");
-            Some(available[0].clone())
-        } else {
-            None
+        }
+        let hci_for = |sel: &AdapterSel| -> Result<Option<String>, String> {
+            match sel {
+                AdapterSel::Default => Ok(None),
+                AdapterSel::Hci(h) => Ok(Some(h.clone())),
+                AdapterSel::Mac(m) => by_mac
+                    .get(m)
+                    .cloned()
+                    .map(Some)
+                    .ok_or_else(|| format!("adapter {m} is not present")),
+            }
         };
 
-        // Group TNCs by their effective adapter.  TNCs whose adapter
-        // cannot be resolved yet (no adapter configured and none
-        // available) go into a pending list and get assigned to the
-        // first adapter that appears.
-        let mut tncs_by_adapter: HashMap<String, Vec<config::TncConfig>> = HashMap::new();
-        let mut unresolved_tncs: Vec<config::TncConfig> = Vec::new();
-
-        for tnc in &_cfg.tncs {
-            match tnc.adapter.as_ref().or(resolved_default.as_ref()) {
-                Some(name) => {
-                    tncs_by_adapter
-                        .entry(name.clone())
-                        .or_default()
-                        .push(tnc.clone());
+        let resolved_default: Option<String> = match hci_for(&cfg.global.adapter) {
+            Ok(Some(name)) => {
+                if !available.contains(&name) {
+                    tracing::warn!(
+                        adapter = %name,
+                        available = ?available,
+                        "configured Bluetooth adapter not found, waiting for it to appear"
+                    );
                 }
-                None => {
-                    unresolved_tncs.push(tnc.clone());
+                Some(name)
+            }
+            Ok(None) => {
+                if let Some(first) = available.first() {
+                    tracing::debug!(adapter = %first, "using default Bluetooth adapter");
+                }
+                available.first().cloned()
+            }
+            Err(e) => {
+                tracing::warn!("[global] adapter: {e}; using the default adapter");
+                available.first().cloned()
+            }
+        };
+
+        let mut tncs_by_adapter: HashMap<String, Vec<TncConfig>> = HashMap::new();
+        let mut unresolved_tncs: Vec<TncConfig> = Vec::new();
+
+        for b in cfg.bridges.iter().filter(|b| b.enabled) {
+            let tnc_endpoint = b.tnc_ports().find_map(|p| match &p.kind {
+                PortKind::TcpClient { host, port, .. } => Some((host.clone(), *port)),
+                _ => None,
+            });
+            let Some((host, port)) = tnc_endpoint else {
+                tracing::warn!(bridge = %b.id, "the TNC port isn't a tcp-client; not supported yet, skipping this bridge");
+                continue;
+            };
+            for p in b.app_ports() {
+                match &p.kind {
+                    PortKind::BleServer {
+                        adapter,
+                        max_clients,
+                    } => {
+                        let tnc = TncConfig {
+                            name: b.public_name.clone(),
+                            host: host.clone(),
+                            port,
+                            max_clients: *max_clients as usize,
+                            adapter: None,
+                        };
+                        match hci_for(adapter) {
+                            Ok(Some(name)) => tncs_by_adapter.entry(name).or_default().push(tnc),
+                            Ok(None) => match &resolved_default {
+                                Some(name) => {
+                                    tncs_by_adapter.entry(name.clone()).or_default().push(tnc)
+                                }
+                                None => unresolved_tncs.push(tnc),
+                            },
+                            Err(e) => {
+                                tracing::warn!(bridge = %b.id, port = %p.id, "{e}; skipping this port");
+                            }
+                        }
+                    }
+                    PortKind::TcpServer { .. } => {
+                        tracing::warn!(bridge = %b.id, port = %p.id, "tcp-server ports aren't implemented yet; skipping");
+                    }
+                    PortKind::TcpClient { .. } => {
+                        tracing::warn!(bridge = %b.id, port = %p.id, "a tcp-client app port isn't implemented yet; skipping");
+                    }
                 }
             }
         }
@@ -372,14 +595,11 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
             // Spawn a power-state monitor for this adapter.
             if let Ok(adapter) = session.adapter(&adapter_name) {
-                let monitor =
-                    spawn_adapter_monitor(adapter, adapter_name.clone(), sv_tx.clone());
+                let monitor = spawn_adapter_monitor(adapter, adapter_name.clone(), sv_tx.clone());
                 active_monitors.insert(adapter_name.clone(), monitor);
             }
 
-            match setup_bridge(&session, &adapter_name, &tncs_by_adapter[&adapter_name])
-                .await
-            {
+            match setup_bridge(&session, &adapter_name, &tncs_by_adapter[&adapter_name]).await {
                 Ok(state) => {
                     active_bridges.insert(adapter_name, state);
                 }
@@ -401,7 +621,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
             tokio::select! {
                 event = sv_rx.recv() => {
                     match event {
-                        Some(SupervisorEvent::AdapterAdded(name)) => {
+                        Some(SupervisorEvent::Added(name)) => {
                             // Assign any unresolved TNCs to this adapter.
                             if !unresolved_tncs.is_empty()
                                 && !tncs_by_adapter.contains_key(&name)
@@ -418,15 +638,11 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
 
                             if let Some(tncs) = tncs_by_adapter.get(&name) {
                                 // Start a power monitor if we don't have one.
-                                if !active_monitors.contains_key(&name) {
-                                    if let Ok(adapter) = session.adapter(&name) {
-                                        let monitor = spawn_adapter_monitor(
-                                            adapter,
-                                            name.clone(),
-                                            sv_tx.clone(),
-                                        );
-                                        active_monitors.insert(name.clone(), monitor);
-                                    }
+                                if let std::collections::hash_map::Entry::Vacant(slot) =
+                                    active_monitors.entry(name.clone())
+                                    && let Ok(adapter) = session.adapter(&name)
+                                {
+                                    slot.insert(spawn_adapter_monitor(adapter, name.clone(), sv_tx.clone()));
                                 }
 
                                 if !active_bridges.contains_key(&name) {
@@ -452,7 +668,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                             }
                         }
 
-                        Some(SupervisorEvent::AdapterRemoved(name)) => {
+                        Some(SupervisorEvent::Removed(name)) => {
                             if let Some(state) = active_bridges.remove(&name) {
                                 tracing::warn!(
                                     adapter = %name,
@@ -466,7 +682,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                             active_monitors.remove(&name);
                         }
 
-                        Some(SupervisorEvent::AdapterPoweredOff(name)) => {
+                        Some(SupervisorEvent::PoweredOff(name)) => {
                             if let Some(state) = active_bridges.remove(&name) {
                                 tracing::warn!(
                                     adapter = %name,
@@ -479,7 +695,7 @@ async fn run(_cfg: config::Config) -> Result<(), error::Error> {
                             // the adapter powers back on.
                         }
 
-                        Some(SupervisorEvent::AdapterPoweredOn(name)) => {
+                        Some(SupervisorEvent::PoweredOn(name)) => {
                             if let Some(tncs) = tncs_by_adapter.get(&name) {
                                 if !active_bridges.contains_key(&name) {
                                     tracing::warn!(

@@ -54,10 +54,10 @@ impl KissReassemblyBuffer {
 
         for i in 0..self.buf.len() {
             if self.buf[i] == FEND {
-                if let Some(s) = frame_start {
-                    if i > s {
-                        frames.push(self.buf[s..i].to_vec());
-                    }
+                if let Some(s) = frame_start
+                    && i > s
+                {
+                    frames.push(self.buf[s..i].to_vec());
                 }
                 frame_start = Some(i + 1);
                 last_consumed = i + 1;
@@ -136,7 +136,8 @@ mod tests {
     #[test]
     fn partial_frame_retained() {
         let mut buf = KissReassemblyBuffer::new(4096);
-        buf.push(&[FEND, 0x00, 0xAA, FEND, FEND, 0x00, 0xBB]).unwrap();
+        buf.push(&[FEND, 0x00, 0xAA, FEND, FEND, 0x00, 0xBB])
+            .unwrap();
         let frames = buf.drain_frames();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0], vec![0x00, 0xAA]);

@@ -1,0 +1,49 @@
+# kiss-tnc-bridge configuration
+#
+# This is /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml. More bridges can go in
+# /etc/kiss-tnc-bridge/conf.d/*.toml, conventionally one bridge per file.
+# Check everything with:  kiss-tnc-bridge -t
+#
+# A bridge connects one KISS TNC to any number of apps. Each bridge has one
+# TNC port (where the radio or software TNC is) and one or more app ports
+# (where apps attach, over BLE or TCP).
+
+[global]
+# Log level: trace, debug, info, warn, error
+log_level = "info"
+
+# Default Bluetooth adapter for ble-server ports: an [[adapter]] id, a MAC,
+# or hciN. Leave it out to use the first adapter BlueZ has.
+# adapter = "builtin"
+
+# Give adapters readable ids. hciN numbers can change when a dongle is
+# plugged in; MACs don't.
+# [[adapter]]
+# id = "builtin"
+# mac = "B8:27:EB:12:34:56"
+
+# A software TNC such as Dire Wolf or Graywolf, shared to phones over BLE and
+# to apps on this machine over TCP.
+# [[bridge]]
+# id = "ktbr0"
+# name = "Graywolf"            # what phones see; must be unique
+# enabled = true
+#
+#   [[bridge.port]]
+#   id = "tnc"
+#   type = "tcp-client"
+#   address = "127.0.0.1:6700"
+#
+#   [[bridge.port]]
+#   id = "phones"
+#   type = "ble-server"
+#   # adapter = "builtin"
+#   max_clients = 2           # many Bluetooth chips can only serve one
+#
+#   [[bridge.port]]
+#   id = "local"
+#   type = "tcp-server"
+#   listen = "8001"           # a TCP port number alone binds 127.0.0.1
+#   # listen = "wlan0:8001"   # or only on one interface
+#   # allow = ["192.168.4.0/24"]
+#   # Anyone who can reach a tcp-server can transmit under your callsign.

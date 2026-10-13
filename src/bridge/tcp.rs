@@ -13,70 +13,47 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-// Used by Linux-only bridge manager and tests; appears unused on other platforms.
+// Used by the Linux-only bridge manager and tests; appears unused elsewhere.
 #![allow(dead_code)]
 
+//! The 0.5 TCP KISS client, now a thin wrapper over
+//! [`KissConnection`](crate::port::stream::KissConnection). It goes away
+//! with the old bridge manager.
+
 use crate::error::Error;
-use crate::kiss::buffer::KissReassemblyBuffer;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::port::stream::KissConnection;
 use tokio::net::TcpStream;
 
 pub struct TcpKissConnection {
-    read_half: tokio::io::ReadHalf<TcpStream>,
-    write_half: tokio::io::WriteHalf<TcpStream>,
-    reassembly: KissReassemblyBuffer,
-    pending_frames: Vec<Vec<u8>>,
+    conn: KissConnection<TcpStream>,
 }
 
 impl TcpKissConnection {
     pub async fn connect(host: &str, port: u16) -> Result<Self, Error> {
-        let stream = TcpStream::connect((host, port)).await.map_err(|e| {
-            Error::TcpConnect(format!("{host}:{port}: {e}"))
-        })?;
-        let (read_half, write_half) = tokio::io::split(stream);
+        let stream = TcpStream::connect((host, port))
+            .await
+            .map_err(|e| Error::TcpConnect(format!("{host}:{port}: {e}")))?;
         Ok(Self {
-            read_half,
-            write_half,
-            reassembly: KissReassemblyBuffer::new(8192),
-            pending_frames: Vec::new(),
+            conn: KissConnection::new(stream),
         })
     }
 
-    /// Read the next complete KISS frame from TCP.
-    /// Returns the raw frame bytes (between FEND delimiters).
-    /// Blocks until a complete frame is available or the connection drops.
+    /// Read the next complete KISS frame: the raw bytes between FENDs.
     pub async fn read_frame(&mut self) -> Result<Vec<u8>, Error> {
-        loop {
-            if !self.pending_frames.is_empty() {
-                return Ok(self.pending_frames.remove(0));
-            }
-            let mut frames = self.reassembly.drain_frames();
-            if !frames.is_empty() {
-                let first = frames.remove(0);
-                self.pending_frames = frames;
-                return Ok(first);
-            }
-            let mut buf = [0u8; 1024];
-            let n = self.read_half.read(&mut buf).await?;
-            if n == 0 {
-                return Err(Error::TcpConnect("connection closed".into()));
-            }
-            self.reassembly.push(&buf[..n])?;
-        }
+        self.conn.read_frame().await
     }
 
     /// Send raw KISS frame bytes (already FEND-delimited) to TCP.
     pub async fn write_frame(&mut self, frame_bytes: &[u8]) -> Result<(), Error> {
-        self.write_half.write_all(frame_bytes).await?;
-        Ok(())
+        self.conn.write_bytes(frame_bytes).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kiss::frame::{KissFrame, FEND};
-    use tokio::io::AsyncWriteExt;
+    use crate::kiss::frame::{FEND, KissFrame};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
     #[tokio::test]

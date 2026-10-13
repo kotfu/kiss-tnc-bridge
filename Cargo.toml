@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-configparser = "3"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -16,6 +15,9 @@ thiserror = "2"
 futures = "0.3"
 libc = "0.2"
 uuid = "1"
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.8"
+ipnet = "2.12.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd"] }

@@ -20,7 +20,7 @@ use bluer::gatt::local::{
 };
 use uuid::Uuid;
 
-use crate::config::TncConfig;
+use crate::config::legacy::TncConfig;
 
 const KISS_SERVICE_UUID: Uuid = Uuid::from_u128(0x00000001_ba2a_46c9_ae49_01b0961f68bb);
 const KISS_TX_CHAR_UUID: Uuid = Uuid::from_u128(0x00000002_ba2a_46c9_ae49_01b0961f68bb);

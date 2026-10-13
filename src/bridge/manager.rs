@@ -16,16 +16,16 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use bluer::adv::{Advertisement, AdvertisementHandle};
-use bluer::gatt::local::{CharacteristicControl, CharacteristicControlEvent};
-use bluer::gatt::CharacteristicWriter;
 use bluer::Address;
+use bluer::adv::{Advertisement, AdvertisementHandle};
+use bluer::gatt::CharacteristicWriter;
+use bluer::gatt::local::{CharacteristicControl, CharacteristicControlEvent};
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
 use crate::ble::session::BleClientSession;
 use crate::bridge::tcp::TcpKissConnection;
-use crate::config::TncConfig;
+use crate::config::legacy::TncConfig;
 use crate::error::Error;
 use crate::kiss::frame::FEND;
 
@@ -96,9 +96,9 @@ impl BridgeManager {
     async fn start_advertising(&self) -> Result<AdvertisementHandle, Error> {
         let adv = Advertisement {
             advertisement_type: bluer::adv::Type::Peripheral,
-            service_uuids: vec![
-                uuid::Uuid::from_u128(0x00000001_ba2a_46c9_ae49_01b0961f68bb),
-            ]
+            service_uuids: vec![uuid::Uuid::from_u128(
+                0x00000001_ba2a_46c9_ae49_01b0961f68bb,
+            )]
             .into_iter()
             .collect(),
             local_name: Some(self.config.name.clone()),
@@ -115,8 +115,7 @@ impl BridgeManager {
         let mut writers: HashMap<Address, mpsc::Sender<Vec<u8>>> = HashMap::new();
         let mut tcp: Option<TcpKissConnection> = None;
         let mut tcp_reconnect_delay = Duration::from_secs(1);
-        let mut adv_handle: Option<AdvertisementHandle> =
-            Some(self.start_advertising().await?);
+        let mut adv_handle: Option<AdvertisementHandle> = Some(self.start_advertising().await?);
 
         let (ble_event_tx, mut ble_event_rx) = mpsc::channel::<BleEvent>(64);
 
@@ -353,20 +352,16 @@ impl BridgeManager {
                             // Only remove the writer if the channel is
                             // actually dead — guards against a reconnect
                             // that already replaced the sender.
-                            let writer_dead = writers
-                                .get(&addr)
-                                .map_or(true, |s| s.is_closed());
+                            let writer_dead = writers.get(&addr).is_none_or(|s| s.is_closed());
                             if writer_dead {
                                 writers.remove(&addr);
                             }
-                            if clients.is_empty() && writers.is_empty() {
-                                if tcp.is_some() {
-                                    tracing::info!(
-                                        tnc = tnc_name,
-                                        "last client disconnected, closing TCP"
-                                    );
-                                    tcp = None;
-                                }
+                            if clients.is_empty() && writers.is_empty() && tcp.is_some() {
+                                tracing::info!(
+                                    tnc = tnc_name,
+                                    "last client disconnected, closing TCP"
+                                );
+                                tcp = None;
                             }
                             // Resume advertising if we now have capacity.
                             if writers.len() < self.config.max_clients
@@ -486,7 +481,11 @@ impl BridgeManager {
                         hex = %Hex(&buf[..n]),
                         "BLE fragment received"
                     );
-                    if tx.send(BleEvent::Data(addr, buf[..n].to_vec())).await.is_err() {
+                    if tx
+                        .send(BleEvent::Data(addr, buf[..n].to_vec()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -550,7 +549,7 @@ impl BridgeManager {
         tnc_name: String,
     ) {
         let mtu = writer.mtu();
-        let chunk_size = if mtu > 0 { mtu as usize } else { 20 };
+        let chunk_size = if mtu > 0 { mtu } else { 20 };
 
         let exit_reason = loop {
             tokio::select! {
@@ -562,7 +561,7 @@ impl BridgeManager {
                                 addr = %addr,
                                 len = frame_bytes.len(),
                                 mtu = chunk_size,
-                                chunks = (frame_bytes.len() + chunk_size - 1) / chunk_size,
+                                chunks = frame_bytes.len().div_ceil(chunk_size),
                                 "BLE TX: sending frame to client"
                             );
                             let mut failed = false;
