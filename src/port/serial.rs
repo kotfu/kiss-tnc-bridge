@@ -23,8 +23,11 @@
 //! polling later without a libudev dependency today.
 
 use std::path::Path;
+use std::pin::Pin;
+use std::task::{Context, Poll};
 
-use tokio_serial::{DataBits, FlowControl, Parity, SerialPortBuilderExt, StopBits};
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio_serial::{DataBits, FlowControl, Parity, SerialPortBuilderExt, SerialStream, StopBits};
 
 use crate::bridge::{ConnectFuture, Opened, TncConnector};
 use crate::config::{SerialDevice, TncModel};
@@ -52,6 +55,45 @@ pub fn connector(
     }
 }
 
+/// A serial port whose flush doesn't wait for the device.
+///
+/// tokio-serial's flush is `tcdrain()`, a blocking call that returns once
+/// the device has taken every byte written. A TNC that stops reading (a
+/// TH-D75 did, after its USB cable was plugged back in) leaves it blocked
+/// for good, holding a runtime thread, with no timeout able to fire.
+/// Bytes written are already in the kernel's queue, which is all the bridge
+/// needs; a device that doesn't take them shows up as writes that don't
+/// complete, which async code can time out.
+struct NoDrain(SerialStream);
+
+impl AsyncRead for NoDrain {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for NoDrain {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Poll::Ready(Ok(()))
+    }
+}
+
 impl TncConnector for SerialConnector {
     fn connect(&self) -> ConnectFuture {
         let tnc_id = self.tnc_id.clone();
@@ -67,7 +109,7 @@ impl TncConnector for SerialConnector {
             if !Path::new(&path).exists() {
                 return Err(absent());
             }
-            let mut port = tokio_serial::new(&path, baud)
+            let port = tokio_serial::new(&path, baud)
                 .data_bits(DataBits::Eight)
                 .parity(Parity::None)
                 .stop_bits(StopBits::One)
@@ -86,6 +128,7 @@ impl TncConnector for SerialConnector {
                     _ => Error::Connect(format!("tnc {tnc_id}: can't open {path}: {e}")),
                 })?;
             tracing::debug!(tnc = %tnc_id, path, baud, "serial device open");
+            let mut port = NoDrain(port);
             let out = tnc_init::init(&mut port, model, exit_kiss).await?;
             Ok(Opened {
                 link: Box::new(Prefixed::new(port, &out.frames)),

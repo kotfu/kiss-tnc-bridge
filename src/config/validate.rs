@@ -662,8 +662,13 @@ name = "TH-D75 USB"
             )
         ));
         assert!(!w.iter().any(|m| m.contains("can change")), "{w:?}");
-        // Presence is a host check.
-        let text = format!("{disabled_spp}{USB}");
+        // Presence is a host check, made with a path no host has (the
+        // D75's own path exists on a dev box with the radio plugged in).
+        let absent = disabled_spp.replace(
+            "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00",
+            "/dev/serial/by-id/usb-kiss-tnc-bridge-test-no-such-tnc-if00",
+        );
+        let text = format!("{absent}{USB}");
         let w: Vec<String> = validate(&cfg(&text), true)
             .warnings
             .iter()

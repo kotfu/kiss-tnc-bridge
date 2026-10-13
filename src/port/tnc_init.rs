@@ -46,6 +46,10 @@ use crate::kiss::frame::FEND;
 pub const KISS_RETURN: [u8; 3] = [FEND, 0xFF, FEND];
 /// How long to wait for a reply to a radio command.
 const REPLY_WAIT: Duration = Duration::from_secs(1);
+/// The most init may take: a TNC that stops answering or stops taking
+/// bytes fails the connect, and the next attempt opens the link afresh.
+/// The full TH-D7x sequence from KISS mode takes about 1.4 s.
+pub const INIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long the radio needs after leaving KISS mode before it takes commands.
 const AFTER_KISS_RETURN: Duration = Duration::from_millis(300);
 /// `?` means the radio is busy; ask again this many times, this far apart.
@@ -84,7 +88,17 @@ pub async fn init<S: AsyncRead + AsyncWrite + Unpin>(
             },
             ..Default::default()
         }),
-        TncModel::ThD7x => init_th_d7x(stream, exit_kiss_on_disconnect).await,
+        TncModel::ThD7x => tokio::time::timeout(
+            INIT_TIMEOUT,
+            init_th_d7x(stream, exit_kiss_on_disconnect),
+        )
+        .await
+        .map_err(|_| {
+            Error::Connect(format!(
+                "the TNC didn't finish KISS init in {}s (not answering, or not taking data)",
+                INIT_TIMEOUT.as_secs()
+            ))
+        })?,
     }
 }
 
@@ -208,6 +222,11 @@ impl<'a, S: AsyncRead + AsyncWrite + Unpin> Radio<'a, S> {
         loop {
             if let Some(r) = self.replies.pop_front() {
                 return Ok(Some(r));
+            }
+            // Checked here too: a read that's always ready (a stream of
+            // bytes that are never a reply) would otherwise win every time.
+            if tokio::time::Instant::now() >= deadline {
+                return Ok(None);
             }
             let n = match tokio::time::timeout_at(deadline, self.stream.read(&mut buf)).await {
                 Err(_) => return Ok(None),
@@ -515,6 +534,85 @@ mod tests {
             vec![vec![0x00, 0x41], vec![0x00, 0x42], vec![0x10, 0x43]]
         );
         assert_eq!(r.replies, ["BT 1", "?"]);
+    }
+
+    /// Takes no bytes at all, like a TNC whose USB input has stalled.
+    struct Stalled;
+
+    impl AsyncRead for Stalled {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for Stalled {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Pending
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_tnc_fails_init_in_time() {
+        let t0 = tokio::time::Instant::now();
+        let err = init(&mut Stalled, TncModel::ThD7x, false)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("didn't finish KISS init"), "{err}");
+        assert_eq!(t0.elapsed(), INIT_TIMEOUT);
+    }
+
+    /// Always has another byte, none of them a reply.
+    struct Chatty;
+
+    impl AsyncRead for Chatty {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            buf.put_slice(b"x");
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for Chatty {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            b: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Ok(b.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    // Real time: a read that's always ready never lets a paused clock move.
+    #[tokio::test]
+    async fn a_reply_wait_ends_even_while_bytes_keep_coming() {
+        let mut io = Chatty;
+        let mut r = Radio::new(&mut io);
+        let t0 = std::time::Instant::now();
+        assert_eq!(r.command("BT").await.unwrap(), None);
+        assert!(t0.elapsed() < REPLY_WAIT * 3, "{:?}", t0.elapsed());
     }
 
     #[test]
