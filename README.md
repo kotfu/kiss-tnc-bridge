@@ -4,8 +4,13 @@ A KISS switchboard: bridges one KISS TNC to any number of apps, over Bluetooth L
 
 Advertises Bluetooth Low Energy (BLE) General Attribute Profile (GATT) following
 the [BLE KISS API spec](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
-This allows APRS apps to connect via Bluetooth and utilize a TCP KISS TNC server
-provided by applications like:
+This allows APRS apps to connect via Bluetooth and use a KISS TNC, which can be:
+
+- the TNC built into a radio, such as the Kenwood TH-D74 or TH-D75, over
+  Bluetooth or its USB cable (a stand-in for the discontinued
+  [B.B. Link](https://github.com/islandmagic/bb-link/)),
+- a serial KISS TNC such as a NinoTNC or TNC-Pi,
+- or a TCP KISS TNC server provided by applications like:
 
 - [Dire Wolf](https://github.com/wb2osz/direwolf)
 - [Graywolf](https://github.com/chrissnell/graywolf)
@@ -33,11 +38,17 @@ Bluetooth?
 
 - "Just Works" BLE pairing: client devices don't require a code to pair and
   only prompt to pair one time.
-- Multiple TNC definitions, each advertised as a separate BLE GATT service
+- TNCs over Bluetooth Classic (SPP), USB or UART serial, and TCP. Kenwood
+  TH-D74/D75 radios are put in KISS mode automatically
+- Several bridges, each advertised as its own BLE service; disabled bridges
+  can be kept for other setups
+- Apps over TCP too, announced on the LAN with DNS-SD so they can find the
+  bridge by name
 - Multiple concurrent BLE clients (if hardware supports it) per TNC
 - Per-client KISS frame reassembly across BLE MTU boundaries
 - Bidirectional bridging: BLE clients receive all frames from the TNC
-- Automatic TCP reconnection with exponential backoff
+- Automatic TNC reconnection with exponential backoff, without disturbing
+  connected apps. A radio that's off, unpaired, or unplugged is waited for
 - Resilient to adapters going away: if a USB Bluetooth dongle is unplugged or a
   built-in adapter is powered off, the daemon keeps running and automatically
   resumes when the adapter becomes available again
@@ -134,17 +145,41 @@ A **bridge** connects one KISS TNC to any number of apps. It has an id
 where the TNC is, and one or more **app ports**, where apps attach. Bridges
 can be disabled and kept around for another setup.
 
+A hardware TNC, such as the one in a TH-D75, is defined once as a `[[tnc]]`
+with each way to reach it, and bridges refer to it by id:
+
+```toml
+[[tnc]]
+id = "d75"
+name = "TH-D75"
+model = "th-d75"
+spp = { address = "00:11:22:33:44:55" }      # Bluetooth; or [tnc.serial] for USB
+
+[[bridge]]
+id = "ktbr0"
+name = "TH-D75"
+
+  [[bridge.port]]
+  type = "spp-client"
+  tnc = "d75"
+
+  [[bridge.port]]
+  type = "ble-server"
+```
+
+A software TNC is reached over TCP, with no `[[tnc]]`:
+
 ```toml
 [global]
 log_level = "info"
-# adapter = "builtin"              # default adapter for ble-server ports
+# adapter = "builtin"              # default adapter for ble-server ports and TNCs
 
 [[adapter]]                        # a readable id for an adapter's MAC
 id = "builtin"
 mac = "B8:27:EB:12:34:56"
 
 [[bridge]]
-id = "ktbr0"
+id = "ktbr1"
 name = "Graywolf"
 enabled = true
 
@@ -172,7 +207,7 @@ enabled = true
 | Key | Default | Description |
 |-----|---------|-------------|
 | `log_level` | `info` | `trace`, `debug`, `info`, `warn`, `error` |
-| `adapter` | first adapter | Default Bluetooth adapter for `ble-server` ports: an `[[adapter]]` id, a MAC, or `hciN` |
+| `adapter` | first adapter | Default Bluetooth adapter for `ble-server` ports and TNCs: an `[[adapter]]` id, a MAC, or `hciN` |
 
 **`[[adapter]]`** gives an adapter's MAC a readable id. `hciN` numbers can
 change when a dongle is plugged in; MACs don't, so ids or MACs are the
@@ -183,13 +218,27 @@ reliable way to pick an adapter.
 | `id` | Lowercase letters, digits and `-`, at most 15 characters |
 | `mac` | The adapter's address, `XX:XX:XX:XX:XX:XX` (`bluetoothctl list` shows them) |
 
+**`[[tnc]]`** is a hardware KISS TNC and the ways to reach it. A TNC can be
+in only one enabled bridge, over whichever transport.
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `id` | required | Lowercase letters, digits and `-`, at most 15 characters |
+| `name` | the id | Human-friendly |
+| `model` | `none` | The KISS init the TNC gets when it connects: `th-d74` or `th-d75` (the same thing: put the radio's TNC in KISS mode), or `none` for TNCs that are always in KISS mode |
+| `spp.address` | | The TNC's Bluetooth address, for `spp-client` ports |
+| `spp.adapter` | `[global] adapter` | The adapter it's paired on. Pairings belong to one adapter |
+| `spp.channel` | found by SDP | An RFCOMM channel, only for devices whose SDP record is wrong |
+| `serial.path` | | The serial device, for `serial` ports. Use its `/dev/serial/by-id/` or `/dev/serial/by-path/` name: `/dev/ttyACM0` can change between boots |
+| `serial.baud` | `9600` | Ignored by USB radios; matters for real UARTs |
+
 **`[[bridge]]`**
 
 | Key | Default | Description |
 |-----|---------|-------------|
 | `id` | required | Unique, short and stable: `ktbr0`, `ktbr1`, … |
 | `name` | required | Human-friendly and unique; what phones see |
-| `public_name` | the name | The BLE advertised name, if it should differ from `name` |
+| `public_name` | the name | The BLE advertised name and DNS-SD name, if it should differ from `name` |
 | `enabled` | `true` | A disabled bridge holds no resources |
 | `app_params` | `pass` | `drop` stops apps from changing the TNC's KISS parameters (TXDELAY and friends) |
 
@@ -197,23 +246,58 @@ reliable way to pick an adapter.
 
 | Type | Role | Keys |
 |------|------|------|
-| `tcp-client` | TNC | `address` (`host:port` of a KISS TCP server such as Dire Wolf or Graywolf); `connect` (`on_demand`, the default: connect when the first app attaches; `always`); `idle_timeout` (how long to keep the TNC connected after the last app leaves, e.g. `"90s"`; default `0s`) |
+| `spp-client` | TNC | `tnc` (a `[[tnc]]` with an `spp` section); `connect`, `idle_timeout`, `exit_kiss_on_disconnect` (below) |
+| `serial` | TNC | `tnc` (a `[[tnc]]` with a `serial` section); `connect`, `idle_timeout`, `exit_kiss_on_disconnect` (below) |
+| `tcp-client` | TNC | `address` (`host:port` of a KISS TCP server such as Dire Wolf or Graywolf); `connect`, `idle_timeout` (below) |
 | `ble-server` | app | `adapter` (default: `[global] adapter`); `max_clients` (default `1`; many Bluetooth chips can't serve more, see below) |
-| `tcp-server` | app | `listen` (required: a TCP port number, which binds `127.0.0.1`, an `address:port`, or an `interface:port` such as `wlan0:8001`); `max_clients` (default: no limit); `allow` (a list of addresses or networks, e.g. `["192.168.4.0/24"]`; default: any peer that can reach the socket) |
+| `tcp-server` | app | `listen` (required: a TCP port number, which binds `127.0.0.1`, an `address:port`, or an `interface:port` such as `wlan0:8001`); `max_clients` (default: no limit); `allow` (a list of addresses or networks, e.g. `["192.168.4.0/24"]`; default: any peer that can reach the socket); `announce` (DNS-SD, default `true` except on loopback) |
 
 Every port may set `id` (default: the type plus an index, `ble-server0`) and
-`role` (`tnc` or `app`, normally implied by the type).
+`role` (`tnc` or `app`, normally implied by the type). TNC ports also take:
 
-KISS TCP has no authentication: anyone who can reach a `tcp-server` can
-transmit on your radio under your callsign. That is why a bare port number
-binds loopback, and why binding to `0.0.0.0` without an `allow` list gets a
-warning. Frames from apps are also filtered: the KISS "return" command
-(`C0 FF C0`), which takes some radios out of KISS mode, never reaches the TNC.
+| Key | Default | Description |
+|-----|---------|-------------|
+| `connect` | `on_demand` | `on_demand` connects the TNC when the first app attaches; `always` keeps it connected with no apps |
+| `idle_timeout` | `0s` | With `on_demand`, how long to keep the TNC connected after the last app leaves, e.g. `"90s"`. A Bluetooth link to a radio takes a few seconds to come up, so a minute or two avoids a slow reconnect when a phone briefly drops BLE |
+| `exit_kiss_on_disconnect` | `false` | `spp-client` and `serial`: take the TNC out of KISS mode when the bridge lets go of it (a TH-D75 goes back to APRS mode if that's how it was found). By default the radio stays in KISS mode |
+
+Frames from apps are filtered: the KISS "return" command (`C0 FF C0`), which
+takes radios like the TH-D75 out of KISS mode for every app, never reaches
+the TNC.
 
 When a `ble-server` port has `max_clients` connected, the daemon stops
 advertising until one leaves. Several bridges can be defined, but among the
 enabled ones a listen socket, a public name and a BLE adapter can each be
 used only once.
+
+### Sharing over the network
+
+**KISS over TCP has no authentication: anyone who can reach a `tcp-server`
+can transmit on your radio under your callsign.** That's why a bare TCP port
+number binds `127.0.0.1`, and why binding to `0.0.0.0` without an `allow`
+list gets a warning. To share a radio with a laptop on the Pi's Wi-Fi access
+point, bind to that interface and limit who may connect:
+
+```toml
+  [[bridge.port]]
+  id = "lan"
+  type = "tcp-server"
+  listen = "wlan0:8001"              # only on the access point's interface
+  allow = ["192.168.4.0/24"]         # only its clients
+```
+
+A `tcp-server` that isn't on loopback is announced on the LAN with DNS-SD
+(`_kiss-tnc._tcp`, following the
+[TCP KISS DNS-SD spec](https://github.com/hessu/aprs-specs/blob/master/TCP-KISS-DNS-SD.md)),
+so apps like aprs.fi on iOS can pick the bridge from a list. The name is the
+bridge's `public_name`, the same name its BLE advertisement uses. An
+interface binding is announced only on that interface. This needs Avahi,
+which Raspberry Pi OS runs; without it the daemon logs that once and carries
+on. If another device on the LAN already uses the name, the bridge takes the
+next one ("TH-D75 (2)") for DNS-SD and BLE alike, and keeps it across
+restarts in `/var/lib/kiss-tnc-bridge/state.toml`. Changing `public_name` in
+the config drops the adjustment. `avahi-browse -r _kiss-tnc._tcp` on Linux
+or `dns-sd -B _kiss-tnc._tcp` on a Mac shows what's announced.
 
 ### Validate config
 
@@ -221,10 +305,150 @@ used only once.
 $ kiss-tnc-bridge -t
 ```
 
-Prints the effective bridges with their source files, and warnings such as a
-`tcp-server` open to the whole network. Exits 0 if valid, 1 if there are
-errors. A leftover 0.5 config at `/etc/kiss-tnc-bridge.conf` is ignored with
+Prints the effective TNCs and bridges with their source files, and warnings
+such as a `tcp-server` open to the whole network, a TNC that isn't paired on
+its adapter, or a serial path that isn't stable. Exits 0 if valid, 1 if there
+are errors. A leftover 0.5 config at `/etc/kiss-tnc-bridge.conf` is ignored with
 a warning; it isn't migrated.
+
+
+## Kenwood TH-D74 and TH-D75
+
+The TH-D74 and TH-D75 have a KISS TNC built in, reachable over Bluetooth or
+over the radio's USB cable, but only one of those at a time: the radio's
+`Menu > Configuration > Interface > KISS (983)` setting picks which. With
+`model = "th-d75"` (or `th-d74`; they're the same), the bridge puts the TNC
+in KISS mode every time it connects, on whichever band the radio's TNC is
+set to. You don't need to turn KISS on from the radio's menu.
+
+### Over Bluetooth
+
+1. On the radio, set `KISS (983)` to Bluetooth and turn Bluetooth on.
+2. Pair the radio once on the Pi, on the adapter the bridge will use for it.
+   The radio uses numeric comparison: it shows a six-digit number, and you
+   press OK on the radio within 30 seconds. Put the radio in pairing mode
+   (`Menu > Bluetooth > Pairing Mode`), then:
+
+   ```
+   $ bluetoothctl
+   [bluetooth]# list                           # adapters, if you have more than one
+   [bluetooth]# select 2C:CF:67:6E:2E:BC       # the adapter to pair on
+   [bluetooth]# agent KeyboardDisplay
+   [bluetooth]# scan bredr
+   [NEW] Device 40:79:12:E4:95:9D TH-D75
+   [bluetooth]# scan off
+   [bluetooth]# pair 40:79:12:E4:95:9D
+   [agent] Confirm passkey 774523 (yes/no): yes
+   ```
+
+   Check that the number matches the radio's and press OK on the radio. If
+   pairing fails with `Authentication Failed` after about 30 seconds, OK
+   wasn't pressed in time: dismiss any prompt still on the radio, put it in
+   pairing mode again and retry. Then trust it, so reconnects need no
+   prompt:
+
+   ```
+   [bluetooth]# trust 40:79:12:E4:95:9D
+   [bluetooth]# quit
+   ```
+
+   The daemon can stay running while you pair.
+3. Configure a `[[tnc]]` with the radio's address and the adapter it's
+   paired on, and a bridge with an `spp-client` port for it:
+
+   ```toml
+   [[adapter]]
+   id = "builtin"
+   mac = "2C:CF:67:6E:2E:BC"
+
+   [[tnc]]
+   id = "d75"
+   name = "TH-D75"
+   model = "th-d75"
+   spp = { address = "40:79:12:E4:95:9D", adapter = "builtin" }
+
+   [[bridge]]
+   id = "ktbr0"
+   name = "TH-D75"
+
+     [[bridge.port]]
+     id = "radio"
+     type = "spp-client"
+     tnc = "d75"
+     idle_timeout = "90s"
+
+     [[bridge.port]]
+     id = "phones"
+     type = "ble-server"
+   ```
+
+4. Run `kiss-tnc-bridge -t`. It warns if the radio isn't paired on that
+   adapter; the bridge would report the port as unpaired and wait.
+
+With the default `connect = "on_demand"`, the bridge connects to the radio
+when the first app attaches. A connect takes about 5 seconds from cold, and
+a radio that's off or out of range takes about 5 seconds to fail, after
+which the bridge retries with backoff while apps stay connected.
+
+### Over USB
+
+1. On the radio, set `KISS (983)` to USB, and connect it to the Pi with its
+   USB cable.
+2. Find its stable device name:
+
+   ```
+   $ ls -l /dev/serial/by-id/
+   usb-JVCKENWOOD_TH-D75-if00 -> ../../ttyACM0
+   ```
+
+3. Give the TNC a `serial` section, and the bridge a `serial` port:
+
+   ```toml
+   [[tnc]]
+   id = "d75"
+   name = "TH-D75"
+   model = "th-d75"
+
+     [tnc.serial]
+     path = "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00"
+
+   [[bridge]]
+   id = "ktbr3"
+   name = "TH-D75 USB"
+
+     [[bridge.port]]
+     id = "radio"
+     type = "serial"
+     tnc = "d75"
+
+     [[bridge.port]]
+     id = "phones"
+     type = "ble-server"
+   ```
+
+The same `[[tnc]]` can have both an `spp` and a `serial` section, with one
+bridge for each that you enable as needed (only one at a time, since the
+radio's TNC is on one interface at a time). When the cable is unplugged or
+the radio turned off, the port waits for the device to come back and
+reconnects.
+
+The D75 reports no USB serial number, so its `by-id` name is the same for
+every D75. With two of them on one Pi, use their `/dev/serial/by-path/`
+names instead, which follow the USB port they're plugged into.
+
+On desktops that run ModemManager (Ubuntu, for example), it probes new USB
+serial devices with modem commands, which can confuse a radio and hold its
+port. The packages install a udev rule
+(`/lib/udev/rules.d/70-kiss-tnc-bridge.rules`) that tells ModemManager to
+leave the TH-D75 alone; the file explains how to add other TNCs. Raspberry Pi
+OS doesn't run ModemManager.
+
+### Other TNCs
+
+Any TNC that speaks KISS over Bluetooth SPP or a serial port should work as
+a `[[tnc]]` with `model = "none"`, as long as it's already in KISS mode (most
+standalone TNCs always are). Please open an issue if you try one, working or
+not.
 
 
 ## Limitations and Caveats
@@ -260,11 +484,10 @@ should be aware of.
   the config file to change the TNC name and restart `kiss-tnc-bridge`. It also seems
   that connecting to the "old" TNC name and disconnecting will update the operating
   system cache name.
-- Some Bluetooth chipsets have limited extended advertising support, meaning that when
-  a client connects, they sometimes stop advertising until that client disconnects.
-  The RTL8761B has limited extended advertising. The TP-Link UB500 Plus I have for
-  testing stops advertising after the first client connects, even if you have
-  `max_clients` set at 2 in `kiss-tnc-bridge.conf`.
+- Some Bluetooth controllers stop advertising while a phone is connected, so a
+  second phone can't find the bridge even with `max_clients = 2`. The Raspberry
+  Pi 4's built-in chip does this. The RTL8761B in common USB dongles keeps
+  advertising and served two phones at once in testing.
 
 
 ## Recommended Hardware
@@ -285,14 +508,16 @@ Here's some popular devices which `kiss-tnc-bridge` works with:
   on old Pi hardware.
 - Raspberry Pi Zero W, Pi Zero 2 W, and models 3, 4, and 5 have built-in BLE and
   work out of the box
-- The Raspberry Pi 4 built-in Bluetooth uses a Cypress chip, which allows multiple
-  clients to simultaneously connect.
+- The Raspberry Pi 4's built-in Bluetooth (a Cypress chip) handles a radio over
+  Bluetooth Classic and a phone over BLE at the same time: an hour of aprs.fi
+  traffic in testing with no drops. But it stops advertising while a phone is
+  connected, so a second phone can't discover the bridge.
 
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive
 USB adapter. If the adapter is supported in Linux and supports Bluetooth version
 4.0 or higher it should work. Many USB adapters use the Realtek 8761B chipset or
-one of its variants. This chipset works great, but does not allow multiple
-clients to simultaneously connect. As best I can tell, all these common adapters
+one of its variants. It keeps advertising with a phone connected, and served
+two phones at once in testing. As best I can tell, all these common adapters
 use that chipset:
 
 - TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
@@ -301,9 +526,13 @@ use that chipset:
 - Plugable USB Bluetooth 5 Adapter
 
 If you plug in one of these USB Bluetooth adapters to a computer that already has a built-in
-adapter, you will want to use `hciconfig -a` to find the device of your new adapter and add
-that to the `kiss-tnc-bridge.conf` file to ensure that it uses the USB Bluetooth device
-instead of the built-in device.
+adapter, use `bluetoothctl list` to find each adapter's address, and give them ids with
+`[[adapter]]` so each port uses the adapter you mean; `hciN` numbers can swap when
+adapters are plugged in.
+
+For a radio over Bluetooth plus more than one phone, the recommended layout on a Pi is the
+radio on the built-in chip (the TNC's `spp.adapter`) and the phones on a USB dongle (the
+`ble-server` port's `adapter`). Each adapter can carry only one enabled `ble-server` port.
 
 If you find hardware that works or doesn't work, please open an issue and I'll be happy
 to add it to this list.
@@ -469,11 +698,11 @@ limit is reached the daemon stops advertising so new devices don't discover it,
 and resumes advertising once a client disconnects and capacity frees up.
 Reconnections from an already-known device address don't count against the limit.
 
-Note that some Bluetooth chipsets have limited extended advertising support and
-stop advertising on their own once a single client connects, regardless of the
-`max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
-On that hardware a TNC is effectively limited to one client at a time even if
-`max_clients` is higher.
+Note that some Bluetooth controllers, such as the Raspberry Pi 4's built-in
+chip, stop advertising on their own once a single client connects, regardless
+of the `max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
+On that hardware a second phone can only connect if it reconnects on its own,
+without discovering the bridge.
 
 
 ## Releases

@@ -16,8 +16,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   plus `conf.d/*.toml`) describing bridges with inline ports, replacing the
   INI file. `/etc/kiss-tnc-bridge.conf` is ignored with a warning.
 - The daemon is a KISS switchboard: each bridge connects one TNC port
-  (`tcp-client` for now) to any number of app ports (`ble-server`,
-  `tcp-server`). Frames from apps go to the TNC through one serialized
+  (`spp-client`, `serial` or `tcp-client`) to any number of app ports
+  (`ble-server`, `tcp-server`). Frames from apps go to the TNC through one serialized
   writer; frames from the TNC are broadcast to every app; apps never hear
   each other.
 - The TNC connection no longer blocks BLE handling: connecting runs in its
@@ -44,6 +44,29 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
 - Bridges can be disabled and kept for another setup.
 - A PR CI workflow (fmt, clippy, tests on Linux and macOS) and an
   end-to-end TCP test with no Bluetooth.
+- `[[tnc]]` objects for hardware TNCs, with an `spp` section (Bluetooth
+  address and the adapter it's paired on) and/or a `serial` section (device
+  path, baud). A TNC can be in only one enabled bridge, over whichever
+  transport.
+- `spp-client` ports: a TNC over Bluetooth Classic, such as the TH-D74/D75's
+  built-in TNC, connected through a BlueZ SPP profile (no channel numbers).
+  A TNC that isn't paired is reported as unpaired and checked again every
+  few seconds; pair it with `bluetoothctl` (see the README).
+- `serial` ports: a TNC on a USB or UART serial device, opened exclusively,
+  waiting for the device when it's unplugged and reconnecting when it's back.
+- `model = "th-d74" | "th-d75"` puts the radio's TNC in KISS mode on every
+  connect, over Bluetooth or USB. `exit_kiss_on_disconnect` takes it back out
+  when the bridge lets go, restoring APRS mode if that's how it was found.
+- `connect` and `idle_timeout` on every TNC port type.
+- `tcp-server` ports are announced with DNS-SD (`_kiss-tnc._tcp`) through
+  Avahi, scoped to the interface they're bound to (`announce = false` turns
+  it off). A name collision on the LAN moves the bridge to "Name (2)" for
+  DNS-SD and BLE alike, kept across restarts in
+  `/var/lib/kiss-tnc-bridge/state.toml`.
+- `kiss-tnc-bridge -t` lists TNCs and warns about TNCs not paired on their
+  adapter (when BlueZ is reachable), unstable serial paths such as
+  `/dev/ttyACM0`, and serial devices that aren't present.
+- A udev rule that keeps ModemManager away from the TH-D75's USB port.
 
 ## 0.5.1 (30 May 2026)
 

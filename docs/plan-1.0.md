@@ -1458,26 +1458,56 @@ packets and sending beacons through the serialized uplink.
 
 ### Phase 2: TNCs over Bluetooth and serial
 
-- [ ] `[[tnc]]` objects with `spp` and `serial` sections, and the
+- [x] `[[tnc]]` objects with `spp` and `serial` sections, and the
       one-enabled-bridge-per-TNC rule.
-- [ ] `spp-client` using the profile approach, with the `Unpaired` state.
+- [x] `spp-client` using the profile approach, with the `Unpaired` state.
       Pairing is still manual (`bluetoothctl`) in this release.
-- [ ] `serial` port: `tokio-serial`, `TIOCEXCL`, `Waiting for device` with
+- [x] `serial` port: `tokio-serial`, `TIOCEXCL`, `Waiting for device` with
       path polling, stable-path warnings.
-- [ ] Packaged udev rule telling ModemManager to ignore known Kenwood devices.
-- [ ] `tnc_init` for th-d74/th-d75 models, `idle_timeout`,
+- [x] Packaged udev rule telling ModemManager to ignore known Kenwood devices.
+- [x] `tnc_init` for th-d74/th-d75 models, `idle_timeout`,
       `connect = "always"`.
-- [ ] Per-port adapter tracking in the supervisor.
-- [ ] `-t` warnings for unpaired TNCs and missing serial devices.
-- [ ] `state.toml` store (atomic writes), first used for DNS-SD collision
+- [x] Per-port adapter tracking in the supervisor.
+- [x] `-t` warnings for unpaired TNCs and missing serial devices.
+- [x] `state.toml` store (atomic writes), first used for DNS-SD collision
       names.
-- [ ] DNS-SD announcement of `tcp-server` ports through Avahi: per-interface
+- [x] DNS-SD announcement of `tcp-server` ports through Avahi: per-interface
       announcing, and collision renaming persisted in `state.toml` and
       applied to BLE and the adapter alias too. Checked with `avahi-browse`
       and aprs.fi on iOS.
-- [ ] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
+- [x] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
       the TCP exposure warning.
 - [ ] Manual hardware test matrix (below).
+
+Code done October 13, 2026 on the `phase2-tncs` branch. Checked on the dev
+Pi without the radio: the unit tests natively (including a pty round trip
+for `serial`), `-t` against the live BlueZ (the D75 paired on hci0, not on
+hci1), and DNS-SD with `avahi-browse`: a local name collision moved the
+bridge to "… (2)", saved in `state.toml` and kept across a restart, and an
+interface binding announced only on that interface. Still to check by hand,
+with the matrix: the radio over SPP and USB, and aprs.fi on iOS finding a
+bridge by DNS-SD. Notes from the work:
+
+- `model` resolves to one `th-d7x` profile; `th-d74` and `th-d75` are
+  aliases, as Phase 0 suggested.
+- Init keeps any KISS frames that arrive while it probes and hands them to
+  the bridge, rather than dropping them.
+- Teardown (`exit_kiss_on_disconnect`) sends `C0 FF C0`, then `TN 1,<band>`
+  if the TNC was in APRS mode when init found it, since leaving KISS turns
+  the TNC off. It runs only when the bridge lets go on purpose (idle,
+  shutdown), not when the link is lost; shutdown waits for it.
+- The daemon registers one SPP client profile and routes BlueZ's connect
+  requests to the waiting port by device address.
+- An `spp-client` port powers its adapter on at its first connect if it
+  needs to, and after that treats a powered-off adapter as deliberate and
+  backs off, the same restraint the `ble-server` supervisor shows.
+- serialport opens exclusively by default (`TIOCEXCL` plus `flock`), and it
+  reports `EBUSY` as "no device"; the port reports that as "in use by
+  another program" instead of waiting for a device that's there.
+- The udev rule matches only the TH-D75 (`2166:9023`), the one USB id
+  confirmed so far.
+- Release workflow: the tarball step still copied the 0.5
+  `kiss-tnc-bridge.example.conf`; fixed to the `.toml` and the udev rule.
 
 At this point the core value is shipped: a Pi replaces a B.B. Link, shares
 the D75 over BLE and TCP by Bluetooth or USB cable, and works with standalone
