@@ -88,7 +88,8 @@ pub struct BleServerHandle {
 }
 
 enum BleEvent {
-    /// A client's reader or writer ended, or its device disconnected.
+    /// A client unsubscribed, its reader or writer ended, or its device
+    /// disconnected.
     Gone { addr: Address, generation: u64 },
 }
 
@@ -528,7 +529,27 @@ async fn writer_task(
 ) {
     let mtu = writer.mtu();
     let chunk = if mtu > 0 { mtu } else { 20 };
-    while let Some(frame) = rx.recv().await {
+    loop {
+        let frame = tokio::select! {
+            frame = rx.recv() => match frame {
+                Some(f) => f,
+                None => break,
+            },
+            // The app stopped notifications. A bonded phone keeps its link
+            // up after the app lets go, so this, not a disconnect, is often
+            // the only sign the session is over; without it the port would
+            // stay "full" and never advertise again.
+            _ = writer.closed() => {
+                if writer.is_closed().unwrap_or(true) {
+                    tracing::info!(%addr, "client unsubscribed");
+                    let _ = ev_tx.send(BleEvent::Gone { addr, generation }).await;
+                    return;
+                }
+                // Readable without being closed isn't expected; don't spin.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let mut wire = Vec::with_capacity(frame.len() + 2);
         wire.push(FEND);
         wire.extend_from_slice(&frame);
