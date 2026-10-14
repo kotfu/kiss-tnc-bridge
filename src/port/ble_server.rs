@@ -75,7 +75,9 @@ pub struct BleServerPort {
     /// adapter alias. It changes after a DNS-SD collision; connected phones
     /// stay connected and the advertisement restarts with the new name.
     pub public_name: watch::Receiver<String>,
-    pub max_clients: u32,
+    /// Applied live: lowering it withdraws the advertisement once the port
+    /// is full (the reconciler kicks the newest sessions over the limit).
+    pub max_clients: watch::Receiver<u32>,
     pub app_tx: mpsc::Sender<AppEvent>,
     pub shutdown: CancellationToken,
     /// Where the port lists the phones it serves (see [`drop_stale`](Self::drop_stale)).
@@ -88,6 +90,8 @@ pub struct BleServerHandle {
 }
 
 enum BleEvent {
+    /// A session was kicked: drop the phone's link.
+    Kicked { addr: Address, generation: u64 },
     /// A client unsubscribed, its reader or writer ended, or its device
     /// disconnected.
     Gone { addr: Address, generation: u64 },
@@ -95,6 +99,9 @@ enum BleEvent {
 
 struct Client {
     generation: u64,
+    /// Cancelled to kick the session, and when it ends anyway (which
+    /// releases the task watching it).
+    kick: CancellationToken,
     /// Frames from the bridge to this phone; taken by the writer task once
     /// the phone subscribes.
     downlink_rx: Option<mpsc::Receiver<Frame>>,
@@ -180,17 +187,40 @@ impl BleServerPort {
         state_tx.send_replace(BleState::Advertising);
         tracing::info!(
             bridge = %self.bridge_id, port = %self.port_id, adapter = self.adapter.name(),
-            name = %public_name, max_clients = self.max_clients, "advertising KISS service"
+            name = %public_name, max_clients = *self.max_clients.borrow(), "advertising KISS service"
         );
 
         let (ev_tx, mut ev_rx) = mpsc::channel::<BleEvent>(64);
         let mut clients: HashMap<Address, Client> = HashMap::new();
         let mut generation: u64 = 0;
-        let max = self.max_clients as usize;
+        let mut max_rx = self.max_clients.clone();
+        let mut max = *max_rx.borrow_and_update() as usize;
+        let mut follow_max = true;
 
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => break,
+                res = max_rx.changed(), if follow_max => {
+                    if res.is_err() {
+                        follow_max = false;
+                        continue;
+                    }
+                    max = *max_rx.borrow_and_update() as usize;
+                    tracing::info!(bridge = %self.bridge_id, port = %self.port_id, max_clients = max, "max clients changed");
+                    if clients.len() >= max {
+                        if adv.take().is_some() {
+                            state_tx.send_replace(BleState::Full);
+                        }
+                    } else if adv.is_none() {
+                        match self.advertise(&public_name).await {
+                            Ok(h) => {
+                                adv = Some(h);
+                                state_tx.send_replace(BleState::Advertising);
+                            }
+                            Err(e) => tracing::error!(bridge = %self.bridge_id, port = %self.port_id, "can't resume advertising: {e}"),
+                        }
+                    }
+                }
                 res = name_rx.changed(), if follow_name => {
                     if res.is_err() {
                         follow_name = false;
@@ -262,12 +292,21 @@ impl BleServerPort {
                         break;
                     }
                 },
-                Some(BleEvent::Gone { addr, generation: g }) = ev_rx.recv() => {
+                Some(ev) = ev_rx.recv() => {
+                    let (addr, g, kicked) = match ev {
+                        BleEvent::Gone { addr, generation } => (addr, generation, false),
+                        BleEvent::Kicked { addr, generation } => (addr, generation, true),
+                    };
                     let current = clients.get(&addr).map(|c| c.generation);
                     if current != Some(g) {
                         continue; // a stale report from a session already replaced
                     }
-                    clients.remove(&addr);
+                    if kicked {
+                        self.disconnect(addr).await;
+                    }
+                    if let Some(c) = clients.remove(&addr) {
+                        c.kick.cancel();
+                    }
                     record_clients(clients_file.as_deref(), &clients);
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
@@ -393,10 +432,12 @@ impl BleServerPort {
         *generation += 1;
         let g = *generation;
         let (tx, rx) = mpsc::channel::<Frame>(SESSION_QUEUE);
+        let kick = self.shutdown.child_token();
         clients.insert(
             addr,
             Client {
                 generation: g,
+                kick: kick.clone(),
                 downlink_rx: Some(rx),
                 writer_attached: false,
             },
@@ -408,8 +449,21 @@ impl BleServerPort {
             .send(AppEvent::SessionOpened {
                 id: self.session_id(addr),
                 tx,
+                kick: kick.clone(),
             })
             .await;
+        {
+            let ev_tx = ev_tx.clone();
+            tokio::spawn(async move {
+                kick.cancelled().await;
+                let _ = ev_tx
+                    .send(BleEvent::Kicked {
+                        addr,
+                        generation: g,
+                    })
+                    .await;
+            });
+        }
         // Report when the device drops the link, whatever the GATT streams do.
         let adapter = self.adapter.clone();
         let ev_tx = ev_tx.clone();

@@ -38,20 +38,13 @@ pub struct SerialConnector {
     tnc_id: String,
     device: SerialDevice,
     model: TncModel,
-    exit_kiss_on_disconnect: bool,
 }
 
-pub fn connector(
-    tnc_id: String,
-    device: SerialDevice,
-    model: TncModel,
-    exit_kiss_on_disconnect: bool,
-) -> SerialConnector {
+pub fn connector(tnc_id: String, device: SerialDevice, model: TncModel) -> SerialConnector {
     SerialConnector {
         tnc_id,
         device,
         model,
-        exit_kiss_on_disconnect,
     }
 }
 
@@ -112,7 +105,6 @@ impl TncConnector for SerialConnector {
         let tnc_id = self.tnc_id.clone();
         let SerialDevice { path, baud } = self.device.clone();
         let model = self.model;
-        let exit_kiss = self.exit_kiss_on_disconnect;
         Box::pin(async move {
             let absent = || {
                 Error::DeviceAbsent(format!(
@@ -142,10 +134,10 @@ impl TncConnector for SerialConnector {
                 })?;
             tracing::debug!(tnc = %tnc_id, path, baud, "serial device open");
             let mut port = NoDrain(port);
-            let out = tnc_init::init(&mut port, model, exit_kiss).await?;
+            let out = tnc_init::init(&mut port, model).await?;
             Ok(Opened {
                 link: Box::new(Prefixed::new(port, &out.frames)),
-                teardown: out.teardown,
+                exit_kiss: out.exit_kiss,
             })
         })
     }
@@ -201,7 +193,6 @@ mod tests {
                 baud: 57600,
             },
             TncModel::Generic,
-            false,
         );
         let err = c.connect().await.err().expect("should fail");
         assert!(matches!(err, Error::DeviceAbsent(_)), "{err:?}");
@@ -221,7 +212,6 @@ mod tests {
                 baud: 57600,
             },
             TncModel::Generic,
-            false,
         );
         assert_eq!(c.describe(), format!("tnc nino on {path}"));
         let opened = match c.connect().await {
@@ -231,7 +221,10 @@ mod tests {
             }
             other => other.unwrap(),
         };
-        assert!(opened.teardown.is_empty());
+        assert_eq!(
+            opened.exit_kiss,
+            vec![crate::port::tnc_init::KISS_RETURN.to_vec()]
+        );
 
         // Someone else opening it now gets EBUSY, unless they're root.
         if unsafe { libc::geteuid() } != 0 {

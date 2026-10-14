@@ -43,12 +43,21 @@ pub enum ServerState {
     Stopped,
 }
 
+/// The settings a reload changes without closing the listener. Sessions a
+/// tighter setting no longer admits are kicked by the reconciler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpLive {
+    /// `None`: no limit.
+    pub max_clients: Option<u32>,
+    /// Empty: any peer that can reach the socket.
+    pub allow: Vec<IpNet>,
+}
+
 pub struct TcpServerPort {
     pub bridge_id: String,
     pub port_id: String,
     pub listen: Listen,
-    pub max_clients: Option<u32>,
-    pub allow: Vec<IpNet>,
+    pub live: watch::Receiver<TcpLive>,
     pub app_tx: mpsc::Sender<AppEvent>,
     pub shutdown: CancellationToken,
 }
@@ -99,7 +108,7 @@ impl TcpServerPort {
         if let Some(local) = local {
             state_tx.send_replace(ServerState::Listening(local));
         }
-        if self.listen.is_unspecified() && self.allow.is_empty() {
+        if self.listen.is_unspecified() && self.live.borrow().allow.is_empty() {
             tracing::warn!(
                 bridge = %self.bridge_id, port = %self.port_id,
                 "listening on all addresses with no allow list: anyone who can connect can transmit on your radio"
@@ -118,11 +127,12 @@ impl TcpServerPort {
                     }
                 },
             };
-            if !allowed(&self.allow, peer.ip()) {
+            let live = self.live.borrow().clone();
+            if !allowed(&live.allow, peer.ip()) {
                 tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
                 continue;
             }
-            if let Some(max) = self.max_clients
+            if let Some(max) = live.max_clients
                 && sessions.load(Ordering::Relaxed) >= max as usize
             {
                 tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
@@ -136,7 +146,7 @@ impl TcpServerPort {
                 id,
                 self.app_tx.clone(),
                 sessions.clone(),
-                self.shutdown.clone(),
+                self.shutdown.child_token(),
             ));
         }
         state_tx.send_replace(ServerState::Stopped);
@@ -145,20 +155,25 @@ impl TcpServerPort {
 }
 
 /// One client: frames from it go to the bridge, frames from the bridge go
-/// to it, until either side closes or the port shuts down.
+/// to it, until either side closes, the session is kicked, or the port
+/// shuts down (`kick` is a child of the port's token).
 async fn session(
     stream: TcpStream,
     id: SessionId,
     app_tx: mpsc::Sender<AppEvent>,
     sessions: Arc<AtomicUsize>,
-    shutdown: CancellationToken,
+    kick: CancellationToken,
 ) {
     let (rd, wr) = stream.into_split();
     let mut reader = KissReader::new(rd);
     let mut writer = KissWriter::new(wr);
     let (tx, mut rx) = mpsc::channel::<Frame>(SESSION_QUEUE);
     if app_tx
-        .send(AppEvent::SessionOpened { id: id.clone(), tx })
+        .send(AppEvent::SessionOpened {
+            id: id.clone(),
+            tx,
+            kick: kick.clone(),
+        })
         .await
         .is_err()
     {
@@ -167,7 +182,7 @@ async fn session(
     }
     loop {
         tokio::select! {
-            _ = shutdown.cancelled() => break,
+            _ = kick.cancelled() => break,
             res = reader.read_frame() => match res {
                 Ok(frame) => {
                     if app_tx.send(AppEvent::Frame { id: id.clone(), frame }).await.is_err() {

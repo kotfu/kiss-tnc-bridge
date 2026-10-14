@@ -24,7 +24,7 @@ use kiss_tnc_bridge::bridge::{Bridge, BridgeHandle, TncSettings, TncState};
 use kiss_tnc_bridge::config::{AppParams, ConnectPolicy, Listen};
 use kiss_tnc_bridge::port::stream::KissConnection;
 use kiss_tnc_bridge::port::tcp_client;
-use kiss_tnc_bridge::port::tcp_server::{ServerState, TcpServerPort};
+use kiss_tnc_bridge::port::tcp_server::{ServerState, TcpLive, TcpServerPort};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
 
@@ -62,6 +62,7 @@ async fn setup(app_params: AppParams, max_clients: Option<u32>, allow: Vec<ipnet
             connect: ConnectPolicy::OnDemand,
             idle_timeout: Duration::ZERO,
             app_params,
+            exit_kiss_on_disconnect: false,
         },
         tokio_util::sync::CancellationToken::new(),
     );
@@ -71,8 +72,7 @@ async fn setup(app_params: AppParams, max_clients: Option<u32>, allow: Vec<ipnet
         bridge_id: "ktbr0".into(),
         port_id: "lan".into(),
         listen,
-        max_clients,
-        allow,
+        live: tokio::sync::watch::channel(TcpLive { max_clients, allow }).1,
         app_tx: handle.app_tx.clone(),
         shutdown: handle.shutdown.clone(),
     }

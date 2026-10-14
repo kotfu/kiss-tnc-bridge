@@ -1166,6 +1166,11 @@ confirmation prompt, `--non-disruptive`, and the `disruptive` field from
 | | A `public_name` change: the BLE advertisement and DNS-SD announcement restart, but connected phones and TCP sessions stay connected |
 | | Display-only changes such as TNC `name` |
 
+Stopping a bridge, or restarting a TNC port, counts as disruptive only while
+something is in use: its TNC link is up, or apps are connected. Restarting
+or stopping things nobody is using isn't, so `switch` between idle bridges
+needs no confirmation. Any disconnected session is always disruptive.
+
 ### `ktbctl`: CLI
 
 Modeled on `ip link` and `systemctl`. Human output by default, `--json`

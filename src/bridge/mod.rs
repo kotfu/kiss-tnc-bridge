@@ -40,10 +40,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use tokio::io::{AsyncRead, AsyncWrite, ReadHalf, WriteHalf};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
@@ -65,16 +65,18 @@ pub type ConnectFuture = Pin<Box<dyn Future<Output = Result<Opened, Error>> + Se
 /// A connected TNC link, ready for KISS: any init sequence has already run.
 pub struct Opened {
     pub link: BoxLink,
-    /// Byte sequences to send, [`TEARDOWN_GAP`] apart, when the bridge
-    /// closes the link on purpose (idle, shutdown); not when the link is lost.
-    pub teardown: Vec<Vec<u8>>,
+    /// Byte sequences, sent [`TEARDOWN_GAP`] apart, that take the TNC out of
+    /// KISS mode. Sent when the bridge closes the link on purpose (idle,
+    /// shutdown, restart), and only if `exit_kiss_on_disconnect` is set at
+    /// the time; never when the link is lost.
+    pub exit_kiss: Vec<Vec<u8>>,
 }
 
 impl Opened {
     pub fn new(link: BoxLink) -> Self {
         Self {
             link,
-            teardown: Vec::new(),
+            exit_kiss: Vec::new(),
         }
     }
 }
@@ -155,6 +157,9 @@ pub enum AppEvent {
     SessionOpened {
         id: SessionId,
         tx: mpsc::Sender<Frame>,
+        /// Cancelling it makes the port drop the session (a `kick`, or a
+        /// reload that tightens `allow` or lowers `max_clients`).
+        kick: CancellationToken,
     },
     SessionClosed {
         id: SessionId,
@@ -234,13 +239,42 @@ impl Counters {
     }
 }
 
-/// The TNC port's settings, from config.
-#[derive(Debug, Clone)]
+/// The TNC port's settings, from config. All of them apply live.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TncSettings {
     pub port_id: String,
     pub connect: ConnectPolicy,
     pub idle_timeout: Duration,
     pub app_params: AppParams,
+    pub exit_kiss_on_disconnect: bool,
+}
+
+/// Changes to a running bridge.
+pub enum BridgeCmd {
+    /// New settings, applied live: `connect`, `idle_timeout`,
+    /// `app_params`, `exit_kiss_on_disconnect`.
+    Settings(TncSettings),
+    /// The TNC port restarts with a new link (a reload changed its address,
+    /// device or model). App sessions stay connected.
+    Connector(Box<dyn TncConnector>),
+    /// Drop one app session.
+    Kick(SessionId),
+    Snapshot(oneshot::Sender<Snapshot>),
+}
+
+/// A running bridge's sessions and TNC link, for status and reload plans.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub tnc: TncState,
+    pub sessions: Vec<SessionInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    pub id: SessionId,
+    /// Higher is newer.
+    pub seq: u64,
+    pub since: SystemTime,
 }
 
 /// How everything else talks to a running bridge.
@@ -248,9 +282,19 @@ pub struct TncSettings {
 pub struct BridgeHandle {
     pub id: String,
     pub app_tx: mpsc::Sender<AppEvent>,
+    pub cmd_tx: mpsc::Sender<BridgeCmd>,
     pub state: watch::Receiver<TncState>,
     pub counters: Arc<Counters>,
     pub shutdown: CancellationToken,
+}
+
+impl BridgeHandle {
+    /// The bridge's sessions and link, or `None` if it has stopped.
+    pub async fn snapshot(&self) -> Option<Snapshot> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx.send(BridgeCmd::Snapshot(tx)).await.ok()?;
+        rx.await.ok()
+    }
 }
 
 /// Uplink frames held while the TNC connects: at most this many, and none
@@ -278,6 +322,7 @@ pub struct Bridge {
     connector: Box<dyn TncConnector>,
     settings: TncSettings,
     app_rx: mpsc::Receiver<AppEvent>,
+    cmd_rx: mpsc::Receiver<BridgeCmd>,
     state_tx: watch::Sender<TncState>,
     counters: Arc<Counters>,
     shutdown: CancellationToken,
@@ -294,11 +339,13 @@ impl Bridge {
     ) -> (Bridge, BridgeHandle) {
         let id = id.into();
         let (app_tx, app_rx) = mpsc::channel(APP_QUEUE);
+        let (cmd_tx, cmd_rx) = mpsc::channel(16);
         let (state_tx, state_rx) = watch::channel(TncState::Idle);
         let counters = Arc::new(Counters::default());
         let handle = BridgeHandle {
             id: id.clone(),
             app_tx,
+            cmd_tx,
             state: state_rx,
             counters: counters.clone(),
             shutdown: shutdown.clone(),
@@ -308,6 +355,7 @@ impl Bridge {
             connector,
             settings,
             app_rx,
+            cmd_rx,
             state_tx,
             counters,
             shutdown,
@@ -322,6 +370,7 @@ impl Bridge {
             connector,
             settings,
             app_rx,
+            cmd_rx,
             state_tx,
             counters,
             shutdown,
@@ -332,14 +381,17 @@ impl Bridge {
             connector,
             settings,
             app_rx,
+            cmd_rx,
             state_tx,
             counters,
             shutdown,
             tnc_tx,
             tnc_rx,
             sessions: HashMap::new(),
+            next_seq: 0,
             link: TncLink::Idle,
             writer_tx: None,
+            exit_kiss: Vec::new(),
             generation: 0,
             attempt: 0,
             pending: VecDeque::new(),
@@ -404,15 +456,19 @@ struct Run {
     connector: Box<dyn TncConnector>,
     settings: TncSettings,
     app_rx: mpsc::Receiver<AppEvent>,
+    cmd_rx: mpsc::Receiver<BridgeCmd>,
     state_tx: watch::Sender<TncState>,
     counters: Arc<Counters>,
     shutdown: CancellationToken,
     tnc_tx: mpsc::Sender<TncEvent>,
     tnc_rx: mpsc::Receiver<TncEvent>,
-    sessions: HashMap<SessionId, mpsc::Sender<Frame>>,
+    sessions: HashMap<SessionId, Session>,
+    next_seq: u64,
     link: TncLink,
     /// Frames to the link's writer task; `Some` while connected.
-    writer_tx: Option<mpsc::Sender<Frame>>,
+    writer_tx: Option<mpsc::Sender<WriterMsg>>,
+    /// The connected link's way out of KISS mode.
+    exit_kiss: Vec<Vec<u8>>,
     /// Bumped on every connect, so events from a dead link are ignored.
     generation: u64,
     /// Consecutive failed connects, for backoff.
@@ -431,6 +487,20 @@ struct Run {
 enum Wait {
     Unpaired,
     Device,
+}
+
+struct Session {
+    tx: mpsc::Sender<Frame>,
+    kick: CancellationToken,
+    seq: u64,
+    since: SystemTime,
+}
+
+/// What the TNC link's writer task is told.
+enum WriterMsg {
+    Frame(Frame),
+    /// Take the TNC out of KISS mode before closing.
+    ExitKiss(Vec<Vec<u8>>),
 }
 
 impl Run {
@@ -454,6 +524,7 @@ impl Run {
                 },
                 _ = writer_slot(&self.writer_tx), if !self.app_ready() => {}
                 Some(ev) = self.tnc_rx.recv() => self.on_tnc(ev),
+                Some(cmd) = self.cmd_rx.recv() => self.on_cmd(cmd),
                 ev = link_event(&mut self.link), if self.link.is_waiting() => self.on_link(ev),
                 _ = idle_elapsed(&mut self.idle_timer), if self.idle_timer.is_some() => {
                     self.idle_timer = None;
@@ -555,8 +626,17 @@ impl Run {
                 None
             }
             TncLink::Connected { reader, writer } => {
-                // Dropping the sender tells the writer to tear down and stop.
-                self.writer_tx = None;
+                // Dropping the sender tells the writer to stop, after taking
+                // the TNC out of KISS mode if that's wanted.
+                if let Some(tx) = self.writer_tx.take()
+                    && self.settings.exit_kiss_on_disconnect
+                    && !self.exit_kiss.is_empty()
+                    && tx
+                        .try_send(WriterMsg::ExitKiss(self.exit_kiss.clone()))
+                        .is_err()
+                {
+                    tracing::warn!(bridge = %self.id, "TNC writer busy; not taking the TNC out of KISS mode");
+                }
                 reader.abort();
                 let (up, down) = self.link_frames();
                 tracing::info!(bridge = %self.id, port = %self.settings.port_id, frames_up = up, frames_down = down, "TNC disconnected");
@@ -585,9 +665,18 @@ impl Run {
 
     fn on_app(&mut self, ev: AppEvent) {
         match ev {
-            AppEvent::SessionOpened { id, tx } => {
+            AppEvent::SessionOpened { id, tx, kick } => {
                 tracing::info!(bridge = %self.id, session = %id, "session opened");
-                self.sessions.insert(id, tx);
+                self.next_seq += 1;
+                self.sessions.insert(
+                    id,
+                    Session {
+                        tx,
+                        kick,
+                        seq: self.next_seq,
+                        since: SystemTime::now(),
+                    },
+                );
                 self.counters
                     .sessions
                     .store(self.sessions.len(), Ordering::Relaxed);
@@ -630,10 +719,76 @@ impl Run {
         }
     }
 
+    fn on_cmd(&mut self, cmd: BridgeCmd) {
+        match cmd {
+            BridgeCmd::Settings(new) => self.apply_settings(new),
+            BridgeCmd::Connector(connector) => {
+                tracing::info!(bridge = %self.id, port = %self.settings.port_id, tnc = %connector.describe(), "TNC port restarting");
+                self.close();
+                self.connector = connector;
+                self.attempt = 0;
+                if self.wants_link() {
+                    self.start_connect();
+                }
+            }
+            BridgeCmd::Kick(id) => match self.sessions.get(&id) {
+                Some(s) => {
+                    tracing::info!(bridge = %self.id, session = %id, "disconnecting session");
+                    s.kick.cancel();
+                }
+                None => tracing::debug!(bridge = %self.id, session = %id, "kick: no such session"),
+            },
+            BridgeCmd::Snapshot(reply) => {
+                let mut sessions: Vec<SessionInfo> = self
+                    .sessions
+                    .iter()
+                    .map(|(id, s)| SessionInfo {
+                        id: id.clone(),
+                        seq: s.seq,
+                        since: s.since,
+                    })
+                    .collect();
+                sessions.sort_by_key(|s| s.seq);
+                let _ = reply.send(Snapshot {
+                    tnc: self.state_tx.borrow().clone(),
+                    sessions,
+                });
+            }
+        }
+    }
+
+    fn apply_settings(&mut self, new: TncSettings) {
+        let old = std::mem::replace(&mut self.settings, new);
+        if old == self.settings {
+            return;
+        }
+        tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC port settings updated");
+        match (old.connect, self.settings.connect) {
+            (ConnectPolicy::OnDemand, ConnectPolicy::Always) => {
+                self.idle_timer = None;
+                if matches!(self.link, TncLink::Idle) {
+                    self.start_connect();
+                }
+            }
+            (ConnectPolicy::Always, ConnectPolicy::OnDemand) if self.sessions.is_empty() => {
+                if self.settings.idle_timeout.is_zero() {
+                    self.close();
+                } else {
+                    self.idle_timer =
+                        Some(Box::pin(tokio::time::sleep(self.settings.idle_timeout)));
+                }
+            }
+            _ => {}
+        }
+    }
+
     fn uplink(&mut self, frame: Frame) {
         let frame_len = frame.len();
         match &self.link {
-            TncLink::Connected { .. } => match self.writer_tx.as_ref().map(|tx| tx.try_send(frame))
+            TncLink::Connected { .. } => match self
+                .writer_tx
+                .as_ref()
+                .map(|tx| tx.try_send(WriterMsg::Frame(frame)))
             {
                 Some(Ok(())) => {
                     self.counters.frames_up.fetch_add(1, Ordering::Relaxed);
@@ -671,8 +826,8 @@ impl Run {
                 }
                 self.counters.frames_down.fetch_add(1, Ordering::Relaxed);
                 tracing::trace!(bridge = %self.id, bytes = frame.len(), sessions = self.sessions.len(), "frame from the TNC");
-                for (id, tx) in &self.sessions {
-                    if tx.try_send(frame.clone()).is_err() {
+                for (id, session) in &self.sessions {
+                    if session.tx.try_send(frame.clone()).is_err() {
                         tracing::warn!(bridge = %self.id, session = %id, "session can't keep up, dropping a frame");
                         self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                     }
@@ -705,9 +860,10 @@ impl Run {
 
     fn on_link(&mut self, ev: LinkEvent) {
         match ev {
-            LinkEvent::Connected(Ok(Opened { link, teardown })) => {
+            LinkEvent::Connected(Ok(Opened { link, exit_kiss })) => {
                 let generation = self.generation;
                 self.waiting = None;
+                self.exit_kiss = exit_kiss;
                 let (rd, wr) = tokio::io::split(link);
                 let (writer_tx, writer_rx) = mpsc::channel(WRITER_QUEUE);
                 let reader = tokio::spawn(reader_task(
@@ -720,7 +876,6 @@ impl Run {
                     writer_rx,
                     self.tnc_tx.clone(),
                     generation,
-                    teardown,
                 ));
                 self.link = TncLink::Connected { reader, writer };
                 self.writer_tx = Some(writer_tx);
@@ -779,7 +934,7 @@ impl Run {
 
 /// Resolves once the TNC writer can take a frame again. Only polled while
 /// it can't (see the select guard), and never while disconnected.
-async fn writer_slot(writer_tx: &Option<mpsc::Sender<Frame>>) {
+async fn writer_slot(writer_tx: &Option<mpsc::Sender<WriterMsg>>) {
     match writer_tx {
         Some(tx) => {
             // The permit is dropped at once: this is a wakeup, not a send.
@@ -822,27 +977,35 @@ async fn reader_task(
 
 async fn writer_task(
     mut wr: KissWriter<WriteHalf<BoxLink>>,
-    mut rx: mpsc::Receiver<Frame>,
+    mut rx: mpsc::Receiver<WriterMsg>,
     tx: mpsc::Sender<TncEvent>,
     generation: u64,
-    teardown: Vec<Vec<u8>>,
 ) {
-    while let Some(frame) = rx.recv().await {
-        if let Err(error) = wr.write_frame(&frame).await {
-            let _ = tx.send(TncEvent::Closed { generation, error }).await;
-            return;
+    let mut exited = false;
+    while let Some(msg) = rx.recv().await {
+        match msg {
+            WriterMsg::Frame(frame) => {
+                if let Err(error) = wr.write_frame(&frame).await {
+                    let _ = tx.send(TncEvent::Closed { generation, error }).await;
+                    return;
+                }
+            }
+            WriterMsg::ExitKiss(steps) => {
+                for (i, step) in steps.iter().enumerate() {
+                    if i > 0 {
+                        tokio::time::sleep(TEARDOWN_GAP).await;
+                    }
+                    if wr.write_bytes(step).await.is_err() {
+                        return;
+                    }
+                }
+                exited = true;
+            }
         }
     }
-    // The bridge dropped its sender: it's disconnecting on purpose.
-    for (i, step) in teardown.iter().enumerate() {
-        if i > 0 {
-            tokio::time::sleep(TEARDOWN_GAP).await;
-        }
-        if wr.write_bytes(step).await.is_err() {
-            return;
-        }
-    }
-    if !teardown.is_empty() {
+    // The bridge dropped its sender: it's disconnecting on purpose. Give
+    // the TNC a moment to act on the last step before the link closes.
+    if exited {
         tokio::time::sleep(TEARDOWN_GAP).await;
     }
     let _ = wr.shutdown().await;
@@ -880,14 +1043,14 @@ mod tests {
         peers: mpsc::UnboundedSender<DuplexStream>,
         fail: Arc<Mutex<VecDeque<Fail>>>,
         connects: Arc<AtomicU64>,
-        teardown: Vec<Vec<u8>>,
+        exit_kiss: Vec<Vec<u8>>,
     }
 
     impl TncConnector for FakeTnc {
         fn connect(&self) -> ConnectFuture {
             let peers = self.peers.clone();
             let fail = self.fail.clone();
-            let teardown = self.teardown.clone();
+            let exit_kiss = self.exit_kiss.clone();
             self.connects.fetch_add(1, Ordering::Relaxed);
             Box::pin(async move {
                 let next = fail.lock().unwrap().pop_front();
@@ -905,7 +1068,7 @@ mod tests {
                     .map_err(|_| Error::Connect("test gone".into()))?;
                 Ok(Opened {
                     link: Box::new(ours),
-                    teardown,
+                    exit_kiss,
                 })
             })
         }
@@ -921,6 +1084,21 @@ mod tests {
         fail: Arc<Mutex<VecDeque<Fail>>>,
         connects: Arc<AtomicU64>,
         task: JoinHandle<()>,
+        kicks: Mutex<HashMap<SessionId, CancellationToken>>,
+    }
+
+    fn settings(
+        connect: ConnectPolicy,
+        idle_timeout: Duration,
+        app_params: AppParams,
+    ) -> TncSettings {
+        TncSettings {
+            port_id: "tnc".into(),
+            connect,
+            idle_timeout,
+            app_params,
+            exit_kiss_on_disconnect: false,
+        }
     }
 
     fn start(connect: ConnectPolicy, idle_timeout: Duration, app_params: AppParams) -> Harness {
@@ -931,7 +1109,7 @@ mod tests {
         connect: ConnectPolicy,
         idle_timeout: Duration,
         app_params: AppParams,
-        teardown: Vec<Vec<u8>>,
+        exit_kiss: Vec<Vec<u8>>,
     ) -> Harness {
         let (peers_tx, peers) = mpsc::unbounded_channel();
         let fail = Arc::new(Mutex::new(VecDeque::new()));
@@ -940,16 +1118,14 @@ mod tests {
             peers: peers_tx,
             fail: fail.clone(),
             connects: connects.clone(),
-            teardown,
+            exit_kiss: exit_kiss.clone(),
         };
         let (bridge, handle) = Bridge::new(
             "ktbr0",
             Box::new(connector),
             TncSettings {
-                port_id: "tnc".into(),
-                connect,
-                idle_timeout,
-                app_params,
+                exit_kiss_on_disconnect: !exit_kiss.is_empty(),
+                ..settings(connect, idle_timeout, app_params)
             },
             CancellationToken::new(),
         );
@@ -960,6 +1136,7 @@ mod tests {
             fail,
             connects,
             task,
+            kicks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -984,9 +1161,15 @@ mod tests {
         ) -> (SessionId, mpsc::Receiver<Frame>) {
             let id = SessionId::new(port, peer);
             let (tx, rx) = mpsc::channel(capacity);
+            let kick = CancellationToken::new();
+            self.kicks.lock().unwrap().insert(id.clone(), kick.clone());
             self.handle
                 .app_tx
-                .send(AppEvent::SessionOpened { id: id.clone(), tx })
+                .send(AppEvent::SessionOpened {
+                    id: id.clone(),
+                    tx,
+                    kick,
+                })
                 .await
                 .unwrap();
             (id, rx)
@@ -1350,5 +1533,136 @@ mod tests {
         h.task.await.unwrap();
         assert_eq!(read_all(&mut tnc).await, b"\xC0\xFF\xC0TN 1,0\r".to_vec());
         drop(a);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn settings_apply_live() {
+        let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        assert_eq!(h.connects.load(Ordering::Relaxed), 0);
+        // on_demand -> always connects with nobody there.
+        let s = settings(ConnectPolicy::Always, Duration::ZERO, AppParams::Pass);
+        h.handle.cmd_tx.send(BridgeCmd::Settings(s)).await.unwrap();
+        let mut tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        // always -> on_demand with nobody there lets go at once.
+        let s = settings(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Drop);
+        h.handle.cmd_tx.send(BridgeCmd::Settings(s)).await.unwrap();
+        h.wait_state(|s| *s == TncState::Idle).await;
+        assert!(matches!(tnc.read_frame().await, Err(Error::LinkClosed)));
+        // app_params applies from the next frame.
+        let (a, _rx) = h.open("lan", "A").await;
+        let mut tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        h.send(&a, &[0x01, 0x32]).await;
+        h.send(&a, &[0x00, 0x55]).await;
+        assert_eq!(tnc.read_frame().await.unwrap(), vec![0x00, 0x55]);
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_new_connector_restarts_the_link_and_keeps_sessions() {
+        let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        let (a, mut a_rx) = h.open("phones", "A").await;
+        let mut old = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+
+        let (peers_tx, mut peers) = mpsc::unbounded_channel();
+        let next = FakeTnc {
+            peers: peers_tx,
+            fail: Arc::new(Mutex::new(VecDeque::new())),
+            connects: Arc::new(AtomicU64::new(0)),
+            exit_kiss: Vec::new(),
+        };
+        h.handle
+            .cmd_tx
+            .send(BridgeCmd::Connector(Box::new(next)))
+            .await
+            .unwrap();
+        assert!(matches!(old.read_frame().await, Err(Error::LinkClosed)));
+        let mut new = KissConnection::new(
+            timeout(Duration::from_secs(5), peers.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+        );
+        h.wait_state(|s| *s == TncState::Connected).await;
+        // The session never noticed: frames flow both ways on the new link.
+        new.write_frame(&[0x00, 0x77]).await.unwrap();
+        assert_eq!(recv(&mut a_rx).await, vec![0x00, 0x77]);
+        h.send(&a, &[0x00, 0x78]).await;
+        assert_eq!(new.read_frame().await.unwrap(), vec![0x00, 0x78]);
+        assert_eq!(h.handle.counters.sessions(), 1);
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn snapshots_and_kicks() {
+        let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        let (a, _a_rx) = h.open("phones", "A").await;
+        let (b, _b_rx) = h.open("lan", "B").await;
+        let _tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        let snap = h.handle.snapshot().await.unwrap();
+        assert_eq!(snap.tnc, TncState::Connected);
+        let ids: Vec<_> = snap.sessions.iter().map(|s| s.id.clone()).collect();
+        assert_eq!(ids, vec![a.clone(), b.clone()], "oldest first");
+        assert!(snap.sessions[0].seq < snap.sessions[1].seq);
+
+        h.handle
+            .cmd_tx
+            .send(BridgeCmd::Kick(b.clone()))
+            .await
+            .unwrap();
+        h.handle.snapshot().await.unwrap(); // the kick has been handled
+        assert!(h.kicks.lock().unwrap()[&b].is_cancelled());
+        assert!(!h.kicks.lock().unwrap()[&a].is_cancelled());
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
+        assert!(h.handle.snapshot().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn exit_kiss_is_decided_when_letting_go() {
+        let exit = vec![vec![0xC0, 0xFF, 0xC0]];
+        let mut h = start_with(
+            ConnectPolicy::OnDemand,
+            Duration::ZERO,
+            AppParams::Pass,
+            exit,
+        );
+        // Started with it on; turned off before letting go: nothing sent.
+        let (a, _rx) = h.open("phones", "A").await;
+        let mut tnc = timeout(Duration::from_secs(5), h.peers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        h.wait_state(|s| *s == TncState::Connected).await;
+        let s = settings(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        h.handle
+            .cmd_tx
+            .send(BridgeCmd::Settings(s.clone()))
+            .await
+            .unwrap();
+        h.close(&a).await;
+        assert_eq!(read_all(&mut tnc).await, Vec::<u8>::new());
+        // Turned back on: sent.
+        let on = TncSettings {
+            exit_kiss_on_disconnect: true,
+            ..s
+        };
+        h.handle.cmd_tx.send(BridgeCmd::Settings(on)).await.unwrap();
+        let (a, _rx) = h.open("phones", "A").await;
+        let mut tnc = timeout(Duration::from_secs(5), h.peers.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        h.wait_state(|s| *s == TncState::Connected).await;
+        h.close(&a).await;
+        assert_eq!(read_all(&mut tnc).await, vec![0xC0, 0xFF, 0xC0]);
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
     }
 }
