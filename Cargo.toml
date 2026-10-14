@@ -17,6 +17,8 @@ libc = "0.2"
 uuid = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+# dynamic.toml: edits that keep comments and formatting.
+toml_edit = "0.25"
 ipnet = "2.12.2"
 tokio-util = { version = "0.7.20", features = ["rt"] }
 # No libudev: devices are found by path, so cross builds need no C library.

@@ -17,8 +17,8 @@
 //! kept in the state directory (`/var/lib/kiss-tnc-bridge`) and owned by
 //! the daemon.
 //!
-//! Today that's public names adjusted after a DNS-SD collision. Enable
-//! overrides for static bridges join it with the control API.
+//! That's public names adjusted after a DNS-SD collision, and enable
+//! overrides for static bridges (`ktbctl enable`/`disable` can't edit /etc).
 //!
 //! Writes are atomic (temp file, fsync, rename, fsync the directory), so a
 //! power cut on a battery-powered device leaves the old file or the new
@@ -49,6 +49,9 @@ pub struct State {
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeState {
+    /// Overrides a static bridge's `enabled`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     /// The public name in use after a DNS-SD collision, e.g. "TH-D75 (2)".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub public_name: Option<String>,
@@ -79,6 +82,16 @@ impl State {
         let b = self.bridges.entry(bridge.to_string()).or_default();
         b.public_name = Some(name.to_string());
         b.public_name_configured = Some(configured.to_string());
+    }
+
+    pub fn enabled_override(&self, bridge: &str) -> Option<bool> {
+        self.bridges.get(bridge).and_then(|b| b.enabled)
+    }
+
+    /// Set or clear (`None`) a static bridge's enable override.
+    pub fn set_enabled_override(&mut self, bridge: &str, enabled: Option<bool>) {
+        self.bridges.entry(bridge.to_string()).or_default().enabled = enabled;
+        self.bridges.retain(|_, b| !b.is_empty());
     }
 
     pub fn clear_adjusted_public_name(&mut self, bridge: &str) {
@@ -200,6 +213,18 @@ mod tests {
         // Made from another configured name: doesn't apply.
         assert_eq!(again.state().adjusted_public_name("ktbr0", "Other"), None);
         assert_eq!(again.state().adjusted_public_name("ktbr1", "TH-D75"), None);
+    }
+
+    #[test]
+    fn enable_overrides() {
+        let mut s = State::default();
+        assert_eq!(s.enabled_override("ktbr0"), None);
+        s.set_enabled_override("ktbr0", Some(false));
+        assert_eq!(s.enabled_override("ktbr0"), Some(false));
+        let text = toml::to_string(&s).unwrap();
+        assert_eq!(toml::from_str::<State>(&text).unwrap(), s);
+        s.set_enabled_override("ktbr0", None);
+        assert!(s.bridges.is_empty());
     }
 
     #[test]

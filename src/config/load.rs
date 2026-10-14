@@ -13,8 +13,9 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! Reading the static config files: the main file and `conf.d/*.toml`
-//! next to it, in name order.
+//! Reading the config files: the static main file and `conf.d/*.toml` next
+//! to it, in name order, and the daemon's own `dynamic.toml` in the state
+//! directory.
 
 use std::path::{Path, PathBuf};
 
@@ -23,6 +24,8 @@ use super::{Problem, Source};
 
 pub const MAIN_FILE_NAME: &str = "kiss-tnc-bridge.toml";
 pub const CONF_D: &str = "conf.d";
+/// Dynamic config, in the state directory, written by the daemon.
+pub const DYNAMIC_FILE_NAME: &str = "dynamic.toml";
 /// Where 0.5 kept its INI config. It's never read; its presence is a warning.
 pub const LEGACY_CONF: &str = "/etc/kiss-tnc-bridge.conf";
 
@@ -89,6 +92,45 @@ pub fn load(main_file: &Path) -> Result<Loaded, Problem> {
         files,
         legacy_conf_present: Path::new(LEGACY_CONF).exists(),
     })
+}
+
+/// `dynamic.toml` as read: its text too, which the store hashes to notice
+/// hand edits.
+#[derive(Debug, Clone)]
+pub struct DynamicFile {
+    pub path: PathBuf,
+    pub text: String,
+}
+
+/// Read `dynamic.toml` from the state directory. `Ok(None)` if there isn't
+/// one yet; `Err` with the I/O error if it can't be read, so the caller can
+/// decide (the daemon can always read it; `-t` run without root can't).
+pub fn load_dynamic(state_dir: &Path) -> Result<Option<DynamicFile>, std::io::Error> {
+    let path = state_dir.join(DYNAMIC_FILE_NAME);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    Ok(Some(DynamicFile { path, text }))
+}
+
+/// Parse a `dynamic.toml` read by [`load_dynamic`] (or a candidate from the
+/// API). It holds adapters, TNCs and bridges, never `[global]` or
+/// `[control]`.
+pub fn parse_dynamic(path: &Path, text: &str) -> Result<ConfigFile, Problem> {
+    let file = parse_str(text).map_err(|msg| Problem::new(Some(Source::Dynamic), "", msg))?;
+    if file.global.is_some() || file.control.is_some() {
+        return Err(Problem::new(
+            Some(Source::Dynamic),
+            "",
+            format!(
+                "{}: [global] and [control] belong in the main file ({MAIN_FILE_NAME})",
+                path.display()
+            ),
+        ));
+    }
+    Ok(file)
 }
 
 fn parse_file(path: &Path) -> Result<ConfigFile, Problem> {

@@ -235,7 +235,12 @@ fn print_summary(cfg: &config::Config, report: &config::Report) {
             "  {:<10} {:<28} {:<8} ({})",
             b.id,
             format!("\"{}\"", b.name),
-            if b.enabled { "enabled" } else { "disabled" },
+            match (b.enabled, b.enabled_override.is_some()) {
+                (true, false) => "enabled",
+                (false, false) => "disabled",
+                (true, true) => "enabled (override in state.toml)",
+                (false, true) => "disabled (override in state.toml)",
+            },
             b.source
         );
         if b.public_name != b.name {
@@ -272,7 +277,7 @@ fn main() {
         .clone()
         .unwrap_or_else(|| dir_from_env("RUNTIME_DIRECTORY", DEFAULT_RUNTIME_DIR));
 
-    let (cfg, report) = match config::load_all(&config_file, true) {
+    let (cfg, report) = match config::load_all(&config_file, Some(&state_dir), true) {
         Ok(x) => x,
         Err(problems) => {
             for p in &problems {

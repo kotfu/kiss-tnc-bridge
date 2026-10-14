@@ -19,7 +19,7 @@
 use serde::Deserialize;
 
 /// One TOML file: the main file or one from `conf.d/`.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfigFile {
     pub global: Option<GlobalSection>,
@@ -32,7 +32,7 @@ pub struct ConfigFile {
     pub bridge: Vec<BridgeDef>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GlobalSection {
     pub log_level: Option<String>,
@@ -41,14 +41,14 @@ pub struct GlobalSection {
     pub adapter: Option<String>,
 }
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlSection {
     pub group: Option<String>,
 }
 
 /// `[[adapter]]`: a readable id for a Bluetooth adapter's MAC.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdapterDef {
     pub id: String,
@@ -56,7 +56,7 @@ pub struct AdapterDef {
 }
 
 /// `[[tnc]]`: a hardware KISS TNC and the ways to reach it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TncDef {
     pub id: String,
@@ -68,7 +68,7 @@ pub struct TncDef {
 }
 
 /// `[tnc.spp]`: the TNC over Bluetooth Classic.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SppDef {
     pub address: String,
@@ -79,7 +79,7 @@ pub struct SppDef {
 }
 
 /// `[tnc.serial]`: the TNC over USB or a UART.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SerialDef {
     pub path: String,
@@ -87,7 +87,7 @@ pub struct SerialDef {
 }
 
 /// `[[bridge]]` with its inline `[[bridge.port]]`s.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BridgeDef {
     pub id: Option<String>,
@@ -135,7 +135,7 @@ pub enum ConnectPolicy {
 }
 
 /// `[[bridge.port]]`, discriminated by `type`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PortDef {
     TcpClient {
