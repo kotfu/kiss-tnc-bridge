@@ -83,7 +83,7 @@ pub async fn init<S: AsyncRead + AsyncWrite + Unpin>(
     exit_kiss_on_disconnect: bool,
 ) -> Result<InitOutcome, Error> {
     match model {
-        TncModel::None => Ok(InitOutcome {
+        TncModel::Generic => Ok(InitOutcome {
             teardown: if exit_kiss_on_disconnect {
                 vec![KISS_RETURN.to_vec()]
             } else {
@@ -567,11 +567,11 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn model_none_sends_nothing() {
-        let (out, state) = run(1, TncModel::None, false, None).await;
+    async fn generic_sends_nothing() {
+        let (out, state) = run(1, TncModel::Generic, false, None).await;
         assert!(state.lock().unwrap().log.is_empty());
         assert!(out.teardown.is_empty());
-        let (out, _) = run(1, TncModel::None, true, None).await;
+        let (out, _) = run(1, TncModel::Generic, true, None).await;
         assert_eq!(out.teardown, vec![KISS_RETURN.to_vec()]);
     }
 

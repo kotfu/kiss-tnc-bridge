@@ -61,7 +61,7 @@ pub struct AdapterDef {
 pub struct TncDef {
     pub id: String,
     pub name: Option<String>,
-    /// KISS init profile: `th-d74`, `th-d75` (both `th-d7x`), or `none`.
+    /// One of [`MODELS`](super::resolve::MODELS); `generic` if left out.
     pub model: Option<String>,
     pub spp: Option<SppDef>,
     pub serial: Option<SerialDef>,

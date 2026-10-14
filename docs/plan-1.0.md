@@ -357,7 +357,7 @@ mac = "00:1A:7D:DA:71:13"
 [[tnc]]
 id = "d75"
 name = "TH-D75"
-model = "th-d75"                   # KISS init/teardown profile: th-d74 | th-d75 | none
+model = "th-d75"                   # what it gets beyond plain KISS: generic (default) | th-d74 | th-d75
 
   [tnc.spp]
   address = "00:11:22:33:44:55"
@@ -470,7 +470,7 @@ A standalone serial TNC is a `[[tnc]]` with only a `serial` section:
 [[tnc]]
 id = "nino"
 name = "NinoTNC"
-model = "none"
+model = "generic"                  # the default; shown for clarity
 
   [tnc.serial]
   path = "/dev/serial/by-id/usb-VENDOR_PRODUCT_SERIAL-if00"   # whatever udev names it
@@ -507,7 +507,7 @@ bridges costs nothing.
 | | `allow` | Unset: any peer that can reach the socket |
 | | `announce` | `true`, except `false` for loopback bindings |
 | `[[tnc]]` | `name` | The TNC `id` |
-| | `model` | `none`: no KISS init; for TNCs that are always in KISS mode |
+| | `model` | `generic`: nothing beyond KISS; for TNCs that are always in KISS mode |
 | `[tnc.spp]` | `adapter` | See the adapter fallback below |
 | | `channel` | Found by SDP lookup |
 | `[tnc.serial]` | `baud` | `9600` |
@@ -797,7 +797,7 @@ same time without validation catching it.
 | Key | Meaning |
 |---|---|
 | `id`, `name` | As for other objects |
-| `model` | Selects the KISS init/teardown sequence: `th-d74`, `th-d75`, or `none` for TNCs that are always in KISS mode |
+| `model` | What the TNC gets beyond plain KISS (init and teardown commands, checks that need it to answer): `generic` (the default, for TNCs that are always in KISS mode), `th-d74`, `th-d75`. Unknown values are an error that lists the models; one table in the code (`MODELS`) feeds that error, the docs and `ktbctl` |
 | `[tnc.spp]` | `address`, `adapter` (the adapter it's paired on), optional `channel`. Needed by `spp-client` |
 | `[tnc.serial]` | `path`, optional `baud` (default 9600). Needed by `serial` |
 
@@ -1551,8 +1551,9 @@ stock), a Pi 1, x86_64 with a TH-D74, a standalone serial TNC, Pat, and a
 Pi as the Wi-Fi AP. Phase 5's soak test picks up the Pi Zero 2 W when one
 can be had. Notes from the work:
 
-- `model` resolves to one `th-d7x` profile; `th-d74` and `th-d75` are
-  aliases, as Phase 0 suggested.
+- `model` resolves to one TH-D7x profile; `th-d74` and `th-d75` are
+  aliases, as Phase 0 suggested. The value for TNCs that need nothing
+  special is `generic` (the default), not `none`, which read like "no TNC".
 - Init keeps any KISS frames that arrive while it probes and hands them to
   the bridge, rather than dropping them.
 - Teardown (`exit_kiss_on_disconnect`) sends `C0 FF C0`, then `TN 1,<band>`
@@ -1598,6 +1599,9 @@ serial TNCs, all configured by hand.
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
 - [ ] All CLI commands above, plus `--json`.
+- [ ] `ktbctl tnc models`: the models the daemon knows and what each does,
+      from the same `MODELS` table as the config error (through the control
+      API, since `ktbctl` doesn't read the daemon's code or files).
 - [ ] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`,
       check-and-reopen, plan, and confirm; the consent rule (confirm in a
       terminal, refuse without one, `--yes`, `--non-disruptive`) on `reload`
@@ -1695,7 +1699,7 @@ announcing on the same Pi.
 1. **D75 pairing model** (Phase 0). This decides whether the pairing-window
    agent is needed at all.
 2. **Other SPP KISS devices** besides the D74/D75. A TNC with
-   `model = "none"` should work for any SPP KISS TNC. Collect testers once
+   `model = "generic"` should work for any SPP KISS TNC. Collect testers once
    Phase 2 lands on `main`.
 3. **ICOM ID-5200:** confirm its USB TNC works as a plain `serial` KISS TNC,
    whether it needs a KISS init `model`, and whether its Bluetooth TNC is BLE

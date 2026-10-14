@@ -55,7 +55,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
 - `serial` ports: a TNC on a USB or UART serial device, opened exclusively,
   waiting for the device when it's unplugged and reconnecting when it's back.
 - `model = "th-d74" | "th-d75"` puts the radio's TNC in KISS mode on every
-  connect, over Bluetooth or USB. `exit_kiss_on_disconnect` takes it back out
+  connect, over Bluetooth or USB. Other TNCs use the default,
+  `model = "generic"`; an unknown model is an error that lists the models. `exit_kiss_on_disconnect` takes it back out
   when the bridge lets go, restoring APRS mode if that's how it was found.
 - `connect` and `idle_timeout` on every TNC port type.
 - `tcp-server` ports are announced with DNS-SD (`_kiss-tnc._tcp`) through

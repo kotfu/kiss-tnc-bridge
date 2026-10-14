@@ -28,7 +28,8 @@ log_level = "info"
 # [[tnc]]
 # id = "d75"
 # name = "TH-D75"
-# model = "th-d75"            # puts it in KISS mode: th-d74, th-d75, or none
+# model = "th-d75"            # puts it in KISS mode; leave model out for TNCs
+#                             # that are always in KISS mode (see the README)
 #
 #   [tnc.spp]                 # over Bluetooth
 #   address = "00:11:22:33:44:55"

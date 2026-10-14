@@ -264,34 +264,69 @@ pub fn parse_host_port(s: &str) -> Result<(String, u16), String> {
     Ok((host.to_string(), port))
 }
 
-/// Which KISS init sequence a TNC gets when it connects.
+/// What a TNC gets beyond plain KISS: commands at connect and teardown,
+/// and checks that need the TNC to answer them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TncModel {
+    /// Any TNC that's always in KISS mode. Nothing is sent to it.
+    Generic,
     /// Kenwood TH-D74 and TH-D75: the same command set, so one profile.
     ThD7x,
-    /// Always in KISS mode; nothing to send.
-    None,
+}
+
+/// One `model` a config can name, and what it does.
+pub struct ModelInfo {
+    pub model: TncModel,
+    /// What to write in the config; more than one for models that share a
+    /// profile.
+    pub names: &'static [&'static str],
+    pub summary: &'static str,
+}
+
+/// Every model, in the order to list them. The config error, `-t` and the
+/// docs take them from here, and so will `ktbctl`.
+pub const MODELS: &[ModelInfo] = &[
+    ModelInfo {
+        model: TncModel::Generic,
+        names: &["generic"],
+        summary: "the default: any TNC that's always in KISS mode; nothing is sent to it",
+    },
+    ModelInfo {
+        model: TncModel::ThD7x,
+        names: &["th-d74", "th-d75"],
+        summary: "Kenwood TH-D74/D75: switched to KISS mode at every connect, checked for KISS on \
+                  the right interface (menu 983), reconnected if it stops answering, and with \
+                  exit_kiss_on_disconnect put back in the mode it was found in",
+    },
+];
+
+impl TncModel {
+    pub fn info(self) -> &'static ModelInfo {
+        MODELS
+            .iter()
+            .find(|m| m.model == self)
+            .expect("every model is in MODELS")
+    }
 }
 
 impl FromStr for TncModel {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "th-d7x" | "th-d74" | "th-d75" => Ok(TncModel::ThD7x),
-            "none" => Ok(TncModel::None),
-            _ => Err(format!(
-                "model {s:?} is not one of th-d74, th-d75, th-d7x, none"
-            )),
+        if let Some(m) = MODELS.iter().find(|m| m.names.contains(&s)) {
+            return Ok(m.model);
         }
+        let mut msg = format!("model {s:?} isn't a known model. The models are:");
+        for m in MODELS {
+            msg.push_str(&format!("\n  {:<16} {}", m.names.join(", "), m.summary));
+        }
+        msg.push_str("\nFor a TNC that isn't listed, use generic (or leave model out).");
+        Err(msg)
     }
 }
 
 impl fmt::Display for TncModel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            TncModel::ThD7x => "th-d7x",
-            TncModel::None => "none",
-        })
+        f.write_str(&self.info().names.join("/"))
     }
 }
 
@@ -563,10 +598,9 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                 Some(a) => resolve_adapter_value(a, source, &object, &mut errors),
                 None => global_sel.clone(),
             });
-            match resolve_tnc(def, source, spp_adapter) {
-                Ok(t) => tncs.push(t),
-                Err(mut e) => errors.append(&mut e),
-            }
+            let (tnc, mut problems) = resolve_tnc(def, source, spp_adapter);
+            tncs.push(tnc);
+            errors.append(&mut problems);
         }
     }
 
@@ -841,12 +875,13 @@ fn tnc_reference_error(tnc: &str, defined: bool, section: &str) -> String {
 }
 
 /// `spp_adapter` is the `[tnc.spp]` adapter, already resolved with the
-/// fallback to `[global] adapter`.
+/// fallback to `[global] adapter`. The TNC comes back even with errors, so
+/// ports that use it resolve and only the TNC's own problems are reported.
 fn resolve_tnc(
     def: &TncDef,
     source: &Source,
     spp_adapter: Option<AdapterSel>,
-) -> Result<Tnc, Vec<Problem>> {
+) -> (Tnc, Vec<Problem>) {
     let object = format!("tnc {}", def.id);
     let mut errors = Vec::new();
     let mut err = |msg: String| errors.push(Problem::new(Some(source.clone()), &object, msg));
@@ -858,11 +893,11 @@ fn resolve_tnc(
         err("name must not be empty".into());
     }
     let model = match def.model.as_deref().map(str::parse::<TncModel>) {
-        None => TncModel::None,
+        None => TncModel::Generic,
         Some(Ok(m)) => m,
         Some(Err(e)) => {
             err(e);
-            TncModel::None
+            TncModel::Generic
         }
     };
     let spp = match &def.spp {
@@ -909,18 +944,15 @@ fn resolve_tnc(
     if spp.is_none() && serial.is_none() {
         err("a tnc needs at least one of [tnc.spp] or [tnc.serial]".into());
     }
-    if errors.is_empty() {
-        Ok(Tnc {
-            id: def.id.clone(),
-            name,
-            model,
-            spp,
-            serial,
-            source: source.clone(),
-        })
-    } else {
-        Err(errors)
-    }
+    let tnc = Tnc {
+        id: def.id.clone(),
+        name,
+        model,
+        spp,
+        serial,
+        source: source.clone(),
+    };
+    (tnc, errors)
 }
 
 fn resolve_adapter(def: &AdapterDef, source: &Source) -> Result<Adapter, Problem> {
@@ -1125,11 +1157,21 @@ enabled = false
 
     #[test]
     fn tnc_models() {
-        for m in ["th-d74", "th-d75", "th-d7x"] {
+        for m in ["th-d74", "th-d75"] {
             assert_eq!(m.parse::<TncModel>().unwrap(), TncModel::ThD7x);
         }
-        assert_eq!("none".parse::<TncModel>().unwrap(), TncModel::None);
-        assert!("th-d72".parse::<TncModel>().is_err());
+        assert_eq!("generic".parse::<TncModel>().unwrap(), TncModel::Generic);
+        assert_eq!(TncModel::ThD7x.to_string(), "th-d74/th-d75");
+        // Unknown names, typos and the old "none" are errors that list
+        // every model.
+        for bad in ["th-d57", "mobilinkd-tnc3", "none", "th-d7x"] {
+            let err = bad.parse::<TncModel>().unwrap_err();
+            assert!(err.contains("isn't a known model"), "{err}");
+            assert!(
+                err.contains("generic") && err.contains("th-d74, th-d75"),
+                "{err}"
+            );
+        }
     }
 
     #[test]
@@ -1150,6 +1192,12 @@ enabled = false
             e.iter().any(|m| m.contains("has no [tnc.serial] section")),
             "{e:?}"
         );
+
+        // A bad value in a TNC is reported once, not again by every port
+        // that uses the TNC.
+        let e = resolve_text(&D75.replace("model = \"th-d75\"", "model = \"th-d57\"")).unwrap_err();
+        assert_eq!(e.len(), 1, "{e:?}");
+        assert!(e[0].contains("isn't a known model"), "{e:?}");
 
         let e = resolve_text("[[tnc]]\nid = \"x\"\nmodel = \"ic-705\"\n").unwrap_err();
         assert!(e.iter().any(|m| m.contains("ic-705")), "{e:?}");

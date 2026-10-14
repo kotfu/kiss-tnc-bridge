@@ -225,7 +225,7 @@ in only one enabled bridge, over whichever transport.
 |-----|---------|-------------|
 | `id` | required | Lowercase letters, digits and `-`, at most 15 characters |
 | `name` | the id | Human-friendly |
-| `model` | `none` | The KISS init the TNC gets when it connects: `th-d74` or `th-d75` (the same thing: put the radio's TNC in KISS mode), or `none` for TNCs that are always in KISS mode |
+| `model` | `generic` | What the TNC gets beyond plain KISS; see [Models](#models). Leave it out for a TNC that isn't listed |
 | `spp.address` | | The TNC's Bluetooth address, for `spp-client` ports |
 | `spp.adapter` | `[global] adapter` | The adapter it's paired on. Pairings belong to one adapter |
 | `spp.channel` | found by SDP | An RFCOMM channel, only for devices whose SDP record is wrong |
@@ -445,10 +445,58 @@ OS doesn't run ModemManager.
 
 ### Other TNCs
 
-Any TNC that speaks KISS over Bluetooth SPP or a serial port should work as
-a `[[tnc]]` with `model = "none"`, as long as it's already in KISS mode (most
-standalone TNCs always are). Please open an issue if you try one, working or
-not.
+Any TNC that speaks KISS over Bluetooth SPP or a serial port should work
+with the generic model, as long as it's already in KISS mode (most
+standalone TNCs always are). For example, a Mobilinkd TNC3 over Bluetooth,
+shared to phones over BLE:
+
+```toml
+[[tnc]]
+id = "mobilinkd"
+name = "Mobilinkd TNC3"
+spp = { address = "00:11:22:33:44:55" }   # the TNC's Bluetooth address
+# Over USB instead, use its stable name from ls /dev/serial/by-id/:
+# serial = { path = "/dev/serial/by-id/usb-…-if00" }
+
+[[bridge]]
+id = "ktbr0"
+name = "Mobilinkd"
+
+  [[bridge.port]]
+  id = "tnc"
+  type = "spp-client"              # "serial" for USB
+  tnc = "mobilinkd"
+  idle_timeout = "90s"
+
+  [[bridge.port]]
+  id = "phones"
+  type = "ble-server"
+```
+
+Pair it once with `bluetoothctl` as for the TH-D75; it may ask for a PIN or
+nothing at all instead of a number to compare. TNCs whose Bluetooth is BLE
+only, such as the Mobilinkd TNC4, BTech UV-PRO and Vero VR-N76, can only be
+used over USB for now; connecting to BLE TNCs comes after 1.0.
+
+With the generic model the bridge sends the TNC nothing, so it can't tell a
+TNC that's quiet from one that isn't working. If apps hear nothing, the
+frame counts in the log (`frames_down` when the TNC link closes) show
+whether anything arrived from the TNC. Please open an issue if you try a
+TNC, working or not.
+
+### Models
+
+`model` in a `[[tnc]]` says what the TNC gets beyond plain KISS. Leaving it
+out means `generic`. Any other value is an error, and `kiss-tnc-bridge -t`
+lists the models.
+
+| `model` | For | What it does |
+|---|---|---|
+| `generic` (default) | Any TNC that's always in KISS mode: NinoTNC, TNC-Pi, Mobilinkd | Nothing beyond KISS. With `exit_kiss_on_disconnect`, sends KISS "return" (`C0 FF C0`) when the bridge lets go |
+| `th-d74`, `th-d75` | Kenwood TH-D74 and TH-D75 | Switches the TNC to KISS mode at every connect; fails with a pointer to menu 983 if KISS is on the other interface; reconnects if the radio stops answering (as it does after a USB replug); with `exit_kiss_on_disconnect`, puts the TNC back in the mode it was found in |
+
+Radios that need commands of their own get a new model once someone can
+test one.
 
 
 ## Limitations and Caveats

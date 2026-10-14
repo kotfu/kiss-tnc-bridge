@@ -200,7 +200,7 @@ mod tests {
                 path: "/dev/serial/by-id/nothing-here".into(),
                 baud: 57600,
             },
-            TncModel::None,
+            TncModel::Generic,
             false,
         );
         let err = c.connect().await.err().expect("should fail");
@@ -220,7 +220,7 @@ mod tests {
                 path: path.clone(),
                 baud: 57600,
             },
-            TncModel::None,
+            TncModel::Generic,
             false,
         );
         assert_eq!(c.describe(), format!("tnc nino on {path}"));
