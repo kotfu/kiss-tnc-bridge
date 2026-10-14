@@ -1477,7 +1477,8 @@ packets and sending beacons through the serialized uplink.
       and aprs.fi on iOS.
 - [x] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
       the TCP exposure warning.
-- [ ] Manual hardware test matrix (below).
+- [ ] Manual hardware test matrix (below). Pi 4 rows done; the rest
+      deferred for lack of hardware (see below).
 
 Code done October 13, 2026 on the `phase2-tncs` branch. Checked on the dev
 Pi without the radio: the unit tests natively (including a pty round trip
@@ -1530,10 +1531,25 @@ TCP (`wlan0:8001` with an `allow` list):
   random addresses only. The iPad bonded with one prompt and reconnects
   without one, across daemon restarts.
 
-Still to check by hand, with the matrix: the other rows and scenarios
-(Pi Zero 2 W, Pat, a serial TNC, a Pi as the Wi-Fi AP, cold start with the
-radio off, `C0 FF C0` from an app, `exit_kiss_on_disconnect` on the radio,
-an unpaired TNC). Notes from the work:
+- **Scenarios**: a cold start with the radio off retried at the 5 s page
+  timeout with backoff and connected when it was turned on. `C0 FF C0` from
+  a TCP app was dropped and the radio stayed in KISS. With
+  `exit_kiss_on_disconnect = true` the radio went from APRS to KISS at
+  connect and back to APRS at shutdown. A TNC not paired on its adapter
+  logged one warning and never paged the radio.
+- **Bonded phones keep their link** after the app lets go, so a session
+  now also ends when the phone unsubscribes; otherwise the port stayed at
+  `max_clients` with its advertisement withdrawn.
+- **KISS (983) on the wrong interface**: the radio accepts `TN 2` on any
+  interface but goes KISS only on the one menu 983 names; the Bluetooth
+  link stayed a command port and carried nothing for 52 minutes. Init now
+  probes once more after `TN 2` and fails the connect with a message naming
+  menu 983 if the radio still answers.
+
+Deferred for lack of hardware: the matrix rows for a Pi Zero 2 W (out of
+stock), a Pi 1, x86_64 with a TH-D74, a standalone serial TNC, Pat, and a
+Pi as the Wi-Fi AP. Phase 5's soak test picks up the Pi Zero 2 W when one
+can be had. Notes from the work:
 
 - `model` resolves to one `th-d7x` profile; `th-d74` and `th-d75` are
   aliases, as Phase 0 suggested.
