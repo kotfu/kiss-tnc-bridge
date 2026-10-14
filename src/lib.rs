@@ -30,4 +30,5 @@ pub mod config;
 pub mod error;
 pub mod kiss;
 pub mod port;
+pub mod reconcile;
 pub mod supervisor;
