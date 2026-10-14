@@ -106,15 +106,24 @@ fn acquire_instance_lock(runtime_dir: &Path) -> Result<std::fs::File, String> {
     Ok(file)
 }
 
-/// An adapter as the user named it: `dongle (AC:A7:…)` when an
-/// `[[adapter]]` id covers the MAC, otherwise the MAC or hciN itself.
-fn describe_adapter(cfg: &config::Config, sel: &config::AdapterSel) -> String {
-    if let config::AdapterSel::Mac(mac) = sel
-        && let Some(a) = cfg.adapters.iter().find(|a| a.mac == *mac)
-    {
-        return format!("{} ({mac})", a.id);
+/// `connect always`, `idle timeout 90s`: only what differs from the defaults.
+fn describe_policy(connect: config::ConnectPolicy, idle_timeout: std::time::Duration) -> String {
+    let mut s = String::new();
+    if connect == config::ConnectPolicy::Always {
+        s.push_str(", connect always");
     }
-    sel.to_string()
+    if !idle_timeout.is_zero() {
+        s.push_str(&format!(", idle timeout {}s", idle_timeout.as_secs()));
+    }
+    s
+}
+
+fn describe_spp(cfg: &config::Config, spp: &config::Spp) -> String {
+    let mut s = format!("{} on {}", spp.address, cfg.describe_adapter(&spp.adapter));
+    if let Some(ch) = spp.channel {
+        s.push_str(&format!(" channel {ch}"));
+    }
+    s
 }
 
 fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
@@ -124,13 +133,32 @@ fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
             port,
             connect,
             idle_timeout,
+        } => format!("{host}:{port}{}", describe_policy(*connect, *idle_timeout)),
+        config::PortKind::SppClient {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        }
+        | config::PortKind::Serial {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
         } => {
-            let mut s = format!("{host}:{port}");
-            if *connect == config::ConnectPolicy::Always {
-                s.push_str(", connect always");
-            }
-            if !idle_timeout.is_zero() {
-                s.push_str(&format!(", idle timeout {}s", idle_timeout.as_secs()));
+            let via = if matches!(p.kind, config::PortKind::Serial { .. }) {
+                "serial"
+            } else {
+                "Bluetooth"
+            };
+            let mut s = format!(
+                "{tnc} over {via}{}",
+                describe_policy(*connect, *idle_timeout)
+            );
+            if *exit_kiss_on_disconnect {
+                s.push_str(", exit KISS on disconnect");
             }
             s
         }
@@ -170,7 +198,7 @@ fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
             };
             format!(
                 "{}, max {max_clients} {noun}",
-                describe_adapter(cfg, adapter)
+                cfg.describe_adapter(adapter)
             )
         }
     }
@@ -178,13 +206,29 @@ fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
 
 fn print_summary(cfg: &config::Config, report: &config::Report) {
     println!(
-        "config ok: {} bridge(s), {} adapter(s), {} warning(s)",
+        "config ok: {} bridge(s), {} tnc(s), {} adapter(s), {} warning(s)",
         cfg.bridges.len(),
+        cfg.tncs.len(),
         cfg.adapters.len(),
         report.warnings.len()
     );
     for a in &cfg.adapters {
         println!("  adapter {:<10} {}  ({})", a.id, a.mac, a.source);
+    }
+    for t in &cfg.tncs {
+        println!(
+            "  tnc {:<14} {:<28} model {}  ({})",
+            t.id,
+            format!("\"{}\"", t.name),
+            t.model,
+            t.source
+        );
+        if let Some(spp) = &t.spp {
+            println!("    spp     {}", describe_spp(cfg, spp));
+        }
+        if let Some(serial) = &t.serial {
+            println!("    serial  {} at {} baud", serial.path, serial.baud);
+        }
     }
     for b in &cfg.bridges {
         println!(
@@ -199,7 +243,7 @@ fn print_summary(cfg: &config::Config, report: &config::Report) {
         }
         for p in &b.ports {
             println!(
-                "    {:<10} {:<11} {:<4} {}",
+                "    {:<12} {:<11} {:<4} {}",
                 p.id,
                 p.type_name(),
                 p.role,
@@ -240,7 +284,12 @@ fn main() {
     };
 
     if cli.test_config {
+        let mut report = report;
+        let notes = bluetooth_host_checks(&cfg, &mut report);
         print_summary(&cfg, &report);
+        for n in notes {
+            println!("note: {n}");
+        }
         std::process::exit(0);
     }
 
@@ -261,6 +310,11 @@ fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
+        // A log line that can't be written (stderr's reader went away, e.g.
+        // journald restarting) is dropped. Otherwise tracing-subscriber
+        // reports it with eprintln!, which panics on the same dead stderr
+        // and takes down whichever task was logging.
+        .log_internal_errors(false)
         .init();
 
     tracing::info!(
@@ -285,35 +339,86 @@ fn main() {
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     rt.block_on(async {
-        if let Err(e) = run(cfg).await {
+        if let Err(e) = run(cfg, &state_dir, &runtime_dir).await {
             tracing::error!("fatal: {e}");
             std::process::exit(1);
         }
     });
 }
 
+/// `-t` host checks that need BlueZ: whether TNCs are paired. Problems go
+/// in the report as warnings; a check that couldn't run comes back as a
+/// note, since `-t` often runs where there's no Bluetooth (CI, image builds).
+#[cfg(target_os = "linux")]
+fn bluetooth_host_checks(cfg: &config::Config, report: &mut config::Report) -> Vec<String> {
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => return vec![format!("skipped the Bluetooth pairing checks: {e}")],
+    };
+    let checks = rt.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            kiss_tnc_bridge::bluetooth::pairing_warnings(cfg),
+        )
+        .await
+    });
+    match checks {
+        Ok(Ok(warnings)) => {
+            report.warnings.extend(warnings);
+            Vec::new()
+        }
+        Ok(Err(e)) => vec![format!("skipped the Bluetooth pairing checks: {e}")],
+        Err(_) => vec!["skipped the Bluetooth pairing checks: BlueZ didn't answer".into()],
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn bluetooth_host_checks(cfg: &config::Config, _report: &mut config::Report) -> Vec<String> {
+    let spp = cfg
+        .bridges
+        .iter()
+        .filter(|b| b.enabled)
+        .flat_map(|b| &b.ports)
+        .any(|p| matches!(p.kind, config::PortKind::SppClient { .. }));
+    if spp {
+        vec!["skipped the Bluetooth pairing checks: they need BlueZ on Linux".into()]
+    } else {
+        Vec::new()
+    }
+}
+
 /// Run the supervisor until SIGINT or SIGTERM.
-async fn run(cfg: config::Config) -> Result<(), error::Error> {
+async fn run(
+    cfg: config::Config,
+    state_dir: &Path,
+    runtime_dir: &Path,
+) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let stop = shutdown.clone();
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
         #[cfg(unix)]
-        {
+        let why = {
             let mut term =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .expect("SIGTERM handler");
             tokio::select! {
-                _ = ctrl_c => tracing::info!("interrupted, shutting down"),
-                _ = term.recv() => tracing::info!("terminated, shutting down"),
+                _ = ctrl_c => "interrupted",
+                _ = term.recv() => "terminated",
             }
-        }
+        };
         #[cfg(not(unix))]
-        {
+        let why = {
             let _ = ctrl_c.await;
-            tracing::info!("interrupted, shutting down");
-        }
+            "interrupted"
+        };
+        // Stop first, log second: nothing that goes wrong while logging may
+        // keep the daemon from stopping.
         stop.cancel();
+        tracing::info!("{why}, shutting down");
     });
-    kiss_tnc_bridge::supervisor::run(cfg, shutdown).await
+    kiss_tnc_bridge::supervisor::run(cfg, state_dir, runtime_dir, shutdown).await
 }

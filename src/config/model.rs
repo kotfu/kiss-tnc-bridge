@@ -27,6 +27,8 @@ pub struct ConfigFile {
     #[serde(default)]
     pub adapter: Vec<AdapterDef>,
     #[serde(default)]
+    pub tnc: Vec<TncDef>,
+    #[serde(default)]
     pub bridge: Vec<BridgeDef>,
 }
 
@@ -34,7 +36,8 @@ pub struct ConfigFile {
 #[serde(deny_unknown_fields)]
 pub struct GlobalSection {
     pub log_level: Option<String>,
-    /// Default adapter for Bluetooth ports: an adapter id, a MAC, or `hciN`.
+    /// Default adapter for Bluetooth ports and TNCs: an adapter id, a MAC,
+    /// or `hciN`.
     pub adapter: Option<String>,
 }
 
@@ -50,6 +53,37 @@ pub struct ControlSection {
 pub struct AdapterDef {
     pub id: String,
     pub mac: String,
+}
+
+/// `[[tnc]]`: a hardware KISS TNC and the ways to reach it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TncDef {
+    pub id: String,
+    pub name: Option<String>,
+    /// One of [`MODELS`](super::resolve::MODELS); `generic` if left out.
+    pub model: Option<String>,
+    pub spp: Option<SppDef>,
+    pub serial: Option<SerialDef>,
+}
+
+/// `[tnc.spp]`: the TNC over Bluetooth Classic.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SppDef {
+    pub address: String,
+    /// The adapter the TNC is paired on.
+    pub adapter: Option<String>,
+    /// RFCOMM channel; normally found by SDP through BlueZ.
+    pub channel: Option<u8>,
+}
+
+/// `[tnc.serial]`: the TNC over USB or a UART.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SerialDef {
+    pub path: String,
+    pub baud: Option<u32>,
 }
 
 /// `[[bridge]]` with its inline `[[bridge.port]]`s.
@@ -127,6 +161,24 @@ pub enum PortDef {
         adapter: Option<String>,
         max_clients: Option<u32>,
     },
+    SppClient {
+        id: Option<String>,
+        role: Option<Role>,
+        /// A `[[tnc]]` id; the TNC needs an `spp` section.
+        tnc: String,
+        connect: Option<ConnectPolicy>,
+        idle_timeout: Option<String>,
+        exit_kiss_on_disconnect: Option<bool>,
+    },
+    Serial {
+        id: Option<String>,
+        role: Option<Role>,
+        /// A `[[tnc]]` id; the TNC needs a `serial` section.
+        tnc: String,
+        connect: Option<ConnectPolicy>,
+        idle_timeout: Option<String>,
+        exit_kiss_on_disconnect: Option<bool>,
+    },
 }
 
 impl PortDef {
@@ -135,6 +187,8 @@ impl PortDef {
             PortDef::TcpClient { .. } => "tcp-client",
             PortDef::TcpServer { .. } => "tcp-server",
             PortDef::BleServer { .. } => "ble-server",
+            PortDef::SppClient { .. } => "spp-client",
+            PortDef::Serial { .. } => "serial",
         }
     }
 
@@ -142,7 +196,9 @@ impl PortDef {
         match self {
             PortDef::TcpClient { id, .. }
             | PortDef::TcpServer { id, .. }
-            | PortDef::BleServer { id, .. } => id.as_deref(),
+            | PortDef::BleServer { id, .. }
+            | PortDef::SppClient { id, .. }
+            | PortDef::Serial { id, .. } => id.as_deref(),
         }
     }
 
@@ -150,14 +206,18 @@ impl PortDef {
         match self {
             PortDef::TcpClient { role, .. }
             | PortDef::TcpServer { role, .. }
-            | PortDef::BleServer { role, .. } => *role,
+            | PortDef::BleServer { role, .. }
+            | PortDef::SppClient { role, .. }
+            | PortDef::Serial { role, .. } => *role,
         }
     }
 
     /// The role a port type has unless `role` overrides it.
     pub fn default_role(&self) -> Role {
         match self {
-            PortDef::TcpClient { .. } => Role::Tnc,
+            PortDef::TcpClient { .. } | PortDef::SppClient { .. } | PortDef::Serial { .. } => {
+                Role::Tnc
+            }
             PortDef::TcpServer { .. } | PortDef::BleServer { .. } => Role::App,
         }
     }

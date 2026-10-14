@@ -357,7 +357,7 @@ mac = "00:1A:7D:DA:71:13"
 [[tnc]]
 id = "d75"
 name = "TH-D75"
-model = "th-d75"                   # KISS init/teardown profile: th-d74 | th-d75 | none
+model = "th-d75"                   # what it gets beyond plain KISS: generic (default) | th-d74 | th-d75
 
   [tnc.spp]
   address = "00:11:22:33:44:55"
@@ -470,7 +470,7 @@ A standalone serial TNC is a `[[tnc]]` with only a `serial` section:
 [[tnc]]
 id = "nino"
 name = "NinoTNC"
-model = "none"
+model = "generic"                  # the default; shown for clarity
 
   [tnc.serial]
   path = "/dev/serial/by-id/usb-VENDOR_PRODUCT_SERIAL-if00"   # whatever udev names it
@@ -507,7 +507,7 @@ bridges costs nothing.
 | | `allow` | Unset: any peer that can reach the socket |
 | | `announce` | `true`, except `false` for loopback bindings |
 | `[[tnc]]` | `name` | The TNC `id` |
-| | `model` | `none`: no KISS init; for TNCs that are always in KISS mode |
+| | `model` | `generic`: nothing beyond KISS; for TNCs that are always in KISS mode |
 | `[tnc.spp]` | `adapter` | See the adapter fallback below |
 | | `channel` | Found by SDP lookup |
 | `[tnc.serial]` | `baud` | `9600` |
@@ -797,7 +797,7 @@ same time without validation catching it.
 | Key | Meaning |
 |---|---|
 | `id`, `name` | As for other objects |
-| `model` | Selects the KISS init/teardown sequence: `th-d74`, `th-d75`, or `none` for TNCs that are always in KISS mode |
+| `model` | What the TNC gets beyond plain KISS (init and teardown commands, checks that need it to answer): `generic` (the default, for TNCs that are always in KISS mode), `th-d74`, `th-d75`. Unknown values are an error that lists the models; one table in the code (`MODELS`) feeds that error, the docs and `ktbctl` |
 | `[tnc.spp]` | `address`, `adapter` (the adapter it's paired on), optional `channel`. Needed by `spp-client` |
 | `[tnc.serial]` | `path`, optional `baud` (default 9600). Needed by `serial` |
 
@@ -1458,26 +1458,120 @@ packets and sending beacons through the serialized uplink.
 
 ### Phase 2: TNCs over Bluetooth and serial
 
-- [ ] `[[tnc]]` objects with `spp` and `serial` sections, and the
+- [x] `[[tnc]]` objects with `spp` and `serial` sections, and the
       one-enabled-bridge-per-TNC rule.
-- [ ] `spp-client` using the profile approach, with the `Unpaired` state.
+- [x] `spp-client` using the profile approach, with the `Unpaired` state.
       Pairing is still manual (`bluetoothctl`) in this release.
-- [ ] `serial` port: `tokio-serial`, `TIOCEXCL`, `Waiting for device` with
+- [x] `serial` port: `tokio-serial`, `TIOCEXCL`, `Waiting for device` with
       path polling, stable-path warnings.
-- [ ] Packaged udev rule telling ModemManager to ignore known Kenwood devices.
-- [ ] `tnc_init` for th-d74/th-d75 models, `idle_timeout`,
+- [x] Packaged udev rule telling ModemManager to ignore known Kenwood devices.
+- [x] `tnc_init` for th-d74/th-d75 models, `idle_timeout`,
       `connect = "always"`.
-- [ ] Per-port adapter tracking in the supervisor.
-- [ ] `-t` warnings for unpaired TNCs and missing serial devices.
-- [ ] `state.toml` store (atomic writes), first used for DNS-SD collision
+- [x] Per-port adapter tracking in the supervisor.
+- [x] `-t` warnings for unpaired TNCs and missing serial devices.
+- [x] `state.toml` store (atomic writes), first used for DNS-SD collision
       names.
-- [ ] DNS-SD announcement of `tcp-server` ports through Avahi: per-interface
+- [x] DNS-SD announcement of `tcp-server` ports through Avahi: per-interface
       announcing, and collision renaming persisted in `state.toml` and
       applied to BLE and the adapter alias too. Checked with `avahi-browse`
       and aprs.fi on iOS.
-- [ ] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
+- [x] README: TH-D75 walkthroughs for Bluetooth and USB, hardware notes, and
       the TCP exposure warning.
-- [ ] Manual hardware test matrix (below).
+- [ ] Manual hardware test matrix (below). Pi 4 rows done; the rest
+      deferred for lack of hardware (see below).
+
+Code done October 13, 2026 on the `phase2-tncs` branch. Checked on the dev
+Pi without the radio: the unit tests natively (including a pty round trip
+for `serial`), `-t` against the live BlueZ (the D75 paired on hci0, not on
+hci1), and DNS-SD with `avahi-browse`: a local name collision moved the
+bridge to "… (2)", saved in `state.toml` and kept across a restart, and an
+interface binding announced only on that interface.
+
+First hardware round, October 13, 2026, on the dev Pi 4 with the TH-D75,
+aprs.fi on an iPad over BLE (the RTL8761B dongle) and on an iPhone over
+TCP (`wlan0:8001` with an `allow` list):
+
+- **SPP** (radio on the built-in chip): connected on the first app in
+  2.7 s; KISS init took 85 ms from APRS mode. Packets reached both apps,
+  and a beacon from each keyed the radio. aprs.fi found the bridge by
+  DNS-SD on its own. A radio power-cycle backed off (1–30 s, each attempt
+  failing cleanly at the 5 s page timeout), reconnected, and re-ran init
+  with the apps still attached; the radio comes back up in APRS mode, so
+  init on every connect is needed. `idle_timeout = "90s"` closed the link
+  90 s after the last app left.
+- **USB**: waited for the device, then connected with `connect = "always"`
+  and no apps. Packets and beacons on both apps; a second open of the port
+  failed with "Device or resource busy". After a cable replug the D75
+  answers nothing on its serial port until the port is reopened; the
+  bridge gives up after two silent probes and reconnects on the next
+  attempt, 6 s after the replug.
+- `-t` rejects the D75 in two enabled bridges, and two `ble-server` ports
+  on one adapter.
+- Bugs found and fixed: the daemon ignored SIGTERM once its stderr's reader
+  was gone (the signal task panicked logging through tracing-subscriber's
+  `eprintln!`); tokio-serial's flush is a blocking `tcdrain()`, which hung
+  KISS init on the deaf radio with no timeout able to fire; and closing a
+  port with unsent output blocked for the tty's 30 s closing wait.
+- **Stopping the daemon**: apps over TCP notice at once, even after
+  SIGKILL. Over BLE, BlueZ keeps a phone's link up when the daemon's GATT
+  service goes away, so aprs.fi stayed "Connected" to nothing. A stopping
+  `ble-server` port now drops its phones' links (aprs.fi shows "Searching"
+  within a second or two and reconnects about a second after a restart).
+  After a SIGKILL the restarted daemon drops the links of the phones the
+  old one served, listed in the runtime directory (the unit now has
+  `RuntimeDirectoryPreserve=restart`), and the iPad reconnected on its own.
+- **Phone pairing never worked, in 0.5 either.** A Bluetooth trace showed
+  BlueZ reading a protected attribute on the iPad, the iPad starting a
+  Just Works pairing, and bluetoothd asking the default agent's
+  `RequestAuthorization`, which bluer's callback-less agent rejects. So
+  phones prompted on every connection, stalled 10–15 s while retrying,
+  and showed up under a new private address each time. The daemon now
+  registers its own `NoInputNoOutput` agent over D-Bus (bluer would make an
+  authorization callback `DisplayYesNo`), authorizing LE devices with
+  random addresses only. The iPad bonded with one prompt and reconnects
+  without one, across daemon restarts.
+
+- **Scenarios**: a cold start with the radio off retried at the 5 s page
+  timeout with backoff and connected when it was turned on. `C0 FF C0` from
+  a TCP app was dropped and the radio stayed in KISS. With
+  `exit_kiss_on_disconnect = true` the radio went from APRS to KISS at
+  connect and back to APRS at shutdown. A TNC not paired on its adapter
+  logged one warning and never paged the radio.
+- **Bonded phones keep their link** after the app lets go, so a session
+  now also ends when the phone unsubscribes; otherwise the port stayed at
+  `max_clients` with its advertisement withdrawn.
+- **KISS (983) on the wrong interface**: the radio accepts `TN 2` on any
+  interface but goes KISS only on the one menu 983 names; the Bluetooth
+  link stayed a command port and carried nothing for 52 minutes. Init now
+  probes once more after `TN 2` and fails the connect with a message naming
+  menu 983 if the radio still answers.
+
+Deferred for lack of hardware: the matrix rows for a Pi Zero 2 W (out of
+stock), a Pi 1, x86_64 with a TH-D74, a standalone serial TNC, Pat, and a
+Pi as the Wi-Fi AP. Phase 5's soak test picks up the Pi Zero 2 W when one
+can be had. Notes from the work:
+
+- `model` resolves to one TH-D7x profile; `th-d74` and `th-d75` are
+  aliases, as Phase 0 suggested. The value for TNCs that need nothing
+  special is `generic` (the default), not `none`, which read like "no TNC".
+- Init keeps any KISS frames that arrive while it probes and hands them to
+  the bridge, rather than dropping them.
+- Teardown (`exit_kiss_on_disconnect`) sends `C0 FF C0`, then `TN 1,<band>`
+  if the TNC was in APRS mode when init found it, since leaving KISS turns
+  the TNC off. It runs only when the bridge lets go on purpose (idle,
+  shutdown), not when the link is lost; shutdown waits for it.
+- The daemon registers one SPP client profile and routes BlueZ's connect
+  requests to the waiting port by device address.
+- An `spp-client` port powers its adapter on at its first connect if it
+  needs to, and after that treats a powered-off adapter as deliberate and
+  backs off, the same restraint the `ble-server` supervisor shows.
+- serialport opens exclusively by default (`TIOCEXCL` plus `flock`), and it
+  reports `EBUSY` as "no device"; the port reports that as "in use by
+  another program" instead of waiting for a device that's there.
+- The udev rule matches only the TH-D75 (`2166:9023`), the one USB id
+  confirmed so far.
+- Release workflow: the tarball step still copied the 0.5
+  `kiss-tnc-bridge.example.conf`; fixed to the `.toml` and the udev rule.
 
 At this point the core value is shipped: a Pi replaces a B.B. Link, shares
 the D75 over BLE and TCP by Bluetooth or USB cable, and works with standalone
@@ -1505,6 +1599,9 @@ serial TNCs, all configured by hand.
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
 - [ ] All CLI commands above, plus `--json`.
+- [ ] `ktbctl tnc models`: the models the daemon knows and what each does,
+      from the same `MODELS` table as the config error (through the control
+      API, since `ktbctl` doesn't read the daemon's code or files).
 - [ ] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`,
       check-and-reopen, plan, and confirm; the consent rule (confirm in a
       terminal, refuse without one, `--yes`, `--non-disruptive`) on `reload`
@@ -1602,7 +1699,7 @@ announcing on the same Pi.
 1. **D75 pairing model** (Phase 0). This decides whether the pairing-window
    agent is needed at all.
 2. **Other SPP KISS devices** besides the D74/D75. A TNC with
-   `model = "none"` should work for any SPP KISS TNC. Collect testers once
+   `model = "generic"` should work for any SPP KISS TNC. Collect testers once
    Phase 2 lands on `main`.
 3. **ICOM ID-5200:** confirm its USB TNC works as a plain `serial` KISS TNC,
    whether it needs a KISS init `model`, and whether its Bluetooth TNC is BLE

@@ -19,6 +19,10 @@
 #[cfg(target_os = "linux")]
 pub mod ble_server;
 pub mod listen;
+pub mod serial;
+#[cfg(target_os = "linux")]
+pub mod spp_client;
 pub mod stream;
 pub mod tcp_client;
 pub mod tcp_server;
+pub mod tnc_init;

@@ -53,7 +53,7 @@ mod tests {
         });
         let c = connector("127.0.0.1".into(), port);
         assert_eq!(c.describe(), format!("127.0.0.1:{port}"));
-        let mut link = c.connect().await.unwrap();
+        let mut link = c.connect().await.unwrap().link;
         let mut buf = [0u8; 2];
         tokio::io::AsyncReadExt::read_exact(&mut link, &mut buf)
             .await

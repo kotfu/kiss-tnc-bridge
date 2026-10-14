@@ -135,8 +135,10 @@ async fn broadcast_uplink_and_filtering() {
     );
 
     // KISS return from an app never reaches the TNC; the next frame does.
+    // Both from one app, so the bridge sees them in order and the drop is
+    // counted by the time the frame arrives.
     a.write_bytes(&[0xC0, 0xFF, 0xC0]).await.unwrap();
-    b.write_frame(&[0x00, 0xBB]).await.unwrap();
+    a.write_frame(&[0x00, 0xBB]).await.unwrap();
     assert_eq!(read(&mut tnc).await, vec![0x00, 0xBB]);
     assert_eq!(s.handle.counters.dropped(), 1);
 

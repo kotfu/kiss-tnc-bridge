@@ -11,3 +11,8 @@ if [ ! -f /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml ]; then
     mkdir -p /etc/kiss-tnc-bridge/conf.d
     cp /usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml
 fi
+
+# Pick up the ModemManager rule for radios without a reboot.
+if command -v udevadm >/dev/null; then
+    udevadm control --reload-rules || true
+fi

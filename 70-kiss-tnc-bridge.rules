@@ -1,0 +1,18 @@
+# kiss-tnc-bridge: keep ModemManager away from radios with built-in TNCs.
+#
+# ModemManager probes newly plugged USB serial devices with AT commands,
+# which a TNC doesn't understand, and can hold the port while
+# kiss-tnc-bridge tries to open it. Raspberry Pi OS doesn't run
+# ModemManager; Ubuntu and other desktops do.
+#
+# To add another TNC, copy this file to /etc/udev/rules.d/ (same name, so it
+# replaces this one), add a line with its USB vendor and product ids
+# (`lsusb` shows them as vendor:product), and run
+# `sudo udevadm control --reload-rules`, then plug the TNC in again.
+
+ACTION!="add|change|move|bind", GOTO="kiss_tnc_bridge_end"
+
+# JVC Kenwood TH-D75
+ATTRS{idVendor}=="2166", ATTRS{idProduct}=="9023", ENV{ID_MM_DEVICE_IGNORE}="1"
+
+LABEL="kiss_tnc_bridge_end"

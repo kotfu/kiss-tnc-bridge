@@ -6,14 +6,15 @@
 #
 # A bridge connects one KISS TNC to any number of apps. Each bridge has one
 # TNC port (where the radio or software TNC is) and one or more app ports
-# (where apps attach, over BLE or TCP).
+# (where apps attach, over BLE or TCP). Keep a bridge for each setup and
+# enable the one that matches the hardware you have with you.
 
 [global]
 # Log level: trace, debug, info, warn, error
 log_level = "info"
 
-# Default Bluetooth adapter for ble-server ports: an [[adapter]] id, a MAC,
-# or hciN. Leave it out to use the first adapter BlueZ has.
+# Default Bluetooth adapter for ble-server ports and TNCs: an [[adapter]]
+# id, a MAC, or hciN. Leave it out to use the first adapter BlueZ has.
 # adapter = "builtin"
 
 # Give adapters readable ids. hciN numbers can change when a dongle is
@@ -22,12 +23,42 @@ log_level = "info"
 # id = "builtin"
 # mac = "B8:27:EB:12:34:56"
 
+# A hardware TNC, here the one built into a Kenwood TH-D75, with the two
+# ways to reach it. Pair it once with bluetoothctl (see the README).
+# [[tnc]]
+# id = "d75"
+# name = "TH-D75"
+# model = "th-d75"            # puts it in KISS mode; leave model out for TNCs
+#                             # that are always in KISS mode (see the README)
+#
+#   [tnc.spp]                 # over Bluetooth
+#   address = "00:11:22:33:44:55"
+#   # adapter = "builtin"     # the adapter it's paired on
+#
+#   [tnc.serial]              # over its USB cable
+#   path = "/dev/serial/by-id/usb-JVCKENWOOD_TH-D75-if00"
+
+# The TH-D75 over Bluetooth, shared to phones over BLE.
+# [[bridge]]
+# id = "ktbr0"
+# name = "TH-D75"
+#
+#   [[bridge.port]]
+#   id = "radio"
+#   type = "spp-client"       # or type = "serial" for the USB cable
+#   tnc = "d75"
+#   idle_timeout = "90s"      # keep the radio link up briefly between apps
+#
+#   [[bridge.port]]
+#   id = "phones"
+#   type = "ble-server"
+
 # A software TNC such as Dire Wolf or Graywolf, shared to phones over BLE and
 # to apps on this machine over TCP.
 # [[bridge]]
-# id = "ktbr0"
+# id = "ktbr1"
 # name = "Graywolf"            # what phones see; must be unique
-# enabled = true
+# enabled = false              # only one bridge can use a BLE adapter at a time
 #
 #   [[bridge.port]]
 #   id = "tnc"
@@ -47,3 +78,5 @@ log_level = "info"
 #   # listen = "wlan0:8001"   # or only on one interface
 #   # allow = ["192.168.4.0/24"]
 #   # Anyone who can reach a tcp-server can transmit under your callsign.
+#   # Ports reachable from the network are announced with DNS-SD
+#   # (_kiss-tnc._tcp) so apps can find them; set announce = false to stop it.

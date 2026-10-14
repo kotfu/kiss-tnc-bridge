@@ -23,6 +23,7 @@
 //! the notification MTU.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
@@ -53,6 +54,8 @@ pub const KISS_RX_CHAR_UUID: Uuid = Uuid::from_u128(0x00000003_ba2a_46c9_ae49_01
 const SESSION_QUEUE: usize = 64;
 /// A notification that takes longer than this means the phone is gone.
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
+/// How long to wait for BlueZ to drop a phone's link.
+const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BleState {
@@ -68,11 +71,15 @@ pub struct BleServerPort {
     pub bridge_id: String,
     pub port_id: String,
     pub adapter: Adapter,
-    /// The bridge's effective public name: advertised, and set as the adapter alias.
-    pub public_name: String,
+    /// The bridge's effective public name: advertised, and set as the
+    /// adapter alias. It changes after a DNS-SD collision; connected phones
+    /// stay connected and the advertisement restarts with the new name.
+    pub public_name: watch::Receiver<String>,
     pub max_clients: u32,
     pub app_tx: mpsc::Sender<AppEvent>,
     pub shutdown: CancellationToken,
+    /// Where the port lists the phones it serves (see [`drop_stale`](Self::drop_stale)).
+    pub runtime_dir: PathBuf,
 }
 
 pub struct BleServerHandle {
@@ -81,7 +88,8 @@ pub struct BleServerHandle {
 }
 
 enum BleEvent {
-    /// A client's reader or writer ended, or its device disconnected.
+    /// A client unsubscribed, its reader or writer ended, or its device
+    /// disconnected.
     Gone { addr: Address, generation: u64 },
 }
 
@@ -105,35 +113,35 @@ impl BleServerPort {
         (handle, task)
     }
 
-    async fn prepare(&self) -> Result<(), String> {
+    async fn prepare(&self, public_name: &str) -> Result<(), String> {
         let name = self.adapter.name();
-        if let Some(unblocked) = rfkill_unblock(name) {
-            tracing::info!(bridge = %self.bridge_id, port = %self.port_id, adapter = name, "cleared the rfkill soft block{}", if unblocked { "" } else { " (no permission)" });
-        }
-        self.adapter
-            .set_powered(true)
-            .await
-            .map_err(|e| format!("can't power on adapter {name}: {e}{}", rfkill_hint(name)))?;
+        crate::bluetooth::power_on(&self.adapter).await?;
         // Pairable, so the Just Works bond BlueZ starts when a phone touches a
         // protected characteristic can complete.
         self.adapter
             .set_pairable(true)
             .await
             .map_err(|e| format!("{name}: set pairable: {e}"))?;
-        if self.adapter.alias().await.ok().as_deref() != Some(&self.public_name) {
+        self.set_alias(public_name).await
+    }
+
+    /// The adapter's alias is what radios see while pairing and what phones
+    /// show in their Bluetooth settings.
+    async fn set_alias(&self, public_name: &str) -> Result<(), String> {
+        if self.adapter.alias().await.ok().as_deref() != Some(public_name) {
             self.adapter
-                .set_alias(self.public_name.clone())
+                .set_alias(public_name.to_string())
                 .await
-                .map_err(|e| format!("{name}: set alias: {e}"))?;
+                .map_err(|e| format!("{}: set alias: {e}", self.adapter.name()))?;
         }
         Ok(())
     }
 
-    async fn advertise(&self) -> bluer::Result<AdvertisementHandle> {
+    async fn advertise(&self, public_name: &str) -> bluer::Result<AdvertisementHandle> {
         let adv = Advertisement {
             advertisement_type: bluer::adv::Type::Peripheral,
             service_uuids: std::iter::once(KISS_SERVICE_UUID).collect(),
-            local_name: Some(self.public_name.clone()),
+            local_name: Some(public_name.to_string()),
             discoverable: Some(true),
             ..Default::default()
         };
@@ -145,10 +153,15 @@ impl BleServerPort {
             tracing::error!(bridge = %self.bridge_id, port = %self.port_id, "{msg}");
             state_tx.send_replace(BleState::Failed(msg));
         };
-        if let Err(e) = self.prepare().await {
+        let mut name_rx = self.public_name.clone();
+        let mut public_name = name_rx.borrow_and_update().clone();
+        let mut follow_name = true;
+        if let Err(e) = self.prepare(&public_name).await {
             fail(&state_tx, e);
             return;
         }
+        let clients_file = self.clients_file().await;
+        self.drop_stale(clients_file.as_deref()).await;
         let (app, mut tx_control, mut rx_control) = build_application();
         let _app_handle = match self.adapter.serve_gatt_application(app).await {
             Ok(h) => h,
@@ -157,7 +170,7 @@ impl BleServerPort {
                 return;
             }
         };
-        let mut adv = match self.advertise().await {
+        let mut adv = match self.advertise(&public_name).await {
             Ok(h) => Some(h),
             Err(e) => {
                 fail(&state_tx, format!("can't advertise: {e}"));
@@ -167,7 +180,7 @@ impl BleServerPort {
         state_tx.send_replace(BleState::Advertising);
         tracing::info!(
             bridge = %self.bridge_id, port = %self.port_id, adapter = self.adapter.name(),
-            name = %self.public_name, max_clients = self.max_clients, "advertising KISS service"
+            name = %public_name, max_clients = self.max_clients, "advertising KISS service"
         );
 
         let (ev_tx, mut ev_rx) = mpsc::channel::<BleEvent>(64);
@@ -178,6 +191,23 @@ impl BleServerPort {
         loop {
             tokio::select! {
                 _ = self.shutdown.cancelled() => break,
+                res = name_rx.changed(), if follow_name => {
+                    if res.is_err() {
+                        follow_name = false;
+                        continue;
+                    }
+                    public_name = name_rx.borrow_and_update().clone();
+                    tracing::info!(bridge = %self.bridge_id, port = %self.port_id, name = %public_name, "public name changed");
+                    if let Err(e) = self.set_alias(&public_name).await {
+                        tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, "{e}");
+                    }
+                    if adv.take().is_some() {
+                        match self.advertise(&public_name).await {
+                            Ok(h) => adv = Some(h),
+                            Err(e) => tracing::error!(bridge = %self.bridge_id, port = %self.port_id, "can't advertise the new name: {e}"),
+                        }
+                    }
+                }
                 ev = tx_control.next() => match ev {
                     Some(CharacteristicControlEvent::Write(req)) => {
                         let addr = req.device_address();
@@ -193,6 +223,7 @@ impl BleServerPort {
                             }
                         };
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
+                        record_clients(clients_file.as_deref(), &clients);
                         let id = self.session_id(addr);
                         tokio::spawn(reader_task(reader, id, self.app_tx.clone(), ev_tx.clone(), addr, generation));
                     }
@@ -210,6 +241,7 @@ impl BleServerPort {
                             continue;
                         }
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
+                        record_clients(clients_file.as_deref(), &clients);
                         let client = clients.get_mut(&addr).expect("just ensured");
                         match client.downlink_rx.take() {
                             Some(rx) => {
@@ -236,11 +268,12 @@ impl BleServerPort {
                         continue; // a stale report from a session already replaced
                     }
                     clients.remove(&addr);
+                    record_clients(clients_file.as_deref(), &clients);
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
                     let _ = self.app_tx.send(AppEvent::SessionClosed { id: self.session_id(addr) }).await;
                     if clients.len() < max && adv.is_none() {
-                        match self.advertise().await {
+                        match self.advertise(&public_name).await {
                             Ok(h) => {
                                 adv = Some(h);
                                 state_tx.send_replace(BleState::Advertising);
@@ -252,6 +285,13 @@ impl BleServerPort {
             }
         }
 
+        // BlueZ keeps a phone's LE link up after our GATT service goes away,
+        // and apps like aprs.fi then carry on as if the bridge were still
+        // there. Dropping the link tells them it isn't.
+        futures::future::join_all(clients.keys().map(|addr| self.disconnect(*addr))).await;
+        if let Some(f) = &clients_file {
+            let _ = std::fs::remove_file(f);
+        }
         for addr in clients.keys() {
             let _ = self
                 .app_tx
@@ -278,10 +318,64 @@ impl BleServerPort {
             return true;
         }
         tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, max, "rejecting client: max clients reached");
-        if let Ok(device) = self.adapter.device(addr) {
-            let _ = device.disconnect().await;
-        }
+        self.disconnect(addr).await;
         false
+    }
+
+    /// `ble-clients-<adapter MAC>` in the runtime directory. One file per
+    /// adapter is enough: an adapter carries one enabled `ble-server`.
+    async fn clients_file(&self) -> Option<PathBuf> {
+        let mac = self.adapter.address().await.ok()?;
+        Some(
+            self.runtime_dir
+                .join(format!("ble-clients-{}", mac.to_string().replace(':', ""))),
+        )
+    }
+
+    /// Drop phones that a previous run of the daemon served and that are
+    /// still connected. A daemon that was killed couldn't drop their links,
+    /// so they're still subscribed to a GATT service that no longer exists:
+    /// connected as far as they know, but deaf and mute. Dropping the link
+    /// makes them reconnect to this run's service. Only phones the list
+    /// names are touched, never other devices on the adapter.
+    async fn drop_stale(&self, file: Option<&Path>) {
+        let Some(file) = file else { return };
+        let Ok(text) = std::fs::read_to_string(file) else {
+            return;
+        };
+        for addr in text
+            .lines()
+            .filter_map(|l| l.trim().parse::<Address>().ok())
+        {
+            let connected = match self.adapter.device(addr) {
+                Ok(d) => d.is_connected().await.unwrap_or(false),
+                Err(_) => false,
+            };
+            if connected {
+                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping a phone still connected to the previous run, so it reconnects");
+                self.disconnect(addr).await;
+            }
+        }
+        let _ = std::fs::remove_file(file);
+    }
+
+    /// Drop a phone at the link layer.
+    async fn disconnect(&self, addr: Address) {
+        let Ok(device) = self.adapter.device(addr) else {
+            return;
+        };
+        match tokio::time::timeout(DISCONNECT_WAIT, device.disconnect()).await {
+            Ok(Ok(())) => {
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "link dropped")
+            }
+            Ok(Err(e)) => {
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "can't drop the link: {e}")
+            }
+            Err(_) => {
+                // BlueZ goes on with it; it just hasn't confirmed yet.
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "link drop requested; BlueZ hasn't confirmed it yet")
+            }
+        }
     }
 
     /// Register a session for `addr` if there isn't one, and tell the bridge.
@@ -329,6 +423,20 @@ impl BleServerPort {
                 .await;
         });
         g
+    }
+}
+
+/// Keep the list of phones a port serves, for [`BleServerPort::drop_stale`]
+/// after a crash.
+fn record_clients<C>(file: Option<&Path>, clients: &HashMap<Address, C>) {
+    let Some(file) = file else { return };
+    let mut text = String::new();
+    for addr in clients.keys() {
+        text.push_str(&addr.to_string());
+        text.push('\n');
+    }
+    if let Err(e) = crate::config::state::write_atomic(file, text.as_bytes()) {
+        tracing::debug!("can't write {}: {e}", file.display());
     }
 }
 
@@ -421,7 +529,27 @@ async fn writer_task(
 ) {
     let mtu = writer.mtu();
     let chunk = if mtu > 0 { mtu } else { 20 };
-    while let Some(frame) = rx.recv().await {
+    loop {
+        let frame = tokio::select! {
+            frame = rx.recv() => match frame {
+                Some(f) => f,
+                None => break,
+            },
+            // The app stopped notifications. A bonded phone keeps its link
+            // up after the app lets go, so this, not a disconnect, is often
+            // the only sign the session is over; without it the port would
+            // stay "full" and never advertise again.
+            _ = writer.closed() => {
+                if writer.is_closed().unwrap_or(true) {
+                    tracing::info!(%addr, "client unsubscribed");
+                    let _ = ev_tx.send(BleEvent::Gone { addr, generation }).await;
+                    return;
+                }
+                // Readable without being closed isn't expected; don't spin.
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let mut wire = Vec::with_capacity(frame.len() + 2);
         wire.push(FEND);
         wire.extend_from_slice(&frame);
@@ -456,30 +584,5 @@ async fn wait_for_disconnect(adapter: &Adapter, addr: Address) {
         if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(false)) = ev {
             return;
         }
-    }
-}
-
-/// Clear an rfkill soft block on `hci`, which BlueZ can't power through.
-/// Returns `None` if there was no block, `Some(true)` if it was cleared,
-/// `Some(false)` if we lacked permission.
-fn rfkill_unblock(hci: &str) -> Option<bool> {
-    let dir = std::fs::read_dir("/sys/class/rfkill").ok()?;
-    for entry in dir.flatten() {
-        let p = entry.path();
-        if std::fs::read_to_string(p.join("name")).ok()?.trim() != hci {
-            continue;
-        }
-        if std::fs::read_to_string(p.join("soft")).ok()?.trim() != "1" {
-            return None;
-        }
-        return Some(std::fs::write(p.join("soft"), "0\n").is_ok());
-    }
-    None
-}
-
-fn rfkill_hint(hci: &str) -> &'static str {
-    match rfkill_unblock(hci) {
-        Some(false) => " (the adapter is rfkill-blocked and only root can unblock it)",
-        _ => "",
     }
 }

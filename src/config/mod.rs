@@ -17,7 +17,7 @@
 //!
 //! Static config is TOML in `/etc/kiss-tnc-bridge/`: the main file plus
 //! `conf.d/*.toml`, all read-only to the daemon. This module turns those
-//! files into one effective set of adapters and bridges with defaults filled
+//! files into one effective set of adapters, TNCs and bridges with defaults filled
 //! in and references resolved ([`resolve`]), and checks it ([`validate`]).
 //! The same path serves `kiss-tnc-bridge -t`, startup, and later the
 //! control API's `config.check` and reload.
@@ -34,6 +34,7 @@
 pub mod load;
 pub mod model;
 pub mod resolve;
+pub mod state;
 pub mod validate;
 
 use std::fmt;
@@ -43,7 +44,7 @@ pub use load::{Loaded, load};
 pub use model::{AppParams, ConnectPolicy, Role};
 pub use resolve::{
     Adapter, AdapterSel, AdapterValue, Bridge, Config, Control, Global, Listen, Mac, Port,
-    PortKind, resolve,
+    PortKind, SerialDevice, Spp, Tnc, TncModel, resolve,
 };
 pub use validate::{Report, validate};
 
