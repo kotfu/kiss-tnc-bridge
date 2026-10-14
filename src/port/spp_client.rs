@@ -232,7 +232,7 @@ impl TncConnector for SppConnector {
             }
 
             let mut stream = match spp.channel {
-                None => profile.connect(&device).await.map_err(&fail)?,
+                None => profile.connect(&device).await.map_err(fail)?,
                 Some(ch) => {
                     let local = adapter
                         .address()
