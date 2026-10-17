@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     runtime_dir: Option<PathBuf>,
 
+    /// Control socket [default: control.sock in the runtime directory]
+    #[arg(long, value_name = "PATH")]
+    socket: Option<PathBuf>,
+
     /// Check the config, print the effective bridges and exit (0 = valid, 1 = errors)
     #[arg(short = 't', long = "test-config")]
     test_config: bool,
@@ -368,7 +372,11 @@ fn main() {
             state_dir: state_dir.clone(),
             runtime_dir: runtime_dir.clone(),
         };
-        if let Err(e) = run(sources, cfg, paths, set_level).await {
+        let socket = cli
+            .socket
+            .clone()
+            .unwrap_or_else(|| runtime_dir.join(kiss_tnc_bridge::control::server::SOCKET_NAME));
+        if let Err(e) = run(sources, cfg, paths, socket, set_level).await {
             tracing::error!("fatal: {e}");
             std::process::exit(1);
         }
@@ -426,10 +434,29 @@ async fn run(
     sources: config::Sources,
     cfg: config::Config,
     paths: supervisor::Paths,
+    socket: PathBuf,
     set_level: Option<supervisor::LogLevelFn>,
 ) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+    let hub = kiss_tnc_bridge::control::events::Hub::new(shutdown.clone());
+    {
+        let group = cfg.control.group.clone();
+        let (cmd_tx, hub, shutdown) = (cmd_tx.clone(), hub.clone(), shutdown.clone());
+        tokio::spawn(async move {
+            if let Err(e) = kiss_tnc_bridge::control::server::serve(
+                socket.clone(),
+                group,
+                cmd_tx,
+                hub,
+                shutdown,
+            )
+            .await
+            {
+                tracing::error!(socket = %socket.display(), "no control socket: {e}");
+            }
+        });
+    }
     let stop = shutdown.clone();
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
@@ -466,5 +493,5 @@ async fn run(
         stop.cancel();
         tracing::info!("{why}, shutting down");
     });
-    supervisor::run(sources, cfg, paths, set_level, cmd_rx, shutdown).await
+    supervisor::run(sources, cfg, paths, set_level, hub, cmd_rx, shutdown).await
 }

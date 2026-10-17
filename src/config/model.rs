@@ -16,7 +16,7 @@
 //! The TOML schema, as written in files. Everything optional here gets a
 //! default in [`resolve`](super::resolve); this is the shape serde reads.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// One TOML file: the main file or one from `conf.d/`.
 #[derive(Debug, Default, Clone, Deserialize)]
@@ -100,7 +100,7 @@ pub struct BridgeDef {
 }
 
 /// Whether KISS parameter commands from apps reach the TNC.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AppParams {
     #[default]
@@ -126,7 +126,7 @@ impl std::fmt::Display for Role {
 }
 
 /// When a TNC port connects.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConnectPolicy {
     #[default]

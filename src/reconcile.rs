@@ -32,6 +32,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 
+use serde::{Deserialize, Serialize};
+
 use crate::bridge::SessionId;
 use crate::config::{AdapterSel, Bridge, Config, Mac, Port, PortKind};
 use crate::port::listen::allowed;
@@ -88,7 +90,9 @@ impl Runtime<'_> {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
 pub enum Action {
     Unchanged,
     Updated,
@@ -109,7 +113,8 @@ impl fmt::Display for Action {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortPlan {
     pub id: String,
     pub action: Action,
@@ -121,7 +126,8 @@ pub struct PortPlan {
     pub drops_tnc_link: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BridgePlan {
     pub id: String,
     pub action: Action,
@@ -132,7 +138,8 @@ pub struct BridgePlan {
     pub stops_in_use: bool,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Plan {
     /// Daemon-wide changes applied live: `log_level`, `control.group`.
     pub global: Vec<String>,

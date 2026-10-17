@@ -23,10 +23,12 @@
 #[cfg(target_os = "linux")]
 pub mod agent;
 pub mod announce;
+pub mod ax25;
 #[cfg(target_os = "linux")]
 pub mod bluetooth;
 pub mod bridge;
 pub mod config;
+pub mod control;
 pub mod error;
 pub mod kiss;
 pub mod port;

@@ -41,10 +41,18 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use serde_json::{Value, json};
+
 use crate::announce::{self, Service};
 use crate::bridge::{Bridge, BridgeCmd, BridgeHandle, TncConnector, TncSettings, TncState};
 use crate::config::state::StateStore;
 use crate::config::{self, AdapterSel, Config, Listen, Mac, PortKind, Problem, Sources};
+use crate::control::events::Hub;
+use crate::control::protocol::{
+    self, AdapterStatus, ApiError, BridgeStatus, CheckResult, Command, Counters, ErrorCode,
+    PlanResult, PortStatus, PublicName, SerialStatus, SessionStatus, SppStatus, Status, TncStatus,
+    rfc3339,
+};
 use crate::error::Error;
 use crate::port::tcp_server::{ServerState, TcpLive, TcpServerPort};
 use crate::port::{serial, tcp_client};
@@ -75,6 +83,28 @@ pub enum DaemonCmd {
         non_disruptive: bool,
         reply: Option<oneshot::Sender<Result<ReloadReport, ReloadError>>>,
     },
+    /// A control API command (everything but `subscribe`, which the
+    /// connection handles).
+    Control {
+        command: Command,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+}
+
+/// A port's state as `status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortState {
+    pub state: String,
+    pub detail: Option<String>,
+}
+
+impl PortState {
+    pub fn new(state: &str, detail: Option<String>) -> Self {
+        Self {
+            state: state.to_string(),
+            detail,
+        }
+    }
 }
 
 /// What a reload did.
@@ -102,6 +132,8 @@ pub struct BleSlot {
     pub max_clients: watch::Receiver<u32>,
     pub app_tx: mpsc::Sender<crate::bridge::AppEvent>,
     pub bridge_shutdown: CancellationToken,
+    /// Kept current by the BLE manager, for `status`.
+    pub status: watch::Sender<PortState>,
     /// Set while the port runs on an adapter.
     #[cfg(target_os = "linux")]
     pub running: Option<ble::Running>,
@@ -135,6 +167,7 @@ enum RunningPort {
     },
     Ble {
         max_clients: watch::Sender<u32>,
+        status: watch::Receiver<PortState>,
     },
 }
 
@@ -145,6 +178,7 @@ pub async fn run(
     cfg: Config,
     paths: Paths,
     log_level: Option<LogLevelFn>,
+    hub: Arc<Hub>,
     mut cmds: mpsc::Receiver<DaemonCmd>,
     shutdown: CancellationToken,
 ) -> Result<(), Error> {
@@ -170,6 +204,7 @@ pub async fn run(
         shutdown: shutdown.clone(),
         bluez_errors: Vec::new(),
         known_warnings: Default::default(),
+        hub,
     };
     // The warnings logged at startup, rebuilt from the same sources.
     if let Ok((_, report)) = config::build(&d.sources, true) {
@@ -207,6 +242,9 @@ pub async fn run(
                         _ => {}
                     }
                 }
+                Some(DaemonCmd::Control { command, reply }) => {
+                    let _ = reply.send(d.control(command).await);
+                }
                 None => shutdown.cancelled().await,
             },
         }
@@ -240,6 +278,7 @@ struct Daemon {
     bluez_errors: Vec<Error>,
     /// Config warnings already logged, so reloads log only new ones.
     known_warnings: std::collections::HashSet<String>,
+    hub: Arc<Hub>,
 }
 
 impl Daemon {
@@ -264,6 +303,9 @@ impl Daemon {
         self.known_warnings = warnings;
         self.apply(&plan, cfg).await;
         self.sources = sources;
+        if !plan.is_noop() {
+            self.hub.state("config", "", "reloaded");
+        }
         for e in self.bluez_errors.drain(..) {
             tracing::error!("{e}");
         }
@@ -407,6 +449,214 @@ impl Daemon {
         self.cfg = new;
     }
 
+    // ── Control API ─────────────────────────────────────────────────
+
+    async fn control(&mut self, command: Command) -> Result<Value, ApiError> {
+        match command {
+            Command::Status => Ok(to_value(&self.status().await)),
+            Command::Reload { non_disruptive } => match self.reload(non_disruptive).await {
+                Ok(r) => Ok(to_value(&PlanResult::new(r.plan, true, &r.warnings))),
+                Err(ReloadError::Invalid(ps)) => Err(ApiError::new(
+                    ErrorCode::ConfigInvalid,
+                    format!(
+                        "the config has {} error(s); nothing was applied (kiss-tnc-bridge -t shows them)",
+                        ps.len()
+                    ),
+                )
+                .data(to_value(&protocol::problems(&ps)))),
+                Err(ReloadError::WouldDisrupt(plan)) => {
+                    let result = PlanResult::new(plan, false, &[]);
+                    Err(ApiError::new(
+                        ErrorCode::ReloadWouldDisrupt,
+                        format!(
+                            "the reload would disrupt ({}); nothing was applied. Reload without non_disruptive to apply it",
+                            result.disruptions.join("; ")
+                        ),
+                    )
+                    .data(to_value(&result)))
+                }
+            },
+            Command::ConfigCheck { dynamic } => Ok(to_value(&self.check(dynamic).await)),
+            Command::Subscribe { .. } => Err(ApiError::new(
+                ErrorCode::BadRequest,
+                "subscribe is handled by the connection",
+            )),
+        }
+    }
+
+    /// Validate the config on disk, or with `dynamic` standing in for
+    /// `dynamic.toml`, and work out what a reload would do.
+    async fn check(&self, dynamic: Option<String>) -> CheckResult {
+        let invalid = |errors: Vec<Problem>| CheckResult {
+            valid: false,
+            errors: protocol::problems(&errors),
+            warnings: Vec::new(),
+            plan: None,
+            disruptive: false,
+            disruptions: Vec::new(),
+        };
+        let mut sources =
+            match config::read_sources(&self.paths.main_file, Some(&self.paths.state_dir)) {
+                Ok(s) => s,
+                Err(errors) => return invalid(errors),
+            };
+        if let Some(text) = dynamic {
+            sources.dynamic = Some(config::load::DynamicFile {
+                path: self.paths.state_dir.join(config::load::DYNAMIC_FILE_NAME),
+                text,
+            });
+        }
+        match config::build(&sources, true) {
+            Err(errors) => invalid(errors),
+            Ok((cfg, report)) => {
+                let plan = self.plan_for(&cfg).await;
+                let disruptions = plan.disruptions();
+                CheckResult {
+                    valid: true,
+                    errors: Vec::new(),
+                    warnings: protocol::problems(&report.warnings),
+                    disruptive: !disruptions.is_empty(),
+                    disruptions,
+                    plan: Some(plan),
+                }
+            }
+        }
+    }
+
+    async fn status(&self) -> Status {
+        let cfg = &self.cfg;
+        // Adapters: those present, and those an [[adapter]] names.
+        let present = self.bt.adapter_details().await;
+        let mut adapters: Vec<AdapterStatus> = present
+            .iter()
+            .map(|(hci, mac, powered)| {
+                let named = cfg.adapters.iter().find(|a| a.mac == *mac);
+                AdapterStatus {
+                    id: named.map(|a| a.id.clone()),
+                    mac: mac.to_string(),
+                    hci: Some(hci.clone()),
+                    present: true,
+                    powered: Some(*powered),
+                    source: named.map(|a| a.source.to_string()),
+                }
+            })
+            .collect();
+        for a in &cfg.adapters {
+            if !present.iter().any(|(_, mac, _)| *mac == a.mac) {
+                adapters.push(AdapterStatus {
+                    id: Some(a.id.clone()),
+                    mac: a.mac.to_string(),
+                    hci: None,
+                    present: false,
+                    powered: None,
+                    source: Some(a.source.to_string()),
+                });
+            }
+        }
+
+        let mut tncs = Vec::new();
+        for t in &cfg.tncs {
+            let in_use_by = cfg
+                .bridges
+                .iter()
+                .find(|b| b.enabled && b.ports.iter().any(|p| p.tnc_id() == Some(&t.id)))
+                .map(|b| b.id.clone());
+            let spp = match &t.spp {
+                Some(spp) => Some(SppStatus {
+                    address: spp.address.to_string(),
+                    adapter: cfg.describe_adapter(&spp.adapter),
+                    paired: self.bt.paired(&spp.adapter, spp.address).await,
+                }),
+                None => None,
+            };
+            tncs.push(TncStatus {
+                id: t.id.clone(),
+                name: t.name.clone(),
+                model: t.model.to_string(),
+                spp,
+                serial: t.serial.as_ref().map(|s| SerialStatus {
+                    path: s.path.clone(),
+                    baud: s.baud,
+                    present: std::path::Path::new(&s.path).exists(),
+                }),
+                in_use_by,
+                source: t.source.to_string(),
+                editable: !t.source.is_static(),
+            });
+        }
+
+        let mut bridges = Vec::new();
+        for b in &cfg.bridges {
+            let rb = self.bridges.get(&b.id);
+            let snap = match rb {
+                Some(rb) => rb.handle.snapshot().await,
+                None => None,
+            };
+            let mut ports = Vec::new();
+            for p in &b.ports {
+                let sessions: Vec<SessionStatus> = snap
+                    .iter()
+                    .flat_map(|s| s.sessions.iter())
+                    .filter(|s| s.id.port == p.id)
+                    .map(|s| SessionStatus {
+                        id: s.id.to_string(),
+                        since: rfc3339(s.since),
+                    })
+                    .collect();
+                let (state, since) = match (rb.and_then(|rb| rb.ports.get(&p.id)), &snap) {
+                    (Some(RunningPort::Tnc), Some(snap)) => (
+                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc)),
+                        Some(rfc3339(snap.tnc_since)),
+                    ),
+                    (Some(RunningPort::Tcp { state, .. }), _) => (tcp_state(&state.borrow()), None),
+                    (Some(RunningPort::Ble { status, .. }), _) => (status.borrow().clone(), None),
+                    _ if !b.enabled => (PortState::new("disabled", None), None),
+                    _ => (PortState::new("stopped", None), None),
+                };
+                ports.push(PortStatus {
+                    id: p.id.clone(),
+                    kind: p.type_name().to_string(),
+                    role: p.role.to_string(),
+                    state: state.state,
+                    detail: state.detail,
+                    since,
+                    settings: port_settings(cfg, p),
+                    sessions,
+                });
+            }
+            bridges.push(BridgeStatus {
+                id: b.id.clone(),
+                name: b.name.clone(),
+                enabled: b.enabled,
+                enabled_override: b.enabled_override,
+                public_name: PublicName {
+                    configured: b.public_name.clone(),
+                    effective: rb
+                        .map(|rb| rb.name.borrow().clone())
+                        .unwrap_or_else(|| b.public_name.clone()),
+                },
+                source: b.source.to_string(),
+                editable: !b.source.is_static(),
+                ports,
+                counters: rb.map(|rb| {
+                    let c = &rb.handle.counters;
+                    Counters {
+                        frames_up: c.frames_up(),
+                        frames_down: c.frames_down(),
+                        dropped: c.dropped(),
+                        tnc_connects: c.tnc_connects(),
+                    }
+                }),
+            });
+        }
+        Status {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            adapters,
+            tncs,
+            bridges,
+        }
+    }
+
     fn port(&self, bridge: &str, port: &str) -> Option<&RunningPort> {
         self.bridges.get(bridge)?.ports.get(port)
     }
@@ -441,7 +691,8 @@ impl Daemon {
             settings,
             self.shutdown.child_token(),
         );
-        let task = tokio::spawn(bridge.run());
+        let task = tokio::spawn(bridge.with_hub(self.hub.clone()).run());
+        self.hub.state("bridge", &b.id, "started");
         let name = {
             let mut store = self.state.lock().unwrap();
             announce::effective_public_name(&mut store, &b.id, &b.public_name)
@@ -487,6 +738,7 @@ impl Daemon {
         if tokio::time::timeout(STOP_WAIT, rb.task).await.is_err() {
             tracing::warn!(bridge = %id, "bridge didn't stop in time");
         }
+        self.hub.state("bridge", id, "stopped");
         if let Some(tx) = &self.announcer {
             let _ = tx.send(announce::Cmd::Forget { id: id.to_string() }).await;
         }
@@ -540,6 +792,7 @@ impl Daemon {
                 max_clients,
             } => {
                 let (max_tx, max_rx) = watch::channel(*max_clients);
+                let (status_tx, status_rx) = watch::channel(PortState::new("starting", None));
                 let slot = BleSlot {
                     bridge_id: b.id.clone(),
                     port_id: p.id.clone(),
@@ -548,6 +801,7 @@ impl Daemon {
                     max_clients: max_rx,
                     app_tx,
                     bridge_shutdown: bridge_token,
+                    status: status_tx,
                     #[cfg(target_os = "linux")]
                     running: None,
                     last_adapter: None,
@@ -560,6 +814,7 @@ impl Daemon {
                 {
                     Ok(()) => RunningPort::Ble {
                         max_clients: max_tx,
+                        status: status_rx,
                     },
                     Err(e) => {
                         tracing::error!(bridge = %b.id, port = %p.id, "can't start the port: {e}");
@@ -576,6 +831,8 @@ impl Daemon {
         if let Some(rb) = self.bridges.get_mut(&b.id) {
             rb.ports.insert(p.id.clone(), running);
         }
+        self.hub
+            .state("port", format!("{}/{}", b.id, p.id), "started");
     }
 
     async fn stop_port(&mut self, bridge: &str, port: &str) {
@@ -608,6 +865,8 @@ impl Daemon {
             }
             RunningPort::Ble { .. } => self.bt.remove_ble(bridge, port).await,
         }
+        self.hub
+            .state("port", format!("{bridge}/{port}"), "stopped");
     }
 
     /// Apply a port's live settings.
@@ -655,7 +914,9 @@ impl Daemon {
             }
             PortKind::BleServer { max_clients, .. } => {
                 if let Some(rb) = self.bridges.get(&b.id)
-                    && let Some(RunningPort::Ble { max_clients: tx }) = rb.ports.get(&p.id)
+                    && let Some(RunningPort::Ble {
+                        max_clients: tx, ..
+                    }) = rb.ports.get(&p.id)
                 {
                     tx.send_replace(*max_clients);
                 }
@@ -787,6 +1048,89 @@ impl Daemon {
             )),
         }
     }
+}
+
+fn to_value<T: serde::Serialize>(v: &T) -> Value {
+    serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+fn tnc_detail(s: &TncState) -> Option<String> {
+    match s {
+        TncState::Backoff { attempt, retry_in } => Some(format!(
+            "attempt {attempt}, retry in {}s",
+            retry_in.as_secs()
+        )),
+        TncState::Unpaired(why) | TncState::WaitingForDevice(why) => Some(why.clone()),
+        _ => None,
+    }
+}
+
+fn tcp_state(s: &ServerState) -> PortState {
+    match s {
+        ServerState::Starting => PortState::new("starting", None),
+        ServerState::Listening(a) => PortState::new("listening", Some(a.to_string())),
+        ServerState::WaitingForInterface(i) => {
+            PortState::new("waiting for interface", Some(i.clone()))
+        }
+        ServerState::Failed(e) => PortState::new("failed", Some(e.clone())),
+        ServerState::Stopped => PortState::new("stopped", None),
+    }
+}
+
+/// A port's settings as `status` shows them: what the config says, with
+/// references resolved for display.
+fn port_settings(cfg: &Config, p: &config::Port) -> Value {
+    let policy = |connect: &config::ConnectPolicy, idle: &Duration| json!({"connect": connect, "idle_timeout": format!("{}s", idle.as_secs())});
+    let mut v = match &p.kind {
+        PortKind::TcpClient {
+            host,
+            port,
+            connect,
+            idle_timeout,
+        } => {
+            let mut v = policy(connect, idle_timeout);
+            v["address"] = json!(format!("{host}:{port}"));
+            v
+        }
+        PortKind::SppClient {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        }
+        | PortKind::Serial {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        } => {
+            let mut v = policy(connect, idle_timeout);
+            v["tnc"] = json!(tnc);
+            v["exit_kiss_on_disconnect"] = json!(exit_kiss_on_disconnect);
+            v
+        }
+        PortKind::TcpServer {
+            listen,
+            max_clients,
+            allow,
+            announce,
+        } => json!({
+            "listen": listen.to_string(),
+            "max_clients": max_clients,
+            "allow": allow.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+            "announce": announce,
+        }),
+        PortKind::BleServer {
+            adapter,
+            max_clients,
+        } => json!({"adapter": cfg.describe_adapter(adapter), "max_clients": max_clients}),
+    };
+    if let Value::Object(m) = &mut v {
+        m.retain(|_, x| !x.is_null());
+    }
+    v
 }
 
 /// The bridge's TNC settings from its config.
@@ -1013,6 +1357,41 @@ impl Bt {
         out
     }
 
+    /// Adapters present now, with whether they're powered. Opens a BlueZ
+    /// session if there isn't one (without the agent: listing isn't using).
+    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+        let session = match &self.session {
+            Some(s) => s.clone(),
+            None => match bluer::Session::new().await {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            },
+        };
+        let mut names = session.adapter_names().await.unwrap_or_default();
+        names.sort();
+        let mut out = Vec::new();
+        for n in names {
+            if let Ok(a) = session.adapter(&n)
+                && let Ok(addr) = a.address().await
+            {
+                out.push((n, Mac(addr.0), a.is_powered().await.unwrap_or(false)));
+            }
+        }
+        out
+    }
+
+    /// Whether `address` is paired on the adapter `sel` means; `None` if
+    /// that can't be told.
+    async fn paired(&self, sel: &AdapterSel, address: Mac) -> Option<bool> {
+        let session = match &self.session {
+            Some(s) => s.clone(),
+            None => bluer::Session::new().await.ok()?,
+        };
+        let adapter = crate::bluetooth::find_adapter(&session, sel).await.ok()??;
+        let device = adapter.device(bluer::Address(address.0)).ok()?;
+        Some(device.is_paired().await.unwrap_or(false))
+    }
+
     /// Wait for the BLE ports to drop their phones (shutdown is cancelled).
     async fn stop(&mut self) {
         if let Some((_, task)) = self.ble.take() {
@@ -1029,13 +1408,17 @@ impl Bt {
 
     async fn add_ble(
         &mut self,
-        _slot: BleSlot,
+        slot: BleSlot,
         _runtime_dir: &std::path::Path,
         _shutdown: &CancellationToken,
     ) -> Result<(), Error> {
         // Not an error the daemon should exit over: there's no BlueZ to
         // wait for on this platform.
         tracing::warn!("ble-server ports need Linux; not started");
+        slot.status.send_replace(PortState::new(
+            "unsupported",
+            Some("ble-server ports need Linux".into()),
+        ));
         Ok(())
     }
 
@@ -1043,6 +1426,14 @@ impl Bt {
 
     async fn adapters(&self) -> Vec<(String, Mac)> {
         Vec::new()
+    }
+
+    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+        Vec::new()
+    }
+
+    async fn paired(&self, _sel: &AdapterSel, _address: Mac) -> Option<bool> {
+        None
     }
 
     async fn stop(&mut self) {}
@@ -1065,7 +1456,7 @@ mod ble {
     use tokio::sync::{mpsc, oneshot, watch};
     use tokio_util::sync::CancellationToken;
 
-    use super::BleSlot;
+    use super::{BleSlot, PortState};
     use crate::config::{AdapterSel, Mac};
     use crate::port::ble_server::{BleServerPort, BleState};
 
@@ -1303,6 +1694,11 @@ mod ble {
                     }
                     .spawn();
                     slot.last_adapter = Some(name.clone());
+                    tokio::spawn(report_state(
+                        handle.state.clone(),
+                        slot.status.clone(),
+                        name.clone(),
+                    ));
                     slot.running = Some(Running {
                         adapter: name,
                         token,
@@ -1312,11 +1708,42 @@ mod ble {
                 }
                 Some(name) => {
                     tracing::debug!(bridge = %slot.bridge_id, port = %slot.port_id, adapter = %name, "adapter is powered off; waiting");
+                    slot.status
+                        .send_replace(PortState::new("adapter off", Some(name)));
                 }
-                None => tracing::warn!(
-                    bridge = %slot.bridge_id, port = %slot.port_id, adapter = %slot.adapter,
-                    "waiting for the Bluetooth adapter to appear"
-                ),
+                None => {
+                    tracing::warn!(
+                        bridge = %slot.bridge_id, port = %slot.port_id, adapter = %slot.adapter,
+                        "waiting for the Bluetooth adapter to appear"
+                    );
+                    slot.status.send_replace(PortState::new(
+                        "waiting for adapter",
+                        Some(slot.adapter.to_string()),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Mirror a running port's state into its slot's status, for `status`.
+    async fn report_state(
+        mut state: watch::Receiver<BleState>,
+        status: watch::Sender<PortState>,
+        adapter: String,
+    ) {
+        loop {
+            let s = match &*state.borrow_and_update() {
+                BleState::Starting => PortState::new("starting", Some(adapter.clone())),
+                BleState::Advertising => PortState::new("advertising", Some(adapter.clone())),
+                BleState::Full => {
+                    PortState::new("full", Some(format!("{adapter}: not advertising")))
+                }
+                BleState::Failed(e) => PortState::new("failed", Some(e.clone())),
+                BleState::Stopped => PortState::new("stopped", None),
+            };
+            status.send_replace(s);
+            if state.changed().await.is_err() {
+                return;
             }
         }
     }
