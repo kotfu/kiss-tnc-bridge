@@ -449,6 +449,23 @@ port. The packages install a udev rule
 leave the TH-D75 alone; the file explains how to add other TNCs. Raspberry Pi
 OS doesn't run ModemManager.
 
+### When the radio doesn't transmit
+
+If an app sends a beacon and the radio doesn't key up, look for a red **STA**
+on the radio's display. It means the radio's TNC has the packet and is
+waiting for the channel to clear before transmitting, as packet TNCs always
+have. The radio transmits once the channel is clear, and STA goes out.
+
+If STA stays lit, the radio thinks the channel is busy: there's traffic on
+the frequency, or the squelch is open (set too low, or opened by noise).
+Close the squelch, or check the radio's DCD sense setting (`Detect Data`,
+in the APRS settings; menu 507 on some Kenwood radios), which decides what
+counts as busy. Turning the radio off and on clears a stuck queue.
+
+The bridge can't see any of this. Once it has handed a frame to the radio,
+its counters, logs and `ktbctl` count the frame as sent, whether or not the
+radio has transmitted it yet.
+
 ### Other TNCs
 
 Any TNC that speaks KISS over Bluetooth SPP or a serial port should work
