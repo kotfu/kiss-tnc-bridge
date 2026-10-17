@@ -171,7 +171,6 @@ pub struct SppConnector {
     tnc_id: String,
     spp: Spp,
     model: TncModel,
-    exit_kiss_on_disconnect: bool,
     /// The adapter is powered on at the first connect if it needs to be;
     /// after that, an adapter that's off was turned off by someone, and the
     /// port waits for them to turn it back on.
@@ -184,7 +183,6 @@ pub fn connector(
     tnc_id: String,
     spp: Spp,
     model: TncModel,
-    exit_kiss_on_disconnect: bool,
 ) -> SppConnector {
     SppConnector {
         session,
@@ -192,7 +190,6 @@ pub fn connector(
         tnc_id,
         spp,
         model,
-        exit_kiss_on_disconnect,
         tried_power: Arc::default(),
     }
 }
@@ -204,7 +201,6 @@ impl TncConnector for SppConnector {
         let tnc_id = self.tnc_id.clone();
         let spp = self.spp.clone();
         let model = self.model;
-        let exit_kiss = self.exit_kiss_on_disconnect;
         let tried_power = self.tried_power.clone();
         Box::pin(async move {
             let fail = |msg: String| Error::Connect(format!("tnc {tnc_id}: {msg}"));
@@ -250,10 +246,10 @@ impl TncConnector for SppConnector {
                 }
             };
             tracing::debug!(tnc = %tnc_id, %addr, adapter = %adapter_desc, "RFCOMM link up");
-            let out = tnc_init::init(&mut stream, model, exit_kiss).await?;
+            let out = tnc_init::init(&mut stream, model).await?;
             Ok(Opened {
                 link: Box::new(Prefixed::new(stream, &out.frames)),
-                teardown: out.teardown,
+                exit_kiss: out.exit_kiss,
             })
         })
     }

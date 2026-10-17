@@ -16,8 +16,10 @@
 use std::path::{Path, PathBuf};
 
 use clap::Parser;
-use kiss_tnc_bridge::{config, error};
+use kiss_tnc_bridge::{config, error, supervisor};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 const DEFAULT_CONFIG_DIR: &str = "/etc/kiss-tnc-bridge";
 const DEFAULT_STATE_DIR: &str = "/var/lib/kiss-tnc-bridge";
@@ -235,7 +237,12 @@ fn print_summary(cfg: &config::Config, report: &config::Report) {
             "  {:<10} {:<28} {:<8} ({})",
             b.id,
             format!("\"{}\"", b.name),
-            if b.enabled { "enabled" } else { "disabled" },
+            match (b.enabled, b.enabled_override.is_some()) {
+                (true, false) => "enabled",
+                (false, false) => "disabled",
+                (true, true) => "enabled (override in state.toml)",
+                (false, true) => "disabled (override in state.toml)",
+            },
             b.source
         );
         if b.public_name != b.name {
@@ -272,7 +279,10 @@ fn main() {
         .clone()
         .unwrap_or_else(|| dir_from_env("RUNTIME_DIRECTORY", DEFAULT_RUNTIME_DIR));
 
-    let (cfg, report) = match config::load_all(&config_file, true) {
+    let built = config::read_sources(&config_file, Some(&state_dir)).and_then(|sources| {
+        config::build(&sources, true).map(|(cfg, report)| (sources, cfg, report))
+    });
+    let (sources, cfg, report) = match built {
         Ok(x) => x,
         Err(problems) => {
             for p in &problems {
@@ -307,15 +317,29 @@ fn main() {
         _ => "trace".into(),
     };
 
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info")))
-        // A log line that can't be written (stderr's reader went away, e.g.
-        // journald restarting) is dropped. Otherwise tracing-subscriber
-        // reports it with eprintln!, which panics on the same dead stderr
-        // and takes down whichever task was logging.
-        .log_internal_errors(false)
+    let filter = EnvFilter::try_new(&log_level).unwrap_or_else(|_| EnvFilter::new("info"));
+    let (filter, filter_handle) = tracing_subscriber::reload::Layer::new(filter);
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                // A log line that can't be written (stderr's reader went
+                // away, e.g. journald restarting) is dropped. Otherwise
+                // tracing-subscriber reports it with eprintln!, which panics
+                // on the same dead stderr and takes down whichever task was
+                // logging.
+                .log_internal_errors(false),
+        )
         .init();
+    // `log_level` in the config applies live on reload, unless -d chose
+    // the level on the command line.
+    let set_level: Option<supervisor::LogLevelFn> = (cli.debug == 0).then(|| {
+        Box::new(move |level: &str| {
+            let filter = EnvFilter::try_new(level).unwrap_or_else(|_| EnvFilter::new("info"));
+            let _ = filter_handle.reload(filter);
+        }) as supervisor::LogLevelFn
+    });
 
     tracing::info!(
         config = %config_file.display(),
@@ -339,7 +363,12 @@ fn main() {
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     rt.block_on(async {
-        if let Err(e) = run(cfg, &state_dir, &runtime_dir).await {
+        let paths = supervisor::Paths {
+            main_file: config_file.clone(),
+            state_dir: state_dir.clone(),
+            runtime_dir: runtime_dir.clone(),
+        };
+        if let Err(e) = run(sources, cfg, paths, set_level).await {
             tracing::error!("fatal: {e}");
             std::process::exit(1);
         }
@@ -390,29 +419,46 @@ fn bluetooth_host_checks(cfg: &config::Config, _report: &mut config::Report) -> 
     }
 }
 
-/// Run the supervisor until SIGINT or SIGTERM.
+/// Run the supervisor until SIGINT or SIGTERM. SIGHUP reloads the config
+/// and applies all of it, disruptive or not (`ktbctl reload` is the way to
+/// be asked first).
 async fn run(
+    sources: config::Sources,
     cfg: config::Config,
-    state_dir: &Path,
-    runtime_dir: &Path,
+    paths: supervisor::Paths,
+    set_level: Option<supervisor::LogLevelFn>,
 ) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
     let stop = shutdown.clone();
     tokio::spawn(async move {
         let ctrl_c = tokio::signal::ctrl_c();
+        tokio::pin!(ctrl_c);
         #[cfg(unix)]
         let why = {
-            let mut term =
-                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .expect("SIGTERM handler");
-            tokio::select! {
-                _ = ctrl_c => "interrupted",
-                _ = term.recv() => "terminated",
+            use tokio::signal::unix::{SignalKind, signal};
+            let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
+            let mut hup = signal(SignalKind::hangup()).expect("SIGHUP handler");
+            loop {
+                tokio::select! {
+                    _ = &mut ctrl_c => break "interrupted",
+                    _ = term.recv() => break "terminated",
+                    _ = hup.recv() => {
+                        let reload = supervisor::DaemonCmd::Reload {
+                            non_disruptive: false,
+                            reply: None,
+                        };
+                        if cmd_tx.send(reload).await.is_ok() {
+                            tracing::info!("SIGHUP: reloading the config");
+                        }
+                    }
+                }
             }
         };
         #[cfg(not(unix))]
         let why = {
             let _ = ctrl_c.await;
+            drop(cmd_tx);
             "interrupted"
         };
         // Stop first, log second: nothing that goes wrong while logging may
@@ -420,5 +466,5 @@ async fn run(
         stop.cancel();
         tracing::info!("{why}, shutting down");
     });
-    kiss_tnc_bridge::supervisor::run(cfg, state_dir, runtime_dir, shutdown).await
+    supervisor::run(sources, cfg, paths, set_level, cmd_rx, shutdown).await
 }

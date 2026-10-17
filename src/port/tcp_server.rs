@@ -43,12 +43,21 @@ pub enum ServerState {
     Stopped,
 }
 
+/// The settings a reload changes without closing the listener. Sessions a
+/// tighter setting no longer admits are kicked by the reconciler.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TcpLive {
+    /// `None`: no limit.
+    pub max_clients: Option<u32>,
+    /// Empty: any peer that can reach the socket.
+    pub allow: Vec<IpNet>,
+}
+
 pub struct TcpServerPort {
     pub bridge_id: String,
     pub port_id: String,
     pub listen: Listen,
-    pub max_clients: Option<u32>,
-    pub allow: Vec<IpNet>,
+    pub live: watch::Receiver<TcpLive>,
     pub app_tx: mpsc::Sender<AppEvent>,
     pub shutdown: CancellationToken,
 }
@@ -99,13 +108,14 @@ impl TcpServerPort {
         if let Some(local) = local {
             state_tx.send_replace(ServerState::Listening(local));
         }
-        if self.listen.is_unspecified() && self.allow.is_empty() {
+        if self.listen.is_unspecified() && self.live.borrow().allow.is_empty() {
             tracing::warn!(
                 bridge = %self.bridge_id, port = %self.port_id,
                 "listening on all addresses with no allow list: anyone who can connect can transmit on your radio"
             );
         }
 
+        let mut rejections = Rejections::default();
         loop {
             let (stream, peer) = tokio::select! {
                 _ = self.shutdown.cancelled() => break,
@@ -118,14 +128,23 @@ impl TcpServerPort {
                     }
                 },
             };
-            if !allowed(&self.allow, peer.ip()) {
-                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
+            let live = self.live.borrow().clone();
+            if !allowed(&live.allow, peer.ip()) {
+                if rejections.should_log(peer.ip()) {
+                    tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list (repeats from this address logged at debug for a minute)");
+                } else {
+                    tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
+                }
                 continue;
             }
-            if let Some(max) = self.max_clients
+            if let Some(max) = live.max_clients
                 && sessions.load(Ordering::Relaxed) >= max as usize
             {
-                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
+                if rejections.should_log(peer.ip()) {
+                    tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached (repeats from this address logged at debug for a minute)");
+                } else {
+                    tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
+                }
                 continue;
             }
             let _ = stream.set_nodelay(true);
@@ -136,7 +155,7 @@ impl TcpServerPort {
                 id,
                 self.app_tx.clone(),
                 sessions.clone(),
-                self.shutdown.clone(),
+                self.shutdown.child_token(),
             ));
         }
         state_tx.send_replace(ServerState::Stopped);
@@ -144,21 +163,48 @@ impl TcpServerPort {
     }
 }
 
+/// Apps retry refused connections forever (aprs.fi every 5 s), so a refusal
+/// is logged as a warning once a minute per address, and at debug between.
+#[derive(Default)]
+struct Rejections {
+    last: std::collections::HashMap<std::net::IpAddr, tokio::time::Instant>,
+}
+
+impl Rejections {
+    const QUIET: Duration = Duration::from_secs(60);
+
+    fn should_log(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = tokio::time::Instant::now();
+        self.last
+            .retain(|_, t| now.duration_since(*t) < Self::QUIET);
+        if self.last.contains_key(&ip) {
+            return false;
+        }
+        self.last.insert(ip, now);
+        true
+    }
+}
+
 /// One client: frames from it go to the bridge, frames from the bridge go
-/// to it, until either side closes or the port shuts down.
+/// to it, until either side closes, the session is kicked, or the port
+/// shuts down (`kick` is a child of the port's token).
 async fn session(
     stream: TcpStream,
     id: SessionId,
     app_tx: mpsc::Sender<AppEvent>,
     sessions: Arc<AtomicUsize>,
-    shutdown: CancellationToken,
+    kick: CancellationToken,
 ) {
     let (rd, wr) = stream.into_split();
     let mut reader = KissReader::new(rd);
     let mut writer = KissWriter::new(wr);
     let (tx, mut rx) = mpsc::channel::<Frame>(SESSION_QUEUE);
     if app_tx
-        .send(AppEvent::SessionOpened { id: id.clone(), tx })
+        .send(AppEvent::SessionOpened {
+            id: id.clone(),
+            tx,
+            kick: kick.clone(),
+        })
         .await
         .is_err()
     {
@@ -167,7 +213,7 @@ async fn session(
     }
     loop {
         tokio::select! {
-            _ = shutdown.cancelled() => break,
+            _ = kick.cancelled() => break,
             res = reader.read_frame() => match res {
                 Ok(frame) => {
                     if app_tx.send(AppEvent::Frame { id: id.clone(), frame }).await.is_err() {
@@ -190,4 +236,23 @@ async fn session(
     let _ = writer.shutdown().await;
     sessions.fetch_sub(1, Ordering::Relaxed);
     let _ = app_tx.send(AppEvent::SessionClosed { id }).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn refusals_are_logged_once_a_minute_per_address() {
+        let mut r = Rejections::default();
+        let a: std::net::IpAddr = "192.168.13.129".parse().unwrap();
+        let b: std::net::IpAddr = "192.168.13.130".parse().unwrap();
+        assert!(r.should_log(a));
+        assert!(!r.should_log(a));
+        assert!(r.should_log(b));
+        tokio::time::advance(Duration::from_secs(59)).await;
+        assert!(!r.should_log(a));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(r.should_log(a));
+    }
 }

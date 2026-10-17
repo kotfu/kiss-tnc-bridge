@@ -410,7 +410,11 @@ pub struct Bridge {
     pub name: String,
     /// The BLE advertised name and DNS-SD instance name. Defaults to `name`.
     pub public_name: String,
+    /// Whether the bridge runs: the definition's `enabled`, or for a static
+    /// bridge the override in `state.toml` if there is one.
     pub enabled: bool,
+    /// The `state.toml` override behind `enabled`, for static bridges.
+    pub enabled_override: Option<bool>,
     pub app_params: AppParams,
     pub ports: Vec<Port>,
     pub source: Source,
@@ -557,7 +561,10 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
             }
         }
     }
-    let adapter_ids: HashMap<&str, Mac> = adapters.iter().map(|a| (a.id.as_str(), a.mac)).collect();
+    let adapter_ids: HashMap<&str, (Mac, &Source)> = adapters
+        .iter()
+        .map(|a| (a.id.as_str(), (a.mac, &a.source)))
+        .collect();
 
     let resolve_adapter_value = |value: &str,
                                  source: &Source,
@@ -569,7 +576,20 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
             AdapterValue::Hci(h) => AdapterSel::Hci(h),
             AdapterValue::Id(id) => {
                 match adapter_ids.get(id.as_str()) {
-                    Some(mac) => AdapterSel::Mac(*mac),
+                    Some((mac, defined)) => {
+                        if source.is_static() && !defined.is_static() {
+                            errors.push(Problem::new(
+                                Some(source.clone()),
+                                object,
+                                static_refers_to_dynamic(
+                                    "adapter",
+                                    &id,
+                                    "define it in /etc, or refer to it by MAC or hciN",
+                                ),
+                            ));
+                        }
+                        AdapterSel::Mac(*mac)
+                    }
                     None => {
                         errors.push(Problem::new(
                         Some(source.clone()),
@@ -760,6 +780,7 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                         let idle_timeout =
                             resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
                         let found = tncs.iter().find(|t| t.id == *tnc);
+                        check_tnc_visible(found, tnc, source, &pobject, &mut errors);
                         match found.map(|t| (t, &t.spp)) {
                             Some((t, Some(spp))) => PortKind::SppClient {
                                 tnc: t.id.clone(),
@@ -789,6 +810,7 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                         let idle_timeout =
                             resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
                         let found = tncs.iter().find(|t| t.id == *tnc);
+                        check_tnc_visible(found, tnc, source, &pobject, &mut errors);
                         match found.map(|t| (t, &t.serial)) {
                             Some((t, Some(serial))) => PortKind::Serial {
                                 tnc: t.id.clone(),
@@ -821,6 +843,7 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                 name: def.name.clone(),
                 public_name: def.public_name.clone().unwrap_or_else(|| def.name.clone()),
                 enabled: def.enabled.unwrap_or(true),
+                enabled_override: None,
                 app_params: def.app_params.unwrap_or_default(),
                 ports,
                 source: source.clone(),
@@ -863,6 +886,34 @@ fn resolve_idle_timeout(
             Duration::ZERO
         }
         None => Duration::ZERO,
+    }
+}
+
+/// Static config stands on its own: an image's /etc can't depend on what a
+/// particular device's dynamic config holds.
+fn static_refers_to_dynamic(kind: &str, id: &str, instead: &str) -> String {
+    format!(
+        "{kind} {id:?} is defined in dynamic config; static config can only refer to static \
+         {kind}s ({instead})"
+    )
+}
+
+fn check_tnc_visible(
+    found: Option<&Tnc>,
+    id: &str,
+    source: &Source,
+    object: &str,
+    errors: &mut Vec<Problem>,
+) {
+    if let Some(t) = found
+        && source.is_static()
+        && !t.source.is_static()
+    {
+        errors.push(Problem::new(
+            Some(source.clone()),
+            object,
+            static_refers_to_dynamic("tnc", id, "define it in /etc"),
+        ));
     }
 }
 

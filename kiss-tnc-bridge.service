@@ -7,6 +7,9 @@ Wants=bluetooth.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/kiss-tnc-bridge
+# Re-read the config and apply what changed, disruptive or not.
+# `ktbctl reload` asks first.
+ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
 

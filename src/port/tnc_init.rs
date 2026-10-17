@@ -70,44 +70,35 @@ pub struct InitOutcome {
     /// Frames that arrived during init, raw (between FENDs, still stuffed),
     /// for the bridge to forward.
     pub frames: Vec<Vec<u8>>,
-    /// What to send when the bridge closes the link on purpose.
-    pub teardown: Vec<Vec<u8>>,
+    /// What takes the TNC back out of KISS mode, restoring the mode it was
+    /// found in where the model allows. The bridge sends it when it lets go
+    /// on purpose, if `exit_kiss_on_disconnect` is set at the time.
+    pub exit_kiss: Vec<Vec<u8>>,
 }
 
-/// Put the TNC on `stream` into KISS mode. With `exit_kiss_on_disconnect`,
-/// the returned teardown takes it back out, restoring the TNC mode it was
-/// found in where the model allows.
+/// Put the TNC on `stream` into KISS mode.
 pub async fn init<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
     model: TncModel,
-    exit_kiss_on_disconnect: bool,
 ) -> Result<InitOutcome, Error> {
     match model {
         TncModel::Generic => Ok(InitOutcome {
-            teardown: if exit_kiss_on_disconnect {
-                vec![KISS_RETURN.to_vec()]
-            } else {
-                Vec::new()
-            },
+            exit_kiss: vec![KISS_RETURN.to_vec()],
             ..Default::default()
         }),
-        TncModel::ThD7x => tokio::time::timeout(
-            INIT_TIMEOUT,
-            init_th_d7x(stream, exit_kiss_on_disconnect),
-        )
-        .await
-        .map_err(|_| {
-            Error::Connect(format!(
-                "the TNC didn't finish KISS init in {}s (not answering, or not taking data)",
-                INIT_TIMEOUT.as_secs()
-            ))
-        })?,
+        TncModel::ThD7x => tokio::time::timeout(INIT_TIMEOUT, init_th_d7x(stream))
+            .await
+            .map_err(|_| {
+                Error::Connect(format!(
+                    "the TNC didn't finish KISS init in {}s (not answering, or not taking data)",
+                    INIT_TIMEOUT.as_secs()
+                ))
+            })?,
     }
 }
 
 async fn init_th_d7x<S: AsyncRead + AsyncWrite + Unpin>(
     stream: &mut S,
-    exit_kiss_on_disconnect: bool,
 ) -> Result<InitOutcome, Error> {
     let t0 = Instant::now();
     let mut radio = Radio::new(stream);
@@ -164,18 +155,15 @@ async fn init_th_d7x<S: AsyncRead + AsyncWrite + Unpin>(
         t0.elapsed()
     );
 
-    let mut teardown = Vec::new();
-    if exit_kiss_on_disconnect {
-        teardown.push(KISS_RETURN.to_vec());
-        // Leaving KISS turns the TNC off; put back APRS if that's what it was.
-        if let Some(m @ 1) = prev_mode {
-            teardown.push(format!("TN {m},{band}\r").into_bytes());
-        }
+    let mut exit_kiss = vec![KISS_RETURN.to_vec()];
+    // Leaving KISS turns the TNC off; put back APRS if that's what it was.
+    if let Some(m @ 1) = prev_mode {
+        exit_kiss.push(format!("TN {m},{band}\r").into_bytes());
     }
     Ok(InitOutcome {
         radio: radio_id,
         frames: radio.frames,
-        teardown,
+        exit_kiss,
     })
 }
 
@@ -489,7 +477,6 @@ mod tests {
     async fn run(
         mode: u8,
         model: TncModel,
-        exit_kiss: bool,
         heard: Option<Vec<u8>>,
     ) -> (InitOutcome, Arc<Mutex<RadioState>>) {
         let (mut ours, theirs) = tokio::io::duplex(1024);
@@ -499,7 +486,7 @@ mod tests {
             ..Default::default()
         }));
         tokio::spawn(radio(theirs, state.clone(), heard));
-        let out = init(&mut ours, model, exit_kiss).await.unwrap();
+        let out = init(&mut ours, model).await.unwrap();
         (out, state)
     }
 
@@ -513,7 +500,7 @@ mod tests {
             ..Default::default()
         }));
         tokio::spawn(radio(theirs, state.clone(), None));
-        let err = init(&mut ours, TncModel::ThD7x, false).await.unwrap_err();
+        let err = init(&mut ours, TncModel::ThD7x).await.unwrap_err();
         assert!(err.to_string().contains("KISS (983)"), "{err}");
         assert_eq!(
             state.lock().unwrap().log,
@@ -524,7 +511,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn from_kiss_mode() {
         let heard = vec![0x00, 0x82, 0xA0];
-        let (out, state) = run(2, TncModel::ThD7x, false, Some(heard.clone())).await;
+        let (out, state) = run(2, TncModel::ThD7x, Some(heard.clone())).await;
         let st = state.lock().unwrap();
         assert_eq!(st.mode, 2);
         assert_eq!(st.band, 1);
@@ -545,41 +532,40 @@ mod tests {
         assert_eq!(out.radio.as_deref(), Some("TH-D75"));
         // The frame the radio sent while still in KISS mode is kept.
         assert_eq!(out.frames, vec![heard]);
-        assert!(out.teardown.is_empty());
+        // Found in KISS mode: leaving it is all there is to restore.
+        assert_eq!(out.exit_kiss, vec![KISS_RETURN.to_vec()]);
     }
 
     #[tokio::test(start_paused = true)]
-    async fn from_aprs_mode_restores_it_on_teardown() {
-        let (out, state) = run(1, TncModel::ThD7x, true, None).await;
+    async fn from_aprs_mode_restores_it_on_exit() {
+        let (out, state) = run(1, TncModel::ThD7x, None).await;
         let st = state.lock().unwrap();
         assert_eq!(st.log, vec!["BT", "ID", "TN", "TN 2,1", "BT ignored"]);
         assert_eq!(st.mode, 2);
         assert_eq!(
-            out.teardown,
+            out.exit_kiss,
             vec![KISS_RETURN.to_vec(), b"TN 1,1\r".to_vec()]
         );
     }
 
     #[tokio::test(start_paused = true)]
-    async fn found_in_kiss_mode_teardown_just_leaves_it() {
-        let (out, _) = run(2, TncModel::ThD7x, true, None).await;
-        assert_eq!(out.teardown, vec![KISS_RETURN.to_vec()]);
+    async fn from_off_exit_leaves_it_off() {
+        let (out, _) = run(0, TncModel::ThD7x, None).await;
+        assert_eq!(out.exit_kiss, vec![KISS_RETURN.to_vec()]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn generic_sends_nothing() {
-        let (out, state) = run(1, TncModel::Generic, false, None).await;
+        let (out, state) = run(1, TncModel::Generic, None).await;
         assert!(state.lock().unwrap().log.is_empty());
-        assert!(out.teardown.is_empty());
-        let (out, _) = run(1, TncModel::Generic, true, None).await;
-        assert_eq!(out.teardown, vec![KISS_RETURN.to_vec()]);
+        assert_eq!(out.exit_kiss, vec![KISS_RETURN.to_vec()]);
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_silent_tnc_fails_init_fast() {
         let (mut ours, mut theirs) = tokio::io::duplex(1024);
         let t0 = tokio::time::Instant::now();
-        let err = init(&mut ours, TncModel::ThD7x, false).await.unwrap_err();
+        let err = init(&mut ours, TncModel::ThD7x).await.unwrap_err();
         assert!(err.to_string().contains("doesn't answer"), "{err}");
         // Probe, KISS return, probe again; nothing more.
         assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
@@ -636,9 +622,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_stalled_tnc_fails_init_in_time() {
         let t0 = tokio::time::Instant::now();
-        let err = init(&mut Stalled, TncModel::ThD7x, false)
-            .await
-            .unwrap_err();
+        let err = init(&mut Stalled, TncModel::ThD7x).await.unwrap_err();
         assert!(err.to_string().contains("didn't finish KISS init"), "{err}");
         assert_eq!(t0.elapsed(), INIT_TIMEOUT);
     }

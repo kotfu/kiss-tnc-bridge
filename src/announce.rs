@@ -149,11 +149,17 @@ pub fn effective_public_name(store: &mut StateStore, bridge: &str, configured: &
 #[derive(Debug)]
 pub enum Cmd {
     /// A bridge that may announce. `name` holds its effective public name;
-    /// the announcer changes it after a collision.
+    /// the announcer changes it after a collision. Sent again for a bridge
+    /// already known (its configured public name changed), it republishes
+    /// under the current name.
     Bridge {
         id: String,
         configured: String,
         name: watch::Sender<String>,
+    },
+    /// A bridge that stopped: withdraw it.
+    Forget {
+        id: String,
     },
     Up {
         bridge: String,
@@ -259,16 +265,28 @@ impl<B: Backend> Announcer<B> {
                 id,
                 configured,
                 name,
-            } => {
-                self.bridges.insert(
-                    id,
-                    BridgeAnn {
-                        configured,
-                        name,
-                        services: BTreeMap::new(),
-                        group: None,
-                    },
-                );
+            } => match self.bridges.get_mut(&id) {
+                Some(b) => {
+                    b.configured = configured;
+                    b.name = name;
+                    self.sync(&id).await;
+                }
+                None => {
+                    self.bridges.insert(
+                        id,
+                        BridgeAnn {
+                            configured,
+                            name,
+                            services: BTreeMap::new(),
+                            group: None,
+                        },
+                    );
+                }
+            },
+            Cmd::Forget { id } => {
+                if let Some(g) = self.bridges.remove(&id).and_then(|b| b.group) {
+                    self.backend.withdraw(g).await;
+                }
             }
             Cmd::Up {
                 bridge,
@@ -1019,6 +1037,43 @@ mod tests {
         r.up("lan3", v6(8003)).await;
         assert_eq!(r.calls().len(), 1);
         r.up("lan4", v6(8004)).await;
+        assert!(r.calls().is_empty());
+        r.shutdown.cancel();
+        r.task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn renamed_bridges_republish_and_stopped_ones_withdraw() {
+        let r = rig(true).await;
+        r.up("lan", SVC).await;
+        r.calls();
+        // The configured public name changed: same group, new name.
+        let (name_tx, _rx) = watch::channel("Portable".to_string());
+        r.cmds
+            .send(Cmd::Bridge {
+                id: "ktbr0".into(),
+                configured: "Portable".into(),
+                name: name_tx,
+            })
+            .await
+            .unwrap();
+        r.settle().await;
+        assert_eq!(
+            r.calls(),
+            vec![Call::Publish(
+                Some("/g1".into()),
+                "Portable".into(),
+                vec![SVC]
+            )]
+        );
+        r.cmds
+            .send(Cmd::Forget { id: "ktbr0".into() })
+            .await
+            .unwrap();
+        r.settle().await;
+        assert_eq!(r.calls(), vec![Call::Withdraw("/g1".into())]);
+        // Ports of a forgotten bridge are ignored.
+        r.up("lan", SVC).await;
         assert!(r.calls().is_empty());
         r.shutdown.cancel();
         r.task.await.unwrap();
