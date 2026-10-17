@@ -321,8 +321,12 @@ impl BleServerPort {
                                 continue;
                             }
                         };
+                        let known = clients.contains_key(&addr);
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
                         record_clients(clients_file.as_deref(), &clients);
+                        if !known && clients.len() < max {
+                            self.readvertise(&mut adv, &public_name).await;
+                        }
                         let id = self.session_id(addr);
                         tokio::spawn(reader_task(reader, id, self.app_tx.clone(), ev_tx.clone(), addr, generation));
                     }
@@ -339,6 +343,7 @@ impl BleServerPort {
                             drop(notifier);
                             continue;
                         }
+                        let known = clients.contains_key(&addr);
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
                         record_clients(clients_file.as_deref(), &clients);
                         let client = clients.get_mut(&addr).expect("just ensured");
@@ -350,9 +355,13 @@ impl BleServerPort {
                             }
                             None => tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "repeated subscribe ignored"),
                         }
-                        if clients.len() >= max && adv.take().is_some() {
-                            tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "max clients reached, advertisement withdrawn");
-                            state_tx.send_replace(BleState::Full);
+                        if clients.len() >= max {
+                            if adv.take().is_some() {
+                                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "max clients reached, advertisement withdrawn");
+                                state_tx.send_replace(BleState::Full);
+                            }
+                        } else if !known {
+                            self.readvertise(&mut adv, &public_name).await;
                         }
                     }
                     Some(_) => {}
@@ -447,6 +456,28 @@ impl BleServerPort {
         drop(adv);
         state_tx.send_replace(BleState::Stopped);
         tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "stopped");
+    }
+
+    /// A new phone connected, and the connection ended the advertisement:
+    /// controllers stop advertising when a phone connects, and the kernel
+    /// turns that advertisement back on only when the phone disconnects. So
+    /// below `max_clients`, register a new one, which the kernel starts at
+    /// once if the controller can advertise while connected. The old one is
+    /// dropped only once the new one is in, so if the new one is refused,
+    /// the old one still comes back when the phone leaves.
+    async fn readvertise(&self, adv: &mut Option<AdvertisementHandle>, public_name: &str) {
+        if adv.is_none() {
+            return;
+        }
+        match self.advertise(public_name).await {
+            Ok(h) => {
+                *adv = Some(h);
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, "advertising again for more phones");
+            }
+            Err(e) => {
+                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "can't advertise again while a phone is connected: {e}")
+            }
+        }
     }
 
     async fn register(&self) -> Result<Gatt, String> {
