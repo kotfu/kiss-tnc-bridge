@@ -37,7 +37,7 @@ use tokio_util::sync::CancellationToken;
 const T: Duration = Duration::from_secs(5);
 
 struct Rig {
-    _dir: tempfile::TempDir,
+    dir: tempfile::TempDir,
     socket: PathBuf,
     tnc: TcpListener,
     lan: u16,
@@ -103,7 +103,7 @@ name = "Test"
             .unwrap();
     });
     Rig {
-        _dir: dir,
+        dir,
         socket,
         tnc,
         lan,
@@ -321,13 +321,7 @@ async fn a_disruptive_reload_is_refused_with_its_plan() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Disable the bridge on disk; the app would be disconnected.
-    let main = r
-        .socket
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join(config::load::MAIN_FILE_NAME);
+    let main = r.dir.path().join(config::load::MAIN_FILE_NAME);
     let text = std::fs::read_to_string(&main).unwrap();
     std::fs::write(
         &main,
@@ -369,5 +363,316 @@ async fn bad_requests_get_error_codes() {
     // The connection still works.
     let res = c.call(json!({"cmd": "status"})).await;
     assert_eq!(res["ok"], true);
+    r.shutdown.cancel();
+}
+
+impl Rig {
+    fn state_file(&self, name: &str) -> PathBuf {
+        self.dir.path().join("state").join(name)
+    }
+}
+
+fn ok(res: &Value) -> &Value {
+    assert_eq!(res["ok"], true, "{res}");
+    &res["result"]
+}
+
+fn code(res: &Value) -> &str {
+    assert_eq!(res["ok"], false, "{res}");
+    res["error"]["code"].as_str().unwrap()
+}
+
+fn bridge<'a>(status: &'a Value, id: &str) -> Option<&'a Value> {
+    status["bridges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == id)
+}
+
+#[tokio::test]
+async fn a_dynamic_bridge_from_creation_to_deletion() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    let (tnc_port, lan2) = (r.tnc.local_addr().unwrap().port(), free_port());
+    let res = c
+        .call(json!({"cmd": "bridge.create", "definition": {
+            "name": "Dyn",
+            "port": [
+                {"type": "tcp-client", "address": format!("127.0.0.1:{tnc_port}")},
+                {"id": "lan", "type": "tcp-server", "listen": format!("127.0.0.1:{lan2}")}
+            ]
+        }}))
+        .await;
+    let res = ok(&res);
+    assert_eq!(res["id"], "ktbr1");
+    assert_eq!(res["applied"], true);
+    let started = res["plan"]["bridges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["id"] == "ktbr1")
+        .unwrap();
+    assert_eq!(
+        (started["id"].as_str(), started["action"].as_str()),
+        (Some("ktbr1"), Some("started"))
+    );
+    let text = std::fs::read_to_string(r.state_file("dynamic.toml")).unwrap();
+    assert!(
+        text.contains("id = \"ktbr1\"") && text.contains("id = \"tcp-client0\""),
+        "{text}"
+    );
+
+    let st = c.call(json!({"cmd": "status"})).await;
+    let b = bridge(ok(&st), "ktbr1").unwrap().clone();
+    assert_eq!(
+        (b["source"].as_str(), b["editable"].as_bool()),
+        (Some("dynamic"), Some(true))
+    );
+    // Its tcp-server is up: an app can connect.
+    TcpStream::connect(("127.0.0.1", lan2)).await.unwrap();
+
+    // A port, added by the bridge's name, then removed again.
+    let lan3 = free_port();
+    let res = c
+        .call(json!({"cmd": "port.add", "bridge": "Dyn", "definition": {"type": "tcp-server", "listen": format!("127.0.0.1:{lan3}")}}))
+        .await;
+    assert_eq!(ok(&res)["id"], "tcp-server0");
+    TcpStream::connect(("127.0.0.1", lan3)).await.unwrap();
+    ok(&c
+        .call(json!({"cmd": "port.remove", "bridge": "ktbr1", "port": "tcp-server0"}))
+        .await);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(TcpStream::connect(("127.0.0.1", lan3)).await.is_err());
+    // Removing its last app port would leave it invalid.
+    let res = c
+        .call(json!({"cmd": "port.remove", "bridge": "ktbr1", "port": "lan"}))
+        .await;
+    assert_eq!(code(&res), "config_invalid");
+    assert!(
+        res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at least one app port")
+    );
+
+    ok(&c
+        .call(json!({"cmd": "bridge.disable", "bridge": "ktbr1"}))
+        .await);
+    let st = c.call(json!({"cmd": "status"})).await;
+    assert_eq!(bridge(ok(&st), "ktbr1").unwrap()["enabled"], false);
+    ok(&c
+        .call(json!({"cmd": "bridge.delete", "bridge": "ktbr1"}))
+        .await);
+    let st = c.call(json!({"cmd": "status"})).await;
+    assert!(bridge(ok(&st), "ktbr1").is_none());
+    assert!(
+        !std::fs::read_to_string(r.state_file("dynamic.toml"))
+            .unwrap()
+            .contains("ktbr1")
+    );
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn static_bridges_only_enable_and_disable() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    let res = c
+        .call(json!({"cmd": "bridge.update", "bridge": "ktbr0", "definition": {"name": "x"}}))
+        .await;
+    assert_eq!(code(&res), "static_object_readonly");
+    let res = c
+        .call(json!({"cmd": "config.get", "kind": "bridge", "object": "Test"}))
+        .await;
+    assert_eq!(code(&res), "static_object_readonly");
+
+    ok(&c
+        .call(json!({"cmd": "bridge.disable", "bridge": "Test"}))
+        .await);
+    let state = std::fs::read_to_string(r.state_file("state.toml")).unwrap();
+    assert!(state.contains("enabled = false"), "{state}");
+    let st = c.call(json!({"cmd": "status"})).await;
+    let b = bridge(ok(&st), "ktbr0").unwrap();
+    assert_eq!(
+        (b["enabled"].as_bool(), b["enabled_override"].as_bool()),
+        (Some(false), Some(false))
+    );
+    assert_eq!(b["ports"][1]["state"], "disabled");
+
+    ok(&c
+        .call(json!({"cmd": "bridge.enable", "bridge": "ktbr0", "reset": true}))
+        .await);
+    let st = c.call(json!({"cmd": "status"})).await;
+    let b = bridge(ok(&st), "ktbr0").unwrap();
+    assert_eq!(b["enabled"], true);
+    assert!(b.get("enabled_override").is_none());
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn switch_takes_over_a_listen_socket() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    let tnc_port = r.tnc.local_addr().unwrap().port();
+    // A second bridge on ktbr0's socket can't be enabled alongside it...
+    let def = json!({
+        "name": "Other",
+        "port": [
+            {"type": "tcp-client", "address": format!("127.0.0.1:{tnc_port}")},
+            {"type": "tcp-server", "listen": format!("127.0.0.1:{}", r.lan)}
+        ]
+    });
+    let res = c
+        .call(json!({"cmd": "bridge.create", "definition": def.clone()}))
+        .await;
+    assert_eq!(code(&res), "config_invalid");
+    let mut disabled = def;
+    disabled["enabled"] = json!(false);
+    ok(&c
+        .call(json!({"cmd": "bridge.create", "definition": disabled}))
+        .await);
+    let res = c
+        .call(json!({"cmd": "bridge.enable", "bridge": "Other"}))
+        .await;
+    assert_eq!(code(&res), "config_invalid");
+    assert!(
+        res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("conflicts with enabled bridge ktbr0")
+    );
+    // ... but switch moves it over.
+    let res = c
+        .call(json!({"cmd": "bridge.switch", "bridge": "Other"}))
+        .await;
+    let actions: Vec<(String, String)> = ok(&res)["plan"]["bridges"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["id"].as_str().unwrap().into(),
+                b["action"].as_str().unwrap().into(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        actions,
+        vec![
+            ("ktbr0".into(), "stopped".into()),
+            ("ktbr1".into(), "started".into())
+        ]
+    );
+    let st = c.call(json!({"cmd": "status"})).await;
+    assert_eq!(bridge(ok(&st), "ktbr0").unwrap()["enabled_override"], false);
+    assert_eq!(bridge(ok(&st), "ktbr1").unwrap()["enabled"], true);
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn config_get_and_put_with_revisions() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    ok(&c
+        .call(json!({"cmd": "tnc.create", "definition": {"id": "nino", "serial": {"path": "/dev/serial/by-id/nino"}}}))
+        .await);
+    let got = c
+        .call(json!({"cmd": "config.get", "kind": "tnc", "object": "nino"}))
+        .await;
+    let got = ok(&got).clone();
+    let toml = got["toml"].as_str().unwrap();
+    assert!(toml.starts_with("[[tnc]]"), "{toml}");
+
+    let edited = toml.replace("/dev/serial/by-id/nino", "/dev/serial/by-id/nino2");
+    let put = json!({"cmd": "config.put", "kind": "tnc", "object": "nino", "toml": edited, "revision": got["revision"]});
+    ok(&c.call(put.clone()).await);
+    // The same revision again is stale now.
+    assert_eq!(code(&c.call(put).await), "revision_conflict");
+
+    // The whole file, and a hand edit behind the daemon's back.
+    let all = c.call(json!({"cmd": "config.get"})).await;
+    assert!(ok(&all)["toml"].as_str().unwrap().contains("nino2"));
+    std::fs::write(r.state_file("dynamic.toml"), "# hand edited\n").unwrap();
+    let other = json!({"cmd": "tnc.create", "definition": {"id": "other", "serial": {"path": "/dev/serial/by-id/o"}}});
+    assert_eq!(code(&c.call(other.clone()).await), "changed_on_disk");
+    assert_eq!(
+        std::fs::read_to_string(r.state_file("dynamic.toml")).unwrap(),
+        "# hand edited\n"
+    );
+    // A reload takes the hand edit, and changes work again.
+    ok(&c.call(json!({"cmd": "reload"})).await);
+    ok(&c.call(other).await);
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn tncs_in_use_stay() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    ok(&c
+        .call(json!({"cmd": "tnc.create", "definition": {"id": "nino", "name": "NinoTNC", "serial": {"path": "/dev/serial/by-id/nino"}}}))
+        .await);
+    ok(&c
+        .call(
+            json!({"cmd": "bridge.create", "definition": {"name": "Nino", "enabled": false, "port": [
+                {"type": "serial", "tnc": "nino"},
+                {"type": "tcp-server", "listen": format!("127.0.0.1:{}", free_port())}
+            ]}}),
+        )
+        .await);
+    // By name or id, it's in use.
+    let res = c.call(json!({"cmd": "tnc.delete", "tnc": "NinoTNC"})).await;
+    assert_eq!(code(&res), "in_use");
+    assert!(
+        res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bridge ktbr1 port serial0")
+    );
+    ok(&c
+        .call(json!({"cmd": "bridge.delete", "bridge": "Nino"}))
+        .await);
+    ok(&c.call(json!({"cmd": "tnc.delete", "tnc": "nino"})).await);
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
+async fn links_are_held_and_sessions_kicked() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    ok(&c
+        .call(json!({"cmd": "port.connect", "bridge": "ktbr0", "port": "tnc"}))
+        .await);
+    let (tnc, _) = timeout(T, r.tnc.accept()).await.unwrap().unwrap();
+    let mut tnc = KissConnection::new(tnc);
+    let res = c
+        .call(json!({"cmd": "port.connect", "bridge": "ktbr0", "port": "lan"}))
+        .await;
+    assert_eq!(code(&res), "bad_request");
+
+    let app = TcpStream::connect(("127.0.0.1", r.lan)).await.unwrap();
+    let mut app = KissConnection::new(app);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let st = c.call(json!({"cmd": "status"})).await;
+    let session = bridge(ok(&st), "ktbr0").unwrap()["ports"][1]["sessions"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    ok(&c
+        .call(json!({"cmd": "session.kick", "session": format!("ktbr0/{session}")}))
+        .await);
+    assert!(matches!(timeout(T, app.read_frame()).await, Ok(Err(_))));
+    let res = c
+        .call(json!({"cmd": "session.kick", "session": "ktbr0/lan/1.2.3.4:5"}))
+        .await;
+    assert_eq!(code(&res), "not_found");
+
+    ok(&c
+        .call(json!({"cmd": "port.disconnect", "bridge": "ktbr0", "port": "tnc"}))
+        .await);
+    assert!(matches!(timeout(T, tnc.read_frame()).await, Ok(Err(_))));
+    let res = c.call(json!({"cmd": "serial.list"})).await;
+    assert!(ok(&res).is_array());
     r.shutdown.cancel();
 }

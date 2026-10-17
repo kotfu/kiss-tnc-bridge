@@ -306,6 +306,10 @@ pub enum BridgeCmd {
     Connector(Box<dyn TncConnector>),
     /// Drop one app session.
     Kick(SessionId),
+    /// Hold the TNC link up (`true`) or down (`false`) whatever the
+    /// `connect` policy and sessions say, until told otherwise (`port.connect`
+    /// and `port.disconnect`).
+    Hold(bool),
     Snapshot(oneshot::Sender<Snapshot>),
 }
 
@@ -315,6 +319,8 @@ pub struct Snapshot {
     pub tnc: TncState,
     /// When the TNC port entered its state.
     pub tnc_since: SystemTime,
+    /// Held up or down by `port.connect` / `port.disconnect`.
+    pub held: Option<bool>,
     pub sessions: Vec<SessionInfo>,
 }
 
@@ -458,6 +464,7 @@ impl Bridge {
             link_start: (0, 0),
             hub,
             state_since: SystemTime::now(),
+            held: None,
         };
         run.main().await;
     }
@@ -544,6 +551,8 @@ struct Run {
     hub: Option<Arc<Hub>>,
     /// When the TNC state last changed (its kind, not its details).
     state_since: SystemTime,
+    /// `port.connect` / `port.disconnect`.
+    held: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -591,7 +600,7 @@ impl Run {
                 ev = link_event(&mut self.link), if self.link.is_waiting() => self.on_link(ev),
                 _ = idle_elapsed(&mut self.idle_timer), if self.idle_timer.is_some() => {
                     self.idle_timer = None;
-                    if self.sessions.is_empty() {
+                    if !self.wants_link() {
                         tracing::info!(bridge = %self.id, "idle timeout, disconnecting the TNC");
                         self.close();
                     }
@@ -735,7 +744,10 @@ impl Run {
     }
 
     fn wants_link(&self) -> bool {
-        self.settings.connect == ConnectPolicy::Always || !self.sessions.is_empty()
+        match self.held {
+            Some(up) => up,
+            None => self.settings.connect == ConnectPolicy::Always || !self.sessions.is_empty(),
+        }
     }
 
     fn on_app(&mut self, ev: AppEvent) {
@@ -759,7 +771,7 @@ impl Run {
                     .sessions
                     .store(self.sessions.len(), Ordering::Relaxed);
                 self.idle_timer = None;
-                if matches!(self.link, TncLink::Idle) {
+                if matches!(self.link, TncLink::Idle) && self.wants_link() {
                     self.start_connect();
                 }
             }
@@ -773,7 +785,7 @@ impl Run {
                 self.counters
                     .sessions
                     .store(self.sessions.len(), Ordering::Relaxed);
-                if self.sessions.is_empty() && self.settings.connect == ConnectPolicy::OnDemand {
+                if self.sessions.is_empty() && !self.wants_link() {
                     if self.settings.idle_timeout.is_zero() {
                         tracing::info!(bridge = %self.id, "last session left, disconnecting the TNC");
                         self.close();
@@ -817,6 +829,18 @@ impl Run {
                     self.start_connect();
                 }
             }
+            BridgeCmd::Hold(up) => {
+                tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC link held {}", if up { "up" } else { "down" });
+                self.held = Some(up);
+                self.idle_timer = None;
+                if up {
+                    if matches!(self.link, TncLink::Idle) {
+                        self.start_connect();
+                    }
+                } else {
+                    self.close();
+                }
+            }
             BridgeCmd::Kick(id) => match self.sessions.get(&id) {
                 Some(s) => {
                     tracing::info!(bridge = %self.id, session = %id, "disconnecting session");
@@ -838,6 +862,7 @@ impl Run {
                 let _ = reply.send(Snapshot {
                     tnc: self.state_tx.borrow().clone(),
                     tnc_since: self.state_since,
+                    held: self.held,
                     sessions,
                 });
             }
@@ -898,6 +923,10 @@ impl Run {
                     self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 }
             },
+            TncLink::Idle if self.held == Some(false) => {
+                tracing::debug!(bridge = %self.id, "TNC link held down; dropping a frame");
+                self.counters.dropped.fetch_add(1, Ordering::Relaxed);
+            }
             TncLink::Idle => {
                 self.queue_pending(frame, from);
                 self.start_connect();
@@ -1776,6 +1805,31 @@ mod tests {
         h.wait_state(|s| *s == TncState::Connected).await;
         h.close(&a).await;
         assert_eq!(read_all(&mut tnc).await, vec![0xC0, 0xFF, 0xC0]);
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_links_ignore_policy_and_sessions() {
+        let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        // Held up: connects with nobody there.
+        h.handle.cmd_tx.send(BridgeCmd::Hold(true)).await.unwrap();
+        let mut tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        let (a, _rx) = h.open("lan", "A").await;
+        h.close(&a).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(*h.handle.state.borrow(), TncState::Connected);
+        // Held down: goes down, and a session and its frames don't bring it back.
+        h.handle.cmd_tx.send(BridgeCmd::Hold(false)).await.unwrap();
+        h.wait_state(|s| *s == TncState::Idle).await;
+        assert!(matches!(tnc.read_frame().await, Err(Error::LinkClosed)));
+        let (a, _rx) = h.open("lan", "B").await;
+        h.send(&a, &[0x00, 0x01]).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(*h.handle.state.borrow(), TncState::Idle);
+        assert_eq!(h.connects.load(Ordering::Relaxed), 1);
+        assert_eq!(h.handle.snapshot().await.unwrap().held, Some(false));
         h.handle.shutdown.cancel();
         h.task.await.unwrap();
     }

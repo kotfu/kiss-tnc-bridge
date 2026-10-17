@@ -16,6 +16,7 @@
 //! Management: the control protocol and the Unix socket the daemon serves
 //! it on. `ktbctl` and (later) `ktb-gateway` are its clients.
 
+pub mod edit;
 pub mod events;
 pub mod protocol;
 #[cfg(unix)]

@@ -21,6 +21,10 @@
 //! Framing is newline-delimited JSON. Every message carries `"v": 1`.
 //! Requests have an `id`; responses echo it with `ok` and a `result` or an
 //! `error`; events have no `id`. Additive changes stay in version 1.
+//!
+//! In a request, `id` is the request's own. Objects a command acts on are
+//! named by their kind (`bridge`, `port`, `tnc`, `adapter`, `session`),
+//! and new definitions go under `definition`.
 
 use std::time::SystemTime;
 
@@ -72,12 +76,231 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dynamic: Option<String>,
     },
+    /// The TOML for one dynamic object (`kind` and `object`, its id), or
+    /// all of `dynamic.toml`, with its revision for `config.put`.
+    #[serde(rename = "config.get")]
+    ConfigGet {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ObjectKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object: Option<String>,
+    },
+    /// Replace that TOML if `revision` is still current, through the same
+    /// checks and consent as any change. For one object, revision `""`
+    /// creates it and empty TOML deletes it.
+    #[serde(rename = "config.put")]
+    ConfigPut {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kind: Option<ObjectKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        object: Option<String>,
+        toml: String,
+        revision: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+
+    // Bridges, named by id or name in `bridge`. Definitions use the same
+    // keys as a `[[bridge]]` in TOML, with ports under `port`.
+    /// A new dynamic bridge, ports and all. Without an `id`, the lowest free
+    /// `ktbrN`.
+    #[serde(rename = "bridge.create")]
+    BridgeCreate {
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Replace a dynamic bridge's definition.
+    #[serde(rename = "bridge.update")]
+    BridgeUpdate {
+        bridge: String,
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    #[serde(rename = "bridge.delete")]
+    BridgeDelete {
+        bridge: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Copy any bridge, static or dynamic, into a new dynamic one, disabled.
+    #[serde(rename = "bridge.clone")]
+    BridgeClone {
+        bridge: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_id: Option<String>,
+        name: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Enable a bridge (on a static one, an override in `state.toml`;
+    /// `reset` drops the override instead). Refused if it conflicts with an
+    /// enabled bridge; `bridge.switch` disables those.
+    #[serde(rename = "bridge.enable")]
+    BridgeEnable {
+        bridge: String,
+        #[serde(default)]
+        reset: bool,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    #[serde(rename = "bridge.disable")]
+    BridgeDisable {
+        bridge: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Enable a bridge and disable every enabled bridge in its way.
+    #[serde(rename = "bridge.switch")]
+    BridgeSwitch {
+        bridge: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Drop a DNS-SD collision adjustment and try the configured public
+    /// name again.
+    #[serde(rename = "bridge.retry_public_name")]
+    BridgeRetryPublicName { bridge: String },
+
+    // Ports, on dynamic bridges; `port` is the port's id.
+    #[serde(rename = "port.add")]
+    PortAdd {
+        bridge: String,
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    #[serde(rename = "port.update")]
+    PortUpdate {
+        bridge: String,
+        port: String,
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    #[serde(rename = "port.remove")]
+    PortRemove {
+        bridge: String,
+        port: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Bring a bridge's TNC link up now, and keep it up, whatever its
+    /// `connect` policy, until `port.disconnect`.
+    #[serde(rename = "port.connect")]
+    PortConnect { bridge: String, port: String },
+    /// Take a bridge's TNC link down, and keep it down until
+    /// `port.connect`. App sessions stay connected.
+    #[serde(rename = "port.disconnect")]
+    PortDisconnect { bridge: String, port: String },
+    /// Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.
+    #[serde(rename = "session.kick")]
+    SessionKick { session: String },
+
+    // Dynamic TNCs (by id or name) and adapters (by id).
+    #[serde(rename = "tnc.create")]
+    TncCreate {
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Replace a dynamic TNC's definition; a new `id` in it renames the TNC
+    /// and the dynamic ports that use it.
+    #[serde(rename = "tnc.update")]
+    TncUpdate {
+        tnc: String,
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Refused while a port uses it.
+    #[serde(rename = "tnc.delete")]
+    TncDelete {
+        tnc: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    #[serde(rename = "adapter.create")]
+    AdapterCreate {
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Replace a dynamic adapter's definition; a new `id` renames it and
+    /// the dynamic references to it.
+    #[serde(rename = "adapter.update")]
+    AdapterUpdate {
+        adapter: String,
+        definition: Value,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Refused while anything refers to it.
+    #[serde(rename = "adapter.delete")]
+    AdapterDelete {
+        adapter: String,
+        #[serde(default)]
+        non_disruptive: bool,
+    },
+    /// Serial devices present, by stable path, flagging known TNCs.
+    #[serde(rename = "serial.list")]
+    SerialList,
 }
 
 impl Command {
     /// Every `cmd` this version knows, to tell an unknown command from a
     /// known one with bad parameters.
-    pub const NAMES: &'static [&'static str] = &["status", "subscribe", "reload", "config.check"];
+    pub const NAMES: &'static [&'static str] = &[
+        "status",
+        "subscribe",
+        "reload",
+        "config.check",
+        "config.get",
+        "config.put",
+        "bridge.create",
+        "bridge.update",
+        "bridge.delete",
+        "bridge.clone",
+        "bridge.enable",
+        "bridge.disable",
+        "bridge.switch",
+        "bridge.retry_public_name",
+        "port.add",
+        "port.update",
+        "port.remove",
+        "port.connect",
+        "port.disconnect",
+        "session.kick",
+        "tnc.create",
+        "tnc.update",
+        "tnc.delete",
+        "adapter.create",
+        "adapter.update",
+        "adapter.delete",
+        "serial.list",
+    ];
+}
+
+/// The kinds of object config files define.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ObjectKind {
+    Adapter,
+    Tnc,
+    Bridge,
+}
+
+impl From<ObjectKind> for crate::config::store::Kind {
+    fn from(k: ObjectKind) -> Self {
+        use crate::config::store::Kind;
+        match k {
+            ObjectKind::Adapter => Kind::Adapter,
+            ObjectKind::Tnc => Kind::Tnc,
+            ObjectKind::Bridge => Kind::Bridge,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
@@ -180,6 +403,22 @@ pub enum ErrorCode {
     ConfigInvalid,
     /// `non_disruptive` and the change would disrupt; `data` is the plan.
     ReloadWouldDisrupt,
+    /// No such bridge, port, TNC, adapter or session.
+    NotFound,
+    /// Static objects (in /etc) can't be changed through the API, only
+    /// enabled and disabled; `object` names the file.
+    StaticObjectReadonly,
+    /// An id or name that's already taken.
+    Conflict,
+    /// A TNC or adapter that something still refers to; the message says
+    /// what.
+    InUse,
+    /// `config.put` with a revision that's no longer current: someone else
+    /// changed it since `config.get`.
+    RevisionConflict,
+    /// `dynamic.toml` was edited by hand since the daemon read it; reload
+    /// first.
+    ChangedOnDisk,
     Internal,
 }
 
@@ -235,6 +474,53 @@ impl PlanResult {
             warnings: problems(warnings),
         }
     }
+}
+
+/// The result of a command that changes config: the plan it applied, and
+/// the id of anything it created.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ChangeResult {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(flatten)]
+    pub plan: PlanResult,
+}
+
+/// The result of `config.get`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ConfigText {
+    pub toml: String,
+    /// Pass back to `config.put`.
+    pub revision: String,
+}
+
+/// One serial device, as `serial.list` finds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SerialEntry {
+    /// The stable path to use in config: `/dev/serial/by-id/…`, or
+    /// `/dev/serial/by-path/…` for devices with no by-id name.
+    pub path: String,
+    /// What it points to now: `/dev/ttyACM0`.
+    pub device: String,
+    /// Other stable paths to the same device.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub also: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// A TNC this daemon knows: `Kenwood TH-D75`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_tnc: Option<String>,
+    /// The `model` to use for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The TNC already defined with this path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tnc: Option<String>,
 }
 
 /// The result of `config.check`.
@@ -515,6 +801,33 @@ mod tests {
         let r: Request = serde_json::from_str(r#"{"v":1,"id":6,"cmd":"config.check"}"#).unwrap();
         assert_eq!(r.command, Command::ConfigCheck { dynamic: None });
         assert!(serde_json::from_str::<Request>(r#"{"v":1,"id":6,"cmd":"nope"}"#).is_err());
+    }
+
+    #[test]
+    fn a_request_id_never_names_an_object() {
+        let r: Request = serde_json::from_str(
+            r#"{"v":1,"id":9,"cmd":"port.remove","bridge":"ktbr0","port":"lan"}"#,
+        )
+        .unwrap();
+        assert_eq!(r.id, 9);
+        assert_eq!(
+            r.command,
+            Command::PortRemove {
+                bridge: "ktbr0".into(),
+                port: "lan".into(),
+                non_disruptive: false
+            }
+        );
+        // No command takes a parameter called id: it's the request's.
+        let schema_like = serde_json::to_value(&r.command).unwrap();
+        assert!(schema_like.get("id").is_none());
+        // Every variant's cmd is listed in NAMES.
+        for name in Command::NAMES {
+            let v = serde_json::json!({"cmd": name});
+            if let Err(e) = serde_json::from_value::<Command>(v) {
+                assert!(e.to_string().contains("missing field"), "{name}: {e}");
+            }
+        }
     }
 
     #[test]
