@@ -102,6 +102,11 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   turned off, kicked) gets data again when it reconnects. BlueZ kept its
   old subscription and didn't pass the new one on, so the app showed
   "connected" and received nothing until the daemon restarted.
+- A phone whose app has disconnected no longer hides the bridge from other
+  phones. iOS keeps the link to a paired accessory open, and many
+  controllers can't advertise while anything is connected, so the daemon
+  now drops the link of a phone it has served that stays connected
+  without a session (checked every 10 s).
   After a crash, the restarted daemon disconnects the phones the old one
   left connected, so they reconnect to it.
 

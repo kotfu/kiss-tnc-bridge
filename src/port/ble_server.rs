@@ -57,10 +57,11 @@ const SESSION_QUEUE: usize = 64;
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long to wait for BlueZ to drop a phone's link.
 const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
-/// How long a phone that reconnects has to subscribe before we decide
-/// BlueZ is sitting on a stale subscription for it (see
-/// [`StaleSubscriptions`]). Phones subscribe within a second or two.
-const SUBSCRIBE_GRACE: Duration = Duration::from_secs(5);
+/// How often a phone the port has served is checked while it's connected:
+/// one with no session gets its link dropped (see [`watch_link`]). Long
+/// enough for a phone that's just connected to subscribe, which takes a
+/// second or two.
+const LINK_GRACE: Duration = Duration::from_secs(10);
 /// Between dropping the GATT application and registering it again, so
 /// BlueZ removes the old service before the new one appears.
 const REREGISTER_GAP: Duration = Duration::from_millis(250);
@@ -103,9 +104,11 @@ enum BleEvent {
     /// A client unsubscribed, its reader or writer ended, or its device
     /// disconnected.
     Gone { addr: Address, generation: u64 },
-    /// A phone whose subscription may be stale reconnected
-    /// [`SUBSCRIBE_GRACE`] ago.
-    Returned { addr: Address },
+    /// A phone the port has served has been connected for
+    /// [`LINK_GRACE`]: time to check it has a session.
+    Check { addr: Address },
+    /// A phone's link watcher ended (its device went away).
+    Unwatched { addr: Address },
 }
 
 /// Phones whose session ended while they were subscribed, and whose
@@ -123,11 +126,13 @@ enum BleEvent {
 struct StaleSubscriptions(HashSet<Address>);
 
 impl StaleSubscriptions {
-    /// A session ended. Returns whether the phone may now be stale: it had
-    /// subscribed. (One that unsubscribed first isn't, but the cost of
-    /// counting it is at most an unneeded refresh once the port is idle.)
-    fn ended(&mut self, addr: Address, was_subscribed: bool) -> bool {
-        was_subscribed && self.0.insert(addr)
+    /// A session ended; the phone may now be stale if it had subscribed.
+    /// (One that unsubscribed first isn't, but the cost of counting it is
+    /// at most an unneeded refresh once the port is idle.)
+    fn ended(&mut self, addr: Address, was_subscribed: bool) {
+        if was_subscribed {
+            self.0.insert(addr);
+        }
     }
 
     /// Whether to refresh now: something may be stale and no phone is
@@ -136,8 +141,8 @@ impl StaleSubscriptions {
         clients == 0 && !self.0.is_empty()
     }
 
-    /// Whether a phone that reconnected [`SUBSCRIBE_GRACE`] ago is stuck:
-    /// it may be stale and still hasn't subscribed.
+    /// Whether a phone that has been connected for [`LINK_GRACE`] is
+    /// stuck: it may be stale and still hasn't subscribed.
     fn stuck(&self, addr: Address, subscribed: bool) -> bool {
         !subscribed && self.0.contains(&addr)
     }
@@ -255,8 +260,8 @@ impl BleServerPort {
         let mut max = *max_rx.borrow_and_update() as usize;
         let mut follow_max = true;
         let mut stale = StaleSubscriptions::default();
-        // Cancelled when the stale list is cleared, ending its watchers.
-        let mut stale_watch = self.shutdown.child_token();
+        // Phones the port has served, whose links it watches.
+        let mut watched: HashSet<Address> = HashSet::new();
         // Sessions up to this generation were subscribed to an application
         // since registered again, which cleared their subscriptions.
         let mut refreshed_at: u64 = 0;
@@ -360,15 +365,25 @@ impl BleServerPort {
                     let (addr, g, kicked) = match ev {
                         BleEvent::Gone { addr, generation } => (addr, generation, false),
                         BleEvent::Kicked { addr, generation } => (addr, generation, true),
-                        BleEvent::Returned { addr } => {
+                        BleEvent::Unwatched { addr } => {
+                            watched.remove(&addr);
+                            continue;
+                        }
+                        BleEvent::Check { addr } => {
                             let subscribed = clients.get(&addr).is_some_and(|c| c.writer_attached);
                             if stale.stuck(addr, subscribed) {
                                 tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, "a phone came back but BlueZ didn't pass on its subscription; registering the KISS service again, which briefly interrupts the other phones");
-                                if let Err(e) = self.refresh(&mut gatt, &mut stale, &mut stale_watch).await {
+                                if let Err(e) = self.refresh(&mut gatt, &mut stale).await {
                                     fail(&state_tx, e);
                                     break;
                                 }
                                 refreshed_at = generation;
+                            } else if !clients.contains_key(&addr) {
+                                // iOS keeps the link to a bonded accessory
+                                // after the app lets go, and many controllers
+                                // can't advertise while anything is connected.
+                                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping the link of a phone with no session, so the bridge can advertise again");
+                                self.disconnect(addr).await;
                             }
                             continue;
                         }
@@ -389,11 +404,12 @@ impl BleServerPort {
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
                     let _ = self.app_tx.send(AppEvent::SessionClosed { id: self.session_id(addr) }).await;
-                    if stale.ended(addr, was_subscribed) && !clients.is_empty() {
-                        tokio::spawn(watch_return(self.adapter.clone(), addr, ev_tx.clone(), stale_watch.clone()));
+                    stale.ended(addr, was_subscribed);
+                    if watched.insert(addr) {
+                        tokio::spawn(watch_link(self.adapter.clone(), addr, ev_tx.clone(), self.shutdown.clone()));
                     }
                     if stale.refresh_when_idle(clients.len()) {
-                        if let Err(e) = self.refresh(&mut gatt, &mut stale, &mut stale_watch).await {
+                        if let Err(e) = self.refresh(&mut gatt, &mut stale).await {
                             fail(&state_tx, e);
                             break;
                         }
@@ -451,15 +467,8 @@ impl BleServerPort {
     /// subscriptions (see [`StaleSubscriptions`]). Phones still connected
     /// lose their subscription too; BlueZ tells them the service changed,
     /// and they subscribe again.
-    async fn refresh(
-        &self,
-        gatt: &mut Gatt,
-        stale: &mut StaleSubscriptions,
-        stale_watch: &mut CancellationToken,
-    ) -> Result<(), String> {
+    async fn refresh(&self, gatt: &mut Gatt, stale: &mut StaleSubscriptions) -> Result<(), String> {
         let phones = stale.clear();
-        stale_watch.cancel();
-        *stale_watch = self.shutdown.child_token();
         tracing::info!(bridge = %self.bridge_id, port = %self.port_id, phones = ?phones, "registering the KISS service again so BlueZ forgets old subscriptions");
         // Unregistering happens in the background once the handle is gone.
         gatt.handle = None;
@@ -750,40 +759,56 @@ async fn writer_task(
     // The port closed the session on purpose.
 }
 
-/// Report a phone whose subscription may be stale once it has dropped its
-/// link, connected again, and had [`SUBSCRIBE_GRACE`] to subscribe.
-async fn watch_return(
+/// Watch the link of a phone the port has served, for as long as the port
+/// runs: every [`LINK_GRACE`] that it's connected, ask the port to check it
+/// has a session ([`BleEvent::Check`]).
+async fn watch_link(
     adapter: Adapter,
     addr: Address,
     ev_tx: mpsc::Sender<BleEvent>,
     stop: CancellationToken,
 ) {
-    let back = async {
-        let device = adapter.device(addr).ok()?;
-        let mut events = device.events().await.ok()?;
-        // A kicked phone's link may not be down yet: wait for it to go
-        // down, then come back up.
-        let mut was_down = !device.is_connected().await.unwrap_or(false);
-        while let Some(ev) = events.next().await {
-            if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(up)) = ev {
-                if !up {
-                    was_down = true;
-                } else if was_down {
-                    return Some(());
+    tokio::select! {
+        _ = stop.cancelled() => {}
+        _ = link_checks(&adapter, addr, &ev_tx) => {
+            let _ = ev_tx.send(BleEvent::Unwatched { addr }).await;
+        }
+    }
+}
+
+/// Returns when the device goes away or the port stops listening.
+async fn link_checks(
+    adapter: &Adapter,
+    addr: Address,
+    ev_tx: &mpsc::Sender<BleEvent>,
+) -> Option<()> {
+    let device = adapter.device(addr).ok()?;
+    let mut events = device.events().await.ok()?;
+    let mut connected = device.is_connected().await.unwrap_or(false);
+    loop {
+        if connected {
+            let check = tokio::time::sleep(LINK_GRACE);
+            tokio::pin!(check);
+            loop {
+                tokio::select! {
+                    _ = &mut check => {
+                        ev_tx.send(BleEvent::Check { addr }).await.ok()?;
+                        break;
+                    }
+                    ev = events.next() => {
+                        if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(false)) = ev? {
+                            connected = false;
+                            break;
+                        }
+                    }
                 }
             }
+        } else if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(true)) =
+            events.next().await?
+        {
+            connected = true;
         }
-        None
-    };
-    tokio::select! {
-        _ = stop.cancelled() => return,
-        back = back => if back.is_none() { return },
     }
-    tokio::select! {
-        _ = stop.cancelled() => return,
-        _ = tokio::time::sleep(SUBSCRIBE_GRACE) => {}
-    }
-    let _ = ev_tx.send(BleEvent::Returned { addr }).await;
 }
 
 async fn wait_for_disconnect(adapter: &Adapter, addr: Address) {
@@ -811,10 +836,12 @@ mod tests {
     #[test]
     fn only_subscribed_phones_can_be_stale() {
         let mut stale = StaleSubscriptions::default();
-        assert!(!stale.ended(addr(1), false));
+        stale.ended(addr(1), false);
         assert!(!stale.refresh_when_idle(0));
-        assert!(stale.ended(addr(2), true));
-        assert!(!stale.ended(addr(2), true), "already counted");
+        stale.ended(addr(2), true);
+        stale.ended(addr(2), true);
+        assert!(stale.refresh_when_idle(0));
+        assert_eq!(stale.clear(), vec![addr(2)]);
     }
 
     #[test]

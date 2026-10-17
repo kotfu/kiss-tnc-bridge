@@ -557,8 +557,9 @@ should be aware of.
   system cache name.
 - Some Bluetooth controllers stop advertising while a phone is connected, so a
   second phone can't find the bridge even with `max_clients = 2`. The Raspberry
-  Pi 4's built-in chip does this. The RTL8761B in common USB dongles keeps
-  advertising and served two phones at once in testing.
+  Pi 4's built-in chip does this, and so did an RTL8761B USB dongle on a Pi 4
+  with BlueZ 5.82, though an earlier test saw an RTL8761B serve two phones at
+  once.
 
 
 ## Recommended Hardware
@@ -587,9 +588,9 @@ Here's some popular devices which `kiss-tnc-bridge` works with:
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive
 USB adapter. If the adapter is supported in Linux and supports Bluetooth version
 4.0 or higher it should work. Many USB adapters use the Realtek 8761B chipset or
-one of its variants. It keeps advertising with a phone connected, and served
-two phones at once in testing. As best I can tell, all these common adapters
-use that chipset:
+one of its variants. Whether it can serve two phones at once seems to depend
+on the setup (see [Limitations and Caveats](#limitations-and-caveats)). As best
+I can tell, all these common adapters use that chipset:
 
 - TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
 - ASUS USB-BT500
@@ -784,6 +785,12 @@ chip, stop advertising on their own once a single client connects, regardless
 of the `max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
 On that hardware a second phone can only connect if it reconnects on its own,
 without discovering the bridge.
+
+iOS keeps the Bluetooth link to a paired accessory open after the app
+disconnects, and offers no way to close it short of turning Bluetooth off.
+On those controllers that would hide the bridge from every other phone. So
+the daemon drops the link of a phone it has served when that phone is still
+connected without a session: it checks every 10 seconds.
 
 
 ## Releases
