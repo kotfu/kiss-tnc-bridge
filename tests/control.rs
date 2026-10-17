@@ -216,7 +216,7 @@ async fn status_reports_bridges_ports_and_sessions() {
         sessions[0]["id"]
             .as_str()
             .unwrap()
-            .starts_with("lan/127.0.0.1:")
+            .starts_with("ktbr0/lan/127.0.0.1:")
     );
     assert_eq!(b["counters"]["tnc_connects"], 1);
     r.shutdown.cancel();
@@ -265,7 +265,7 @@ async fn events_follow_state_frames_and_activity() {
         ev["session"]
             .as_str()
             .unwrap()
-            .starts_with("lan/127.0.0.1:")
+            .starts_with("ktbr0/lan/127.0.0.1:")
     );
     assert_eq!(tnc.read_frame().await.unwrap(), ui("back"));
     r.shutdown.cancel();
@@ -660,7 +660,7 @@ async fn links_are_held_and_sessions_kicked() {
         .unwrap()
         .to_string();
     ok(&c
-        .call(json!({"cmd": "session.kick", "session": format!("ktbr0/{session}")}))
+        .call(json!({"cmd": "session.kick", "session": session}))
         .await);
     assert!(matches!(timeout(T, app.read_frame()).await, Ok(Err(_))));
     let res = c

@@ -157,7 +157,7 @@
               "type": "string"
             },
             "session": {
-              "description": "For `tx`, the session it came from.",
+              "description": "For `tx`, the session it came from: `ktbr0/lan/192.168.4.20:51515`.",
               "type": [
                 "string",
                 "null"
@@ -1817,7 +1817,7 @@
         "SessionStatus": {
           "properties": {
             "id": {
-              "description": "`port/peer`: `phones/7C:2A:…`, `lan/192.168.4.20:51515`.",
+              "description": "`bridge/port/peer`: `ktbr0/phones/7C:2A:…`,\n`ktbr0/lan/192.168.4.20:51515`, as `session.kick` takes it.",
               "type": "string"
             },
             "since": {

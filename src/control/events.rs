@@ -31,7 +31,6 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::protocol::{Dir, Event, Topic, rfc3339};
-use crate::bridge::SessionId;
 
 /// Events a slow subscriber can fall behind by before it misses some.
 const BACKLOG: usize = 256;
@@ -92,11 +91,11 @@ impl Hub {
     }
 
     /// A frame to or from a TNC; only call when [`wants_frames`](Self::wants_frames).
-    pub fn frame(&self, object: String, dir: Dir, session: Option<&SessionId>, raw: &[u8]) {
+    pub fn frame(&self, object: String, dir: Dir, session: Option<String>, raw: &[u8]) {
         let _ = self.frames.send(Event::Frame {
             object,
             dir,
-            session: session.map(|s| s.to_string()),
+            session,
             at: rfc3339(SystemTime::now()),
             kiss: raw.iter().map(|b| format!("{b:02x}")).collect(),
             decoded: crate::ax25::decode(raw),
@@ -224,7 +223,7 @@ mod tests {
         hub.frame(
             "ktbr0/radio".into(),
             Dir::Tx,
-            Some(&SessionId::new("lan", "x:1")),
+            Some("ktbr0/lan/x:1".into()),
             &[0x01, 0x32],
         );
         match rx.recv().await.unwrap() {
@@ -236,7 +235,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(object, "ktbr0/radio");
-                assert_eq!(session.as_deref(), Some("lan/x:1"));
+                assert_eq!(session.as_deref(), Some("ktbr0/lan/x:1"));
                 assert_eq!(kiss, "0132");
                 assert_eq!(decoded.command, 1);
             }

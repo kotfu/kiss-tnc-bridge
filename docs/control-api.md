@@ -149,7 +149,7 @@ Everything at once. No parameters.
        "sessions": []},
       {"id": "phones", "type": "ble-server", "role": "app", "state": "advertising", "detail": "hci1",
        "settings": {"adapter": "dongle (AC:A7:F1:29:9C:7F)", "max_clients": 2},
-       "sessions": [{"id": "phones/40:53:99:D1:B5:60", "since": "2026-10-16T02:27:00Z"}]},
+       "sessions": [{"id": "ktbr0/phones/40:53:99:D1:B5:60", "since": "2026-10-16T02:27:00Z"}]},
       {"id": "lan", "type": "tcp-server", "role": "app", "state": "listening", "detail": "0.0.0.0:8001",
        "settings": {"listen": "wlan0:8001", "allow": ["192.168.13.0/24"], "announce": true},
        "sessions": []}],
@@ -168,6 +168,8 @@ Everything at once. No parameters.
   `bridge.disable` has overridden what its file says.
 - `paired` is absent when it can't be known (no BlueZ, adapter not
   present); `counters` is absent for bridges that aren't running.
+- A session's `id` (`ktbr0/lan/192.168.4.20:51515`) is the same in
+  status, events and `session.kick`.
 - Times are RFC 3339 in UTC.
 
 ### `subscribe`
@@ -286,7 +288,7 @@ their by-path names from `also`.
 |---|---|---|
 | `state` | `state` | `what` (`bridge`, `port`, `tnc`, `session`, `config`), `object` (`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`), `state` (`started`, `stopped`, `connected`, `backoff`, `opened`, `closed`, `reloaded`, `changed`, …) |
 | `activity` | `activity` | `object` (a port or session), `dir` (`rx` toward the bridge, `tx` away from it), `bytes` since the last event. At most about 10 a second per object and direction |
-| `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, where it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
+| `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, the session it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
 
 State events are hints: after one, read `status` for the whole picture.

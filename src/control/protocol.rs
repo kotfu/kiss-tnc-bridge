@@ -669,7 +669,8 @@ pub struct PortStatus {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionStatus {
-    /// `port/peer`: `phones/7C:2A:…`, `lan/192.168.4.20:51515`.
+    /// `bridge/port/peer`: `ktbr0/phones/7C:2A:…`,
+    /// `ktbr0/lan/192.168.4.20:51515`, as `session.kick` takes it.
     pub id: String,
     pub since: String,
 }
@@ -710,7 +711,7 @@ pub enum Event {
         /// The TNC port: `ktbr0/radio`.
         object: String,
         dir: Dir,
-        /// For `tx`, the session it came from.
+        /// For `tx`, the session it came from: `ktbr0/lan/192.168.4.20:51515`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         session: Option<String>,
         at: String,

@@ -900,7 +900,12 @@ impl Run {
             && let Some(hub) = &self.hub
             && hub.wants_frames()
         {
-            hub.frame(self.tnc_object(), Dir::Tx, from.as_ref(), &frame);
+            hub.frame(
+                self.tnc_object(),
+                Dir::Tx,
+                from.as_ref().map(|s| format!("{}/{s}", self.id)),
+                &frame,
+            );
         }
         match &self.link {
             TncLink::Connected { .. } => match self

@@ -1035,7 +1035,7 @@ impl Daemon {
                     .flat_map(|s| s.sessions.iter())
                     .filter(|s| s.id.port == p.id)
                     .map(|s| SessionStatus {
-                        id: s.id.to_string(),
+                        id: format!("{}/{}", b.id, s.id),
                         since: rfc3339(s.since),
                     })
                     .collect();
