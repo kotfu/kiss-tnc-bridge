@@ -79,6 +79,16 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   sessions staying connected; sessions a tighter `allow` or lower
   `max_clients` no longer admit are disconnected. An invalid config is
   rejected and the running bridges carry on.
+- The control API: a Unix socket (`/run/kiss-tnc-bridge/control.sock`,
+  group `kiss-tnc-bridge`) speaking newline-delimited JSON, documented in
+  `docs/control-api.md` with a published JSON Schema. `status`; events for
+  state changes, activity and frames (with AX.25 headers decoded for
+  display); `reload` and `config.check` with the plan they'd apply and
+  whether it's disruptive; and commands that create and change dynamic
+  bridges, ports, TNCs and adapters, enable, disable and switch bridges
+  (static ones through overrides), hold TNC links up or down, kick
+  sessions, and list serial devices. Every change can be refused rather
+  than disrupt anyone (`non_disruptive`). `ktbctl` comes next.
 
 ### Fixed
 

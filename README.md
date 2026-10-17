@@ -106,6 +106,7 @@ Options:
                            [default: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml]
       --state-dir <DIR>    State that persists across restarts [default: /var/lib/kiss-tnc-bridge]
       --runtime-dir <DIR>  Lock file and control socket [default: /run/kiss-tnc-bridge]
+      --socket <PATH>      Control socket [default: control.sock in the runtime directory]
   -t, --test-config        Check the config, print the effective bridges and exit
   -d, --debug              Increase log verbosity (-d = debug, -dd = trace)
   -V, --version            Show version and exit
@@ -115,6 +116,11 @@ Options:
 When running from the command line, `kiss-tnc-bridge` shows its log in the
 terminal. Type `Control-C` to quit. The `-d` option overrides the log level in
 the configuration file.
+
+The daemon is managed through its control socket,
+`/run/kiss-tnc-bridge/control.sock`, which members of the
+`kiss-tnc-bridge` group can use. `ktbctl` is its client; the protocol is
+described in [docs/control-api.md](docs/control-api.md).
 
 ### Running as a systemd service
 

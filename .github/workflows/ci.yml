@@ -35,6 +35,9 @@ jobs:
       - name: Test
         run: cargo test
 
+      - name: Control protocol schema is current
+        run: cargo test --features schema --test schema
+
   macos:
     name: macOS (build, test)
     runs-on: macos-latest
