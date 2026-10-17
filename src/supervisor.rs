@@ -294,10 +294,7 @@ impl Daemon {
         let (cfg, report) = config::build(&sources, true).map_err(ReloadError::Invalid)?;
         let plan = self.plan_for(&cfg).await;
         if non_disruptive && plan.disruptive() {
-            tracing::info!(
-                "reload refused: it would disrupt ({})",
-                plan.disruptions().join("; ")
-            );
+            tracing::info!("reload refused: it would {}", plan.describe_disruptions());
             return Err(ReloadError::WouldDisrupt(plan));
         }
         // Only what's new: the same warning on every reload is noise.
@@ -472,14 +469,12 @@ impl Daemon {
                 )
                 .data(to_value(&protocol::problems(&ps)))),
                 Err(ReloadError::WouldDisrupt(plan)) => {
+                    let message = format!(
+                        "nothing was reloaded: the reload would {}; reload without non_disruptive to go ahead",
+                        plan.describe_disruptions()
+                    );
                     let result = PlanResult::new(plan, false, &[]);
-                    Err(ApiError::new(
-                        ErrorCode::ReloadWouldDisrupt,
-                        format!(
-                            "the reload would disrupt ({}); nothing was applied. Reload without non_disruptive to apply it",
-                            result.disruptions.join("; ")
-                        ),
-                    )
+                    Err(ApiError::new(ErrorCode::ReloadWouldDisrupt, message)
                     .data(to_value(&result)))
                 }
             },
@@ -749,15 +744,14 @@ impl Daemon {
         })?;
         let plan = self.plan_for(&cfg).await;
         if non_disruptive && plan.disruptive() {
+            let message = format!(
+                "nothing was changed: this would {}; send it again without non_disruptive to go ahead",
+                plan.describe_disruptions()
+            );
             let result = PlanResult::new(plan, false, &[]);
-            return Err(ApiError::new(
-                ErrorCode::ReloadWouldDisrupt,
-                format!(
-                    "the change would disrupt ({}); nothing was changed",
-                    result.disruptions.join("; ")
-                ),
-            )
-            .data(to_value(&result)));
+            return Err(
+                ApiError::new(ErrorCode::ReloadWouldDisrupt, message).data(to_value(&result))
+            );
         }
         if store.text() != self.store.text() {
             store.save().map_err(store_error)?;
@@ -1711,7 +1705,7 @@ fn announces(b: &config::Bridge) -> bool {
 
 fn log_plan(plan: &Plan) {
     if plan.is_noop() {
-        tracing::info!("config: no changes");
+        tracing::info!("config: no changes to running bridges");
         return;
     }
     for g in &plan.global {

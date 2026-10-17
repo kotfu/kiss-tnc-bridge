@@ -160,20 +160,21 @@ impl Plan {
             .collect()
     }
 
-    /// Why the plan is disruptive; empty if it isn't.
+    /// Why the plan is disruptive, each a phrase that completes "this
+    /// would …"; empty if it isn't.
     pub fn disruptions(&self) -> Vec<String> {
         let mut out = Vec::new();
         for b in &self.bridges {
             if b.stops_in_use {
-                out.push(format!("bridge {} stops while in use", b.id));
+                out.push(format!("stop bridge {} while it's in use", b.id));
             }
             for p in &b.ports {
                 for s in &p.disconnects {
-                    out.push(format!("disconnects {}/{s}", b.id));
+                    out.push(format!("disconnect session {}/{s}", b.id));
                 }
                 if p.drops_tnc_link {
                     out.push(format!(
-                        "TNC port {}/{} restarts while its link is in use",
+                        "restart TNC port {}/{} while its link is up",
                         b.id, p.id
                     ));
                 }
@@ -182,8 +183,23 @@ impl Plan {
         out
     }
 
+    /// The disruptions as one phrase: "stop bridge ktbr0 while it's in use
+    /// and disconnect session ktbr0/lan/…".
+    pub fn describe_disruptions(&self) -> String {
+        join_and(&self.disruptions())
+    }
+
     pub fn disruptive(&self) -> bool {
         !self.disruptions().is_empty()
+    }
+}
+
+/// "a", "a and b", "a, b and c".
+fn join_and(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 
@@ -542,6 +558,15 @@ fn newest_beyond(sessions: &[&SessionView], max: usize, out: &mut Vec<SessionId>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn disruptions_read_as_one_phrase() {
+        let items = |n: &[&str]| n.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(join_and(&items(&[])), "");
+        assert_eq!(join_and(&items(&["a"])), "a");
+        assert_eq!(join_and(&items(&["a", "b"])), "a and b");
+        assert_eq!(join_and(&items(&["a", "b", "c"])), "a, b and c");
+    }
+
     use super::*;
     use crate::config::load::parse_str;
     use crate::config::{Source, resolve};
