@@ -98,6 +98,10 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   to connect. Now they're asked once.
 - When the daemon stops, phones connected over BLE are disconnected, so
   apps like aprs.fi notice instead of staying "connected" to nothing.
+- A phone that lost its BLE link while subscribed (out of range, Bluetooth
+  turned off, kicked) gets data again when it reconnects. BlueZ kept its
+  old subscription and didn't pass the new one on, so the app showed
+  "connected" and received nothing until the daemon restarted.
   After a crash, the restarted daemon disconnects the phones the old one
   left connected, so they reconnect to it.
 

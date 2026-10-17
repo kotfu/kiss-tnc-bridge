@@ -662,6 +662,16 @@ with two characteristics:
 Both characteristics use BlueZ's I/O (file-descriptor) method, so reads and
 writes are streamed over sockets rather than per-attribute D-Bus calls.
 
+BlueZ remembers a bonded phone's subscription to the RX characteristic after
+its link drops, and when the phone comes back and subscribes again, BlueZ
+doesn't tell the daemon, so the phone would look connected but get nothing.
+When a subscribed phone leaves without unsubscribing (it went out of range,
+turned Bluetooth off, or was kicked), the daemon registers the service again,
+which makes BlueZ forget. It does that as soon as no other phone is
+connected; if others are, it waits until the phone comes back and fails to
+subscribe, then does it anyway, and the other phones resubscribe when BlueZ
+tells them the service changed.
+
 ### The bridge manager
 
 Each `BridgeManager` runs a single `tokio::select!` loop and owns:
