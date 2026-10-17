@@ -19,6 +19,7 @@
 
 #![cfg(unix)]
 
+use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -63,13 +64,24 @@ fn sigterm_stops_the_daemon_with_a_dead_stderr() {
         .spawn()
         .unwrap();
 
-    // Let it start and log a bit, then close the only reader of its log.
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(
-        child.try_wait().unwrap().is_none(),
-        "the daemon exited early"
-    );
-    drop(child.stderr.take());
+    // Let it start, then close the only reader of its log.
+    let stderr = child.stderr.take().unwrap();
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut log = BufReader::new(stderr);
+        let mut line = String::new();
+        while log.read_line(&mut line).unwrap_or(0) > 0 {
+            if line.contains("daemon ready") {
+                let _ = ready_tx.send(log);
+                return;
+            }
+            line.clear();
+        }
+    });
+    let log = ready_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the daemon didn't start");
+    drop(log);
 
     // SAFETY: signalling our own child by pid.
     let rc = unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };

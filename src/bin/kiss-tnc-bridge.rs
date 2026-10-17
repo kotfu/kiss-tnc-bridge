@@ -439,6 +439,17 @@ async fn run(
 ) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+    // Handlers first, so a signal that arrives while the daemon starts is
+    // handled rather than killing it.
+    #[cfg(unix)]
+    let (mut int, mut term, mut hup) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt())?,
+            signal(SignalKind::terminate())?,
+            signal(SignalKind::hangup())?,
+        )
+    };
     let hub = kiss_tnc_bridge::control::events::Hub::new(shutdown.clone());
     {
         let group = cfg.control.group.clone();
@@ -459,16 +470,11 @@ async fn run(
     }
     let stop = shutdown.clone();
     tokio::spawn(async move {
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
         #[cfg(unix)]
         let why = {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-            let mut hup = signal(SignalKind::hangup()).expect("SIGHUP handler");
             loop {
                 tokio::select! {
-                    _ = &mut ctrl_c => break "interrupted",
+                    _ = int.recv() => break "interrupted",
                     _ = term.recv() => break "terminated",
                     _ = hup.recv() => {
                         let reload = supervisor::DaemonCmd::Reload {
@@ -484,7 +490,7 @@ async fn run(
         };
         #[cfg(not(unix))]
         let why = {
-            let _ = ctrl_c.await;
+            let _ = tokio::signal::ctrl_c().await;
             drop(cmd_tx);
             "interrupted"
         };
