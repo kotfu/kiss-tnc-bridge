@@ -106,6 +106,7 @@ Options:
                            [default: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml]
       --state-dir <DIR>    State that persists across restarts [default: /var/lib/kiss-tnc-bridge]
       --runtime-dir <DIR>  Lock file and control socket [default: /run/kiss-tnc-bridge]
+      --socket <PATH>      Control socket [default: control.sock in the runtime directory]
   -t, --test-config        Check the config, print the effective bridges and exit
   -d, --debug              Increase log verbosity (-d = debug, -dd = trace)
   -V, --version            Show version and exit
@@ -115,6 +116,11 @@ Options:
 When running from the command line, `kiss-tnc-bridge` shows its log in the
 terminal. Type `Control-C` to quit. The `-d` option overrides the log level in
 the configuration file.
+
+The daemon is managed through its control socket,
+`/run/kiss-tnc-bridge/control.sock`, which members of the
+`kiss-tnc-bridge` group can use. `ktbctl` is its client; the protocol is
+described in [docs/control-api.md](docs/control-api.md).
 
 ### Running as a systemd service
 
@@ -443,6 +449,23 @@ port. The packages install a udev rule
 leave the TH-D75 alone; the file explains how to add other TNCs. Raspberry Pi
 OS doesn't run ModemManager.
 
+### When the radio doesn't transmit
+
+If an app sends a beacon and the radio doesn't key up, look for a red **STA**
+on the radio's display. It means the radio's TNC has the packet and is
+waiting for the channel to clear before transmitting, as packet TNCs always
+have. The radio transmits once the channel is clear, and STA goes out.
+
+If STA stays lit, the radio thinks the channel is busy: there's traffic on
+the frequency, or the squelch is open (set too low, or opened by noise).
+Close the squelch, or check the radio's DCD sense setting (`Detect Data`,
+in the APRS settings; menu 507 on some Kenwood radios), which decides what
+counts as busy. Turning the radio off and on clears a stuck queue.
+
+The bridge can't see any of this. Once it has handed a frame to the radio,
+its counters, logs and `ktbctl` count the frame as sent, whether or not the
+radio has transmitted it yet.
+
 ### Other TNCs
 
 Any TNC that speaks KISS over Bluetooth SPP or a serial port should work
@@ -534,8 +557,9 @@ should be aware of.
   system cache name.
 - Some Bluetooth controllers stop advertising while a phone is connected, so a
   second phone can't find the bridge even with `max_clients = 2`. The Raspberry
-  Pi 4's built-in chip does this. The RTL8761B in common USB dongles keeps
-  advertising and served two phones at once in testing.
+  Pi 4's built-in chip does this, and so did an RTL8761B USB dongle on a Pi 4
+  with BlueZ 5.82, though an earlier test saw an RTL8761B serve two phones at
+  once.
 
 
 ## Recommended Hardware
@@ -564,9 +588,9 @@ Here's some popular devices which `kiss-tnc-bridge` works with:
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive
 USB adapter. If the adapter is supported in Linux and supports Bluetooth version
 4.0 or higher it should work. Many USB adapters use the Realtek 8761B chipset or
-one of its variants. It keeps advertising with a phone connected, and served
-two phones at once in testing. As best I can tell, all these common adapters
-use that chipset:
+one of its variants. Whether it can serve two phones at once seems to depend
+on the setup (see [Limitations and Caveats](#limitations-and-caveats)). As best
+I can tell, all these common adapters use that chipset:
 
 - TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
 - ASUS USB-BT500
@@ -638,6 +662,16 @@ with two characteristics:
 
 Both characteristics use BlueZ's I/O (file-descriptor) method, so reads and
 writes are streamed over sockets rather than per-attribute D-Bus calls.
+
+BlueZ remembers a bonded phone's subscription to the RX characteristic after
+its link drops, and when the phone comes back and subscribes again, BlueZ
+doesn't tell the daemon, so the phone would look connected but get nothing.
+When a subscribed phone leaves without unsubscribing (it went out of range,
+turned Bluetooth off, or was kicked), the daemon registers the service again,
+which makes BlueZ forget. It does that as soon as no other phone is
+connected; if others are, it waits until the phone comes back and fails to
+subscribe, then does it anyway, and the other phones resubscribe when BlueZ
+tells them the service changed.
 
 ### The bridge manager
 
@@ -751,6 +785,12 @@ chip, stop advertising on their own once a single client connects, regardless
 of the `max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
 On that hardware a second phone can only connect if it reconnects on its own,
 without discovering the bridge.
+
+iOS keeps the Bluetooth link to a paired accessory open after the app
+disconnects, and offers no way to close it short of turning Bluetooth off.
+On those controllers that would hide the bridge from every other phone. So
+the daemon drops the link of a phone it has served when that phone is still
+connected without a session: it checks every 10 seconds.
 
 
 ## Releases

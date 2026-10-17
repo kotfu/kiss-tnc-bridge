@@ -79,6 +79,16 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   sessions staying connected; sessions a tighter `allow` or lower
   `max_clients` no longer admit are disconnected. An invalid config is
   rejected and the running bridges carry on.
+- The control API: a Unix socket (`/run/kiss-tnc-bridge/control.sock`,
+  group `kiss-tnc-bridge`) speaking newline-delimited JSON, documented in
+  `docs/control-api.md` with a published JSON Schema. `status`; events for
+  state changes, activity and frames (with AX.25 headers decoded for
+  display); `reload` and `config.check` with the plan they'd apply and
+  whether it's disruptive; and commands that create and change dynamic
+  bridges, ports, TNCs and adapters, enable, disable and switch bridges
+  (static ones through overrides), hold TNC links up or down, kick
+  sessions, and list serial devices. Every change can be refused rather
+  than disrupt anyone (`non_disruptive`). `ktbctl` comes next.
 
 ### Fixed
 
@@ -88,6 +98,15 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   to connect. Now they're asked once.
 - When the daemon stops, phones connected over BLE are disconnected, so
   apps like aprs.fi notice instead of staying "connected" to nothing.
+- A phone that lost its BLE link while subscribed (out of range, Bluetooth
+  turned off, kicked) gets data again when it reconnects. BlueZ kept its
+  old subscription and didn't pass the new one on, so the app showed
+  "connected" and received nothing until the daemon restarted.
+- A phone whose app has disconnected no longer hides the bridge from other
+  phones. iOS keeps the link to a paired accessory open, and many
+  controllers can't advertise while anything is connected, so the daemon
+  now drops the link of a phone it has served that stays connected
+  without a session (checked every 10 s).
   After a crash, the restarted daemon disconnects the phones the old one
   left connected, so they reconnect to it.
 

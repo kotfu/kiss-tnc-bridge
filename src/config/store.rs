@@ -223,6 +223,50 @@ impl DynamicStore {
         }
     }
 
+    /// The object with `id`, to read.
+    pub fn table(&self, kind: Kind, id: &str) -> Option<&Table> {
+        let i = self.index_of(kind, id)?;
+        self.array(kind)?.get(i)
+    }
+
+    /// The object with `id`, to change in place.
+    pub fn table_mut(&mut self, kind: Kind, id: &str) -> Option<&mut Table> {
+        let i = self.index_of(kind, id)?;
+        self.doc
+            .get_mut(kind.key())
+            .and_then(Item::as_array_of_tables_mut)?
+            .get_mut(i)
+    }
+
+    /// Every object of a kind, to search.
+    pub fn tables(&self, kind: Kind) -> Vec<&Table> {
+        self.array(kind)
+            .map(|a| a.iter().collect())
+            .unwrap_or_default()
+    }
+
+    /// Every object of a kind, to change in place.
+    pub fn tables_mut(&mut self, kind: Kind) -> Vec<&mut Table> {
+        match self
+            .doc
+            .get_mut(kind.key())
+            .and_then(Item::as_array_of_tables_mut)
+        {
+            Some(a) => a.iter_mut().collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Replace the whole file's content (`config.put` of all of it). What's
+    /// on disk is still what it was; `save` writes the new text.
+    pub fn replace_text(&mut self, text: &str) -> Result<(), StoreError> {
+        let body = text.strip_prefix(HEADER).unwrap_or(text);
+        self.doc = body
+            .parse::<DocumentMut>()
+            .map_err(|e| StoreError::Invalid(e.to_string().trim_end().to_string()))?;
+        Ok(())
+    }
+
     /// Replace the object with `id`, in place, or append it.
     pub fn put(&mut self, kind: Kind, id: &str, table: Table) {
         match self.index_of(kind, id) {

@@ -20,6 +20,7 @@
 pub mod ble_server;
 pub mod listen;
 pub mod serial;
+pub mod serial_list;
 #[cfg(target_os = "linux")]
 pub mod spp_client;
 pub mod stream;

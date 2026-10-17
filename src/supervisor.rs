@@ -33,7 +33,7 @@
 //! collision) and the DNS-SD announcer for `tcp-server` ports.
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -41,10 +41,20 @@ use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+use serde_json::{Value, json};
+
 use crate::announce::{self, Service};
 use crate::bridge::{Bridge, BridgeCmd, BridgeHandle, TncConnector, TncSettings, TncState};
 use crate::config::state::StateStore;
+use crate::config::store::{DynamicStore, Kind, StoreError};
 use crate::config::{self, AdapterSel, Config, Listen, Mac, PortKind, Problem, Sources};
+use crate::control::edit::{self, World};
+use crate::control::events::Hub;
+use crate::control::protocol::{
+    self, AdapterStatus, ApiError, BridgeStatus, ChangeResult, CheckResult, Command, ConfigText,
+    Counters, ErrorCode, PlanResult, PortStatus, PublicName, SerialStatus, SessionStatus,
+    SppStatus, Status, TncStatus, rfc3339,
+};
 use crate::error::Error;
 use crate::port::tcp_server::{ServerState, TcpLive, TcpServerPort};
 use crate::port::{serial, tcp_client};
@@ -75,6 +85,28 @@ pub enum DaemonCmd {
         non_disruptive: bool,
         reply: Option<oneshot::Sender<Result<ReloadReport, ReloadError>>>,
     },
+    /// A control API command (everything but `subscribe`, which the
+    /// connection handles).
+    Control {
+        command: Command,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+    },
+}
+
+/// A port's state as `status` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PortState {
+    pub state: String,
+    pub detail: Option<String>,
+}
+
+impl PortState {
+    pub fn new(state: &str, detail: Option<String>) -> Self {
+        Self {
+            state: state.to_string(),
+            detail,
+        }
+    }
 }
 
 /// What a reload did.
@@ -102,6 +134,8 @@ pub struct BleSlot {
     pub max_clients: watch::Receiver<u32>,
     pub app_tx: mpsc::Sender<crate::bridge::AppEvent>,
     pub bridge_shutdown: CancellationToken,
+    /// Kept current by the BLE manager, for `status`.
+    pub status: watch::Sender<PortState>,
     /// Set while the port runs on an adapter.
     #[cfg(target_os = "linux")]
     pub running: Option<ble::Running>,
@@ -135,6 +169,7 @@ enum RunningPort {
     },
     Ble {
         max_clients: watch::Sender<u32>,
+        status: watch::Receiver<PortState>,
     },
 }
 
@@ -145,6 +180,7 @@ pub async fn run(
     cfg: Config,
     paths: Paths,
     log_level: Option<LogLevelFn>,
+    hub: Arc<Hub>,
     mut cmds: mpsc::Receiver<DaemonCmd>,
     shutdown: CancellationToken,
 ) -> Result<(), Error> {
@@ -170,7 +206,10 @@ pub async fn run(
         shutdown: shutdown.clone(),
         bluez_errors: Vec::new(),
         known_warnings: Default::default(),
+        hub,
+        store: DynamicStore::from_text(Path::new(""), None).expect("empty"),
     };
+    d.store = d.store_from_sources();
     // The warnings logged at startup, rebuilt from the same sources.
     if let Ok((_, report)) = config::build(&d.sources, true) {
         d.known_warnings = report.warnings.iter().map(|w| w.to_string()).collect();
@@ -207,6 +246,9 @@ pub async fn run(
                         _ => {}
                     }
                 }
+                Some(DaemonCmd::Control { command, reply }) => {
+                    let _ = reply.send(d.control(command).await);
+                }
                 None => shutdown.cancelled().await,
             },
         }
@@ -240,6 +282,9 @@ struct Daemon {
     bluez_errors: Vec<Error>,
     /// Config warnings already logged, so reloads log only new ones.
     known_warnings: std::collections::HashSet<String>,
+    hub: Arc<Hub>,
+    /// `dynamic.toml`, as the config in effect was built from.
+    store: DynamicStore,
 }
 
 impl Daemon {
@@ -249,10 +294,7 @@ impl Daemon {
         let (cfg, report) = config::build(&sources, true).map_err(ReloadError::Invalid)?;
         let plan = self.plan_for(&cfg).await;
         if non_disruptive && plan.disruptive() {
-            tracing::info!(
-                "reload refused: it would disrupt ({})",
-                plan.disruptions().join("; ")
-            );
+            tracing::info!("reload refused: it would {}", plan.describe_disruptions());
             return Err(ReloadError::WouldDisrupt(plan));
         }
         // Only what's new: the same warning on every reload is noise.
@@ -264,6 +306,10 @@ impl Daemon {
         self.known_warnings = warnings;
         self.apply(&plan, cfg).await;
         self.sources = sources;
+        self.store = self.store_from_sources();
+        if !plan.is_noop() {
+            self.hub.state("config", "", "reloaded");
+        }
         for e in self.bluez_errors.drain(..) {
             tracing::error!("{e}");
         }
@@ -407,6 +453,640 @@ impl Daemon {
         self.cfg = new;
     }
 
+    // ── Control API ─────────────────────────────────────────────────
+
+    async fn control(&mut self, command: Command) -> Result<Value, ApiError> {
+        match command {
+            Command::Status => Ok(to_value(&self.status().await)),
+            Command::Reload { non_disruptive } => match self.reload(non_disruptive).await {
+                Ok(r) => Ok(to_value(&PlanResult::new(r.plan, true, &r.warnings))),
+                Err(ReloadError::Invalid(ps)) => Err(ApiError::new(
+                    ErrorCode::ConfigInvalid,
+                    format!(
+                        "the config has {} error(s); nothing was applied (kiss-tnc-bridge -t shows them)",
+                        ps.len()
+                    ),
+                )
+                .data(to_value(&protocol::problems(&ps)))),
+                Err(ReloadError::WouldDisrupt(plan)) => {
+                    let message = format!(
+                        "nothing was reloaded: the reload would {}; reload without non_disruptive to go ahead",
+                        plan.describe_disruptions()
+                    );
+                    let result = PlanResult::new(plan, false, &[]);
+                    Err(ApiError::new(ErrorCode::ReloadWouldDisrupt, message)
+                    .data(to_value(&result)))
+                }
+            },
+            Command::ConfigCheck { dynamic } => Ok(to_value(&self.check(dynamic).await)),
+            Command::Subscribe { .. } => Err(ApiError::new(
+                ErrorCode::BadRequest,
+                "subscribe is handled by the connection",
+            )),
+            Command::ConfigGet { kind, object } => self.config_get(kind.map(Into::into), object),
+            Command::ConfigPut {
+                kind,
+                object,
+                toml,
+                revision,
+                non_disruptive,
+            } => {
+                let kind: Option<Kind> = kind.map(Into::into);
+                let object = match (kind, object) {
+                    (Some(Kind::Bridge), Some(o)) => Some(self.bridge_id(&o).unwrap_or(o)),
+                    (Some(Kind::Tnc), Some(o)) => Some(self.tnc_id(&o).unwrap_or(o)),
+                    (_, o) => o,
+                };
+                self.change(non_disruptive, move |store, world, _| {
+                    config_put(store, world, kind, object.as_deref(), &toml, &revision)
+                })
+                .await
+            }
+            Command::BridgeCreate {
+                definition,
+                non_disruptive,
+            } => {
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::create_bridge(store, world, &definition).map(Some)
+                })
+                .await
+            }
+            Command::BridgeUpdate {
+                bridge,
+                definition,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::update_bridge(store, world, &id, &definition).map(|()| None)
+                })
+                .await
+            }
+            Command::BridgeDelete {
+                bridge,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::delete_bridge(store, world, &id).map(|()| None)
+                })
+                .await
+            }
+            Command::BridgeClone {
+                bridge,
+                new_id,
+                name,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::clone_bridge(store, world, &id, new_id.as_deref(), &name).map(Some)
+                })
+                .await
+            }
+            Command::BridgeEnable {
+                bridge,
+                reset,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                let enabled = if reset { None } else { Some(true) };
+                self.change(non_disruptive, move |store, world, overrides| {
+                    set_enabled(store, world, overrides, &id, enabled).map(|()| None)
+                })
+                .await
+            }
+            Command::BridgeDisable {
+                bridge,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, overrides| {
+                    set_enabled(store, world, overrides, &id, Some(false)).map(|()| None)
+                })
+                .await
+            }
+            Command::BridgeSwitch {
+                bridge,
+                non_disruptive,
+            } => {
+                let id = self.bridge_id(&bridge)?;
+                let in_the_way = conflicting(&self.cfg, &id);
+                self.change(non_disruptive, move |store, world, overrides| {
+                    for other in &in_the_way {
+                        set_enabled(store, world, overrides, other, Some(false))?;
+                    }
+                    set_enabled(store, world, overrides, &id, Some(true)).map(|()| None)
+                })
+                .await
+            }
+            Command::BridgeRetryPublicName { bridge } => {
+                let id = self.bridge_id(&bridge)?;
+                self.retry_public_name(&id).await;
+                Ok(json!({}))
+            }
+            Command::PortAdd {
+                bridge,
+                definition,
+                non_disruptive,
+            } => {
+                let bridge = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::add_port(store, world, &bridge, &definition).map(Some)
+                })
+                .await
+            }
+            Command::PortUpdate {
+                bridge,
+                port,
+                definition,
+                non_disruptive,
+            } => {
+                let bridge = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::update_port(store, world, &bridge, &port, &definition).map(|()| None)
+                })
+                .await
+            }
+            Command::PortRemove {
+                bridge,
+                port,
+                non_disruptive,
+            } => {
+                let bridge = self.bridge_id(&bridge)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::remove_port(store, world, &bridge, &port).map(|()| None)
+                })
+                .await
+            }
+            Command::PortConnect { bridge, port } => self.hold(&bridge, &port, true).await,
+            Command::PortDisconnect { bridge, port } => self.hold(&bridge, &port, false).await,
+            Command::SessionKick { session } => self.kick(&session).await,
+            Command::TncCreate {
+                definition,
+                non_disruptive,
+            } => {
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::create_object(store, world, Kind::Tnc, &definition).map(Some)
+                })
+                .await
+            }
+            Command::TncUpdate {
+                tnc,
+                definition,
+                non_disruptive,
+            } => {
+                let id = self.tnc_id(&tnc)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::update_object(store, world, Kind::Tnc, &id, &definition).map(Some)
+                })
+                .await
+            }
+            Command::TncDelete {
+                tnc,
+                non_disruptive,
+            } => {
+                let id = self.tnc_id(&tnc)?;
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::delete_object(store, world, Kind::Tnc, &id).map(|()| None)
+                })
+                .await
+            }
+            Command::AdapterCreate {
+                definition,
+                non_disruptive,
+            } => {
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::create_object(store, world, Kind::Adapter, &definition).map(Some)
+                })
+                .await
+            }
+            Command::AdapterUpdate {
+                adapter,
+                definition,
+                non_disruptive,
+            } => {
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::update_object(store, world, Kind::Adapter, &adapter, &definition)
+                        .map(Some)
+                })
+                .await
+            }
+            Command::AdapterDelete {
+                adapter,
+                non_disruptive,
+            } => {
+                self.change(non_disruptive, move |store, world, _| {
+                    edit::delete_object(store, world, Kind::Adapter, &adapter).map(|()| None)
+                })
+                .await
+            }
+            Command::SerialList => Ok(to_value(&crate::port::serial_list::list(&self.cfg))),
+        }
+    }
+
+    fn store_from_sources(&self) -> DynamicStore {
+        let path = self.paths.state_dir.join(config::load::DYNAMIC_FILE_NAME);
+        let text = self.sources.dynamic.as_ref().map(|d| d.text.as_str());
+        DynamicStore::from_text(&path, text).unwrap_or_else(|e| {
+            // build() parsed this text already; toml_edit should too.
+            tracing::error!("{e}; changes through the API won't keep dynamic.toml's formatting");
+            DynamicStore::from_text(&path, None).expect("empty")
+        })
+    }
+
+    /// The one way config changes through the API: edit a copy of
+    /// `dynamic.toml` (and enable overrides), build the config from the
+    /// static files as last read plus that copy, check it, work out the
+    /// plan, honour `non_disruptive`, then save and apply. Static files
+    /// aren't re-read, so the change touches only what it edited.
+    async fn change(
+        &mut self,
+        non_disruptive: bool,
+        edit: impl FnOnce(
+            &mut DynamicStore,
+            &World,
+            &mut Vec<(String, Option<bool>)>,
+        ) -> Result<Option<String>, ApiError>,
+    ) -> Result<Value, ApiError> {
+        let mut store = self.store.clone();
+        let mut overrides = Vec::new();
+        let id = {
+            let world = World {
+                statics: &self.sources.statics,
+                cfg: &self.cfg,
+            };
+            edit(&mut store, &world, &mut overrides)?
+        };
+        let mut sources = self.sources.clone();
+        let text = store.text();
+        sources.dynamic = (!text.trim().is_empty() || sources.dynamic.is_some()).then(|| {
+            config::load::DynamicFile {
+                path: store.path().to_path_buf(),
+                text,
+            }
+        });
+        for (b, o) in &overrides {
+            sources.state.set_enabled_override(b, *o);
+        }
+        let (cfg, report) = config::build(&sources, true).map_err(|ps| {
+            ApiError::new(
+                ErrorCode::ConfigInvalid,
+                format!(
+                    "the change would leave the config invalid: {}",
+                    ps.iter()
+                        .map(|p| p.to_string())
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                ),
+            )
+            .data(to_value(&protocol::problems(&ps)))
+        })?;
+        let plan = self.plan_for(&cfg).await;
+        if non_disruptive && plan.disruptive() {
+            let message = format!(
+                "nothing was changed: this would {}; send it again without non_disruptive to go ahead",
+                plan.describe_disruptions()
+            );
+            let result = PlanResult::new(plan, false, &[]);
+            return Err(
+                ApiError::new(ErrorCode::ReloadWouldDisrupt, message).data(to_value(&result))
+            );
+        }
+        if store.text() != self.store.text() {
+            store.save().map_err(store_error)?;
+        }
+        if !overrides.is_empty() {
+            let mut st = self.state.lock().unwrap();
+            if let Err(e) = st.update(|s| {
+                for (b, o) in &overrides {
+                    s.set_enabled_override(b, *o);
+                }
+            }) {
+                return Err(ApiError::new(
+                    ErrorCode::Internal,
+                    format!("can't write {}: {e}", st.path().display()),
+                ));
+            }
+        }
+        self.apply(&plan, cfg).await;
+        self.sources = sources;
+        self.store = store;
+        for e in self.bluez_errors.drain(..) {
+            tracing::error!("{e}");
+        }
+        if !plan.is_noop() {
+            self.hub.state("config", "", "changed");
+        }
+        Ok(to_value(&ChangeResult {
+            id,
+            plan: PlanResult::new(plan, true, &report.warnings),
+        }))
+    }
+
+    fn config_get(&self, kind: Option<Kind>, object: Option<String>) -> Result<Value, ApiError> {
+        let text = match (kind, object) {
+            (None, None) => ConfigText {
+                toml: self.store.text(),
+                revision: self.store.revision(),
+            },
+            (Some(kind), Some(id)) => {
+                let id = match kind {
+                    Kind::Bridge => self.bridge_id(&id)?,
+                    Kind::Tnc => self.tnc_id(&id)?,
+                    Kind::Adapter => id,
+                };
+                let world = World {
+                    statics: &self.sources.statics,
+                    cfg: &self.cfg,
+                };
+                if let Some(src) = world.static_source(kind, &id) {
+                    return Err(ApiError::new(
+                        ErrorCode::StaticObjectReadonly,
+                        format!("{kind} {id} is static config; see {src}"),
+                    )
+                    .object(src.to_string()));
+                }
+                ConfigText {
+                    toml: self.store.get(kind, &id).ok_or_else(|| {
+                        ApiError::new(ErrorCode::NotFound, format!("there's no {kind} {id:?}"))
+                    })?,
+                    revision: self.store.object_revision(kind, &id).expect("just got it"),
+                }
+            }
+            _ => {
+                return Err(ApiError::new(
+                    ErrorCode::BadRequest,
+                    "give both kind and object for one object, or neither for all of dynamic.toml",
+                ));
+            }
+        };
+        Ok(to_value(&text))
+    }
+
+    /// A bridge's id from its id or its name.
+    fn bridge_id(&self, id_or_name: &str) -> Result<String, ApiError> {
+        self.cfg
+            .bridges
+            .iter()
+            .find(|b| b.id == id_or_name)
+            .or_else(|| self.cfg.bridges.iter().find(|b| b.name == id_or_name))
+            .map(|b| b.id.clone())
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCode::NotFound,
+                    format!("there's no bridge {id_or_name:?}"),
+                )
+            })
+    }
+
+    /// A TNC's id from its id or its name.
+    fn tnc_id(&self, id_or_name: &str) -> Result<String, ApiError> {
+        self.cfg
+            .tncs
+            .iter()
+            .find(|t| t.id == id_or_name)
+            .or_else(|| self.cfg.tncs.iter().find(|t| t.name == id_or_name))
+            .map(|t| t.id.clone())
+            .ok_or_else(|| {
+                ApiError::new(
+                    ErrorCode::NotFound,
+                    format!("there's no tnc {id_or_name:?}"),
+                )
+            })
+    }
+
+    async fn hold(&mut self, bridge: &str, port: &str, up: bool) -> Result<Value, ApiError> {
+        let bridge = self.bridge_id(bridge)?;
+        match self.port(&bridge, port) {
+            Some(RunningPort::Tnc) => {
+                self.bridge_cmd(&bridge, BridgeCmd::Hold(up)).await;
+                Ok(json!({}))
+            }
+            Some(_) => Err(ApiError::new(
+                ErrorCode::BadRequest,
+                format!(
+                    "{bridge}/{port} isn't a TNC port; connect and disconnect apply to TNC ports"
+                ),
+            )),
+            None => Err(ApiError::new(
+                ErrorCode::NotFound,
+                format!("bridge {bridge} has no running port {port}"),
+            )),
+        }
+    }
+
+    async fn kick(&mut self, session: &str) -> Result<Value, ApiError> {
+        let not_found = || {
+            ApiError::new(
+                ErrorCode::NotFound,
+                format!("there's no session {session:?}"),
+            )
+        };
+        let (bridge, rest) = session.split_once('/').ok_or_else(not_found)?;
+        let (port, peer) = rest.split_once('/').ok_or_else(not_found)?;
+        let id = crate::bridge::SessionId::new(port, peer);
+        let rb = self.bridges.get(bridge).ok_or_else(not_found)?;
+        let snap = rb.handle.snapshot().await.ok_or_else(not_found)?;
+        if !snap.sessions.iter().any(|s| s.id == id) {
+            return Err(not_found());
+        }
+        let _ = rb.handle.cmd_tx.send(BridgeCmd::Kick(id)).await;
+        Ok(json!({}))
+    }
+
+    async fn retry_public_name(&mut self, id: &str) {
+        {
+            let mut store = self.state.lock().unwrap();
+            if let Err(e) = store.update(|s| s.clear_adjusted_public_name(id)) {
+                tracing::warn!("can't write {}: {e}", store.path().display());
+            }
+        }
+        let Some(b) = self.cfg.bridges.iter().find(|b| b.id == id).cloned() else {
+            return;
+        };
+        if let Some(rb) = self.bridges.get(id) {
+            rb.name.send_replace(b.public_name.clone());
+            tracing::info!(bridge = %id, name = %b.public_name, "trying the configured public name again");
+        }
+        if announces(&b) {
+            self.announce_bridge(&b).await;
+        }
+    }
+
+    /// Validate the config on disk, or with `dynamic` standing in for
+    /// `dynamic.toml`, and work out what a reload would do.
+    async fn check(&self, dynamic: Option<String>) -> CheckResult {
+        let invalid = |errors: Vec<Problem>| CheckResult {
+            valid: false,
+            errors: protocol::problems(&errors),
+            warnings: Vec::new(),
+            plan: None,
+            disruptive: false,
+            disruptions: Vec::new(),
+        };
+        let mut sources =
+            match config::read_sources(&self.paths.main_file, Some(&self.paths.state_dir)) {
+                Ok(s) => s,
+                Err(errors) => return invalid(errors),
+            };
+        if let Some(text) = dynamic {
+            sources.dynamic = Some(config::load::DynamicFile {
+                path: self.paths.state_dir.join(config::load::DYNAMIC_FILE_NAME),
+                text,
+            });
+        }
+        match config::build(&sources, true) {
+            Err(errors) => invalid(errors),
+            Ok((cfg, report)) => {
+                let plan = self.plan_for(&cfg).await;
+                let disruptions = plan.disruptions();
+                CheckResult {
+                    valid: true,
+                    errors: Vec::new(),
+                    warnings: protocol::problems(&report.warnings),
+                    disruptive: !disruptions.is_empty(),
+                    disruptions,
+                    plan: Some(plan),
+                }
+            }
+        }
+    }
+
+    async fn status(&self) -> Status {
+        let cfg = &self.cfg;
+        // Adapters: those present, and those an [[adapter]] names.
+        let present = self.bt.adapter_details().await;
+        let mut adapters: Vec<AdapterStatus> = present
+            .iter()
+            .map(|(hci, mac, powered)| {
+                let named = cfg.adapters.iter().find(|a| a.mac == *mac);
+                AdapterStatus {
+                    id: named.map(|a| a.id.clone()),
+                    mac: mac.to_string(),
+                    hci: Some(hci.clone()),
+                    present: true,
+                    powered: Some(*powered),
+                    source: named.map(|a| a.source.to_string()),
+                }
+            })
+            .collect();
+        for a in &cfg.adapters {
+            if !present.iter().any(|(_, mac, _)| *mac == a.mac) {
+                adapters.push(AdapterStatus {
+                    id: Some(a.id.clone()),
+                    mac: a.mac.to_string(),
+                    hci: None,
+                    present: false,
+                    powered: None,
+                    source: Some(a.source.to_string()),
+                });
+            }
+        }
+
+        let mut tncs = Vec::new();
+        for t in &cfg.tncs {
+            let in_use_by = cfg
+                .bridges
+                .iter()
+                .find(|b| b.enabled && b.ports.iter().any(|p| p.tnc_id() == Some(&t.id)))
+                .map(|b| b.id.clone());
+            let spp = match &t.spp {
+                Some(spp) => Some(SppStatus {
+                    address: spp.address.to_string(),
+                    adapter: cfg.describe_adapter(&spp.adapter),
+                    paired: self.bt.paired(&spp.adapter, spp.address).await,
+                }),
+                None => None,
+            };
+            tncs.push(TncStatus {
+                id: t.id.clone(),
+                name: t.name.clone(),
+                model: t.model.to_string(),
+                spp,
+                serial: t.serial.as_ref().map(|s| SerialStatus {
+                    path: s.path.clone(),
+                    baud: s.baud,
+                    present: std::path::Path::new(&s.path).exists(),
+                }),
+                in_use_by,
+                source: t.source.to_string(),
+                editable: !t.source.is_static(),
+            });
+        }
+
+        let mut bridges = Vec::new();
+        for b in &cfg.bridges {
+            let rb = self.bridges.get(&b.id);
+            let snap = match rb {
+                Some(rb) => rb.handle.snapshot().await,
+                None => None,
+            };
+            let mut ports = Vec::new();
+            for p in &b.ports {
+                let sessions: Vec<SessionStatus> = snap
+                    .iter()
+                    .flat_map(|s| s.sessions.iter())
+                    .filter(|s| s.id.port == p.id)
+                    .map(|s| SessionStatus {
+                        id: format!("{}/{}", b.id, s.id),
+                        since: rfc3339(s.since),
+                    })
+                    .collect();
+                let (state, since) = match (rb.and_then(|rb| rb.ports.get(&p.id)), &snap) {
+                    (Some(RunningPort::Tnc), Some(snap)) => (
+                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc)),
+                        Some(rfc3339(snap.tnc_since)),
+                    ),
+                    (Some(RunningPort::Tcp { state, .. }), _) => (tcp_state(&state.borrow()), None),
+                    (Some(RunningPort::Ble { status, .. }), _) => (status.borrow().clone(), None),
+                    _ if !b.enabled => (PortState::new("disabled", None), None),
+                    _ => (PortState::new("stopped", None), None),
+                };
+                ports.push(PortStatus {
+                    id: p.id.clone(),
+                    kind: p.type_name().to_string(),
+                    role: p.role.to_string(),
+                    state: state.state,
+                    detail: state.detail,
+                    since,
+                    settings: port_settings(cfg, p),
+                    sessions,
+                });
+            }
+            bridges.push(BridgeStatus {
+                id: b.id.clone(),
+                name: b.name.clone(),
+                enabled: b.enabled,
+                enabled_override: b.enabled_override,
+                public_name: PublicName {
+                    configured: b.public_name.clone(),
+                    effective: rb
+                        .map(|rb| rb.name.borrow().clone())
+                        .unwrap_or_else(|| b.public_name.clone()),
+                },
+                source: b.source.to_string(),
+                editable: !b.source.is_static(),
+                ports,
+                counters: rb.map(|rb| {
+                    let c = &rb.handle.counters;
+                    Counters {
+                        frames_up: c.frames_up(),
+                        frames_down: c.frames_down(),
+                        dropped: c.dropped(),
+                        tnc_connects: c.tnc_connects(),
+                    }
+                }),
+            });
+        }
+        Status {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            adapters,
+            tncs,
+            bridges,
+        }
+    }
+
     fn port(&self, bridge: &str, port: &str) -> Option<&RunningPort> {
         self.bridges.get(bridge)?.ports.get(port)
     }
@@ -441,7 +1121,8 @@ impl Daemon {
             settings,
             self.shutdown.child_token(),
         );
-        let task = tokio::spawn(bridge.run());
+        let task = tokio::spawn(bridge.with_hub(self.hub.clone()).run());
+        self.hub.state("bridge", &b.id, "started");
         let name = {
             let mut store = self.state.lock().unwrap();
             announce::effective_public_name(&mut store, &b.id, &b.public_name)
@@ -487,6 +1168,7 @@ impl Daemon {
         if tokio::time::timeout(STOP_WAIT, rb.task).await.is_err() {
             tracing::warn!(bridge = %id, "bridge didn't stop in time");
         }
+        self.hub.state("bridge", id, "stopped");
         if let Some(tx) = &self.announcer {
             let _ = tx.send(announce::Cmd::Forget { id: id.to_string() }).await;
         }
@@ -540,6 +1222,7 @@ impl Daemon {
                 max_clients,
             } => {
                 let (max_tx, max_rx) = watch::channel(*max_clients);
+                let (status_tx, status_rx) = watch::channel(PortState::new("starting", None));
                 let slot = BleSlot {
                     bridge_id: b.id.clone(),
                     port_id: p.id.clone(),
@@ -548,6 +1231,7 @@ impl Daemon {
                     max_clients: max_rx,
                     app_tx,
                     bridge_shutdown: bridge_token,
+                    status: status_tx,
                     #[cfg(target_os = "linux")]
                     running: None,
                     last_adapter: None,
@@ -560,6 +1244,7 @@ impl Daemon {
                 {
                     Ok(()) => RunningPort::Ble {
                         max_clients: max_tx,
+                        status: status_rx,
                     },
                     Err(e) => {
                         tracing::error!(bridge = %b.id, port = %p.id, "can't start the port: {e}");
@@ -576,6 +1261,8 @@ impl Daemon {
         if let Some(rb) = self.bridges.get_mut(&b.id) {
             rb.ports.insert(p.id.clone(), running);
         }
+        self.hub
+            .state("port", format!("{}/{}", b.id, p.id), "started");
     }
 
     async fn stop_port(&mut self, bridge: &str, port: &str) {
@@ -608,6 +1295,8 @@ impl Daemon {
             }
             RunningPort::Ble { .. } => self.bt.remove_ble(bridge, port).await,
         }
+        self.hub
+            .state("port", format!("{bridge}/{port}"), "stopped");
     }
 
     /// Apply a port's live settings.
@@ -655,7 +1344,9 @@ impl Daemon {
             }
             PortKind::BleServer { max_clients, .. } => {
                 if let Some(rb) = self.bridges.get(&b.id)
-                    && let Some(RunningPort::Ble { max_clients: tx }) = rb.ports.get(&p.id)
+                    && let Some(RunningPort::Ble {
+                        max_clients: tx, ..
+                    }) = rb.ports.get(&p.id)
                 {
                     tx.send_replace(*max_clients);
                 }
@@ -789,6 +1480,199 @@ impl Daemon {
     }
 }
 
+fn store_error(e: StoreError) -> ApiError {
+    match e {
+        StoreError::ChangedOnDisk(_) => ApiError::new(ErrorCode::ChangedOnDisk, e.to_string()),
+        StoreError::Invalid(m) => ApiError::new(ErrorCode::BadRequest, m),
+        StoreError::Io(e) => ApiError::new(ErrorCode::Internal, e.to_string()),
+    }
+}
+
+/// `config.put`: replace all of `dynamic.toml`, or one object, if the
+/// revision is still current. For one object, revision `""` means it
+/// doesn't exist yet, and empty TOML deletes it.
+fn config_put(
+    store: &mut DynamicStore,
+    world: &World,
+    kind: Option<Kind>,
+    id: Option<&str>,
+    toml: &str,
+    revision: &str,
+) -> Result<Option<String>, ApiError> {
+    let conflict = || {
+        ApiError::new(
+            ErrorCode::RevisionConflict,
+            "it changed since you got it; get it again and redo the edit",
+        )
+    };
+    match (kind, id) {
+        (None, None) => {
+            if store.revision() != revision {
+                return Err(conflict());
+            }
+            store.replace_text(toml).map_err(store_error)?;
+            Ok(None)
+        }
+        (Some(kind), Some(id)) => {
+            if let Some(src) = world.static_source(kind, id) {
+                return Err(ApiError::new(
+                    ErrorCode::StaticObjectReadonly,
+                    format!("{kind} {id} is static config ({src})"),
+                )
+                .object(src.to_string()));
+            }
+            let current = store.object_revision(kind, id).unwrap_or_default();
+            if current != revision {
+                return Err(conflict());
+            }
+            if toml.trim().is_empty() {
+                store.remove(kind, id);
+                return Ok(None);
+            }
+            let mut table = DynamicStore::parse_object(kind, toml).map_err(store_error)?;
+            match table.get("id").and_then(|v| v.as_str()) {
+                Some(other) if other != id => {
+                    return Err(ApiError::new(
+                        ErrorCode::BadRequest,
+                        format!("the TOML is for {kind} {other}, not {id}"),
+                    ));
+                }
+                _ => {
+                    table.insert("id", toml_edit::value(id));
+                }
+            }
+            store.put(kind, id, table);
+            Ok(Some(id.to_string()))
+        }
+        _ => Err(ApiError::new(
+            ErrorCode::BadRequest,
+            "give both kind and object for one object, or neither for all of dynamic.toml",
+        )),
+    }
+}
+
+/// Enable, disable, or (`None`) reset a bridge: an override for a static
+/// bridge, `enabled` in the definition for a dynamic one.
+fn set_enabled(
+    store: &mut DynamicStore,
+    world: &World,
+    overrides: &mut Vec<(String, Option<bool>)>,
+    id: &str,
+    enabled: Option<bool>,
+) -> Result<(), ApiError> {
+    if world.static_source(Kind::Bridge, id).is_some() {
+        overrides.push((id.to_string(), enabled));
+        return Ok(());
+    }
+    match enabled {
+        Some(on) => edit::set_enabled(store, id, on),
+        None => Err(ApiError::new(
+            ErrorCode::BadRequest,
+            format!("bridge {id} is dynamic: it has no override to reset"),
+        )),
+    }
+}
+
+/// The enabled bridges that couldn't run alongside `id`: the same TNC,
+/// listen socket, public name, or BLE adapter.
+fn conflicting(cfg: &Config, id: &str) -> Vec<String> {
+    cfg.bridges
+        .iter()
+        .filter(|b| b.enabled && b.id != id)
+        .filter(|b| {
+            let mut pair = cfg.clone();
+            for x in pair.bridges.iter_mut() {
+                x.enabled = x.id == id || x.id == b.id;
+            }
+            !config::validate(&pair, false).errors.is_empty()
+        })
+        .map(|b| b.id.clone())
+        .collect()
+}
+
+fn to_value<T: serde::Serialize>(v: &T) -> Value {
+    serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+fn tnc_detail(s: &TncState) -> Option<String> {
+    match s {
+        TncState::Backoff { attempt, retry_in } => Some(format!(
+            "attempt {attempt}, retry in {}s",
+            retry_in.as_secs()
+        )),
+        TncState::Unpaired(why) | TncState::WaitingForDevice(why) => Some(why.clone()),
+        _ => None,
+    }
+}
+
+fn tcp_state(s: &ServerState) -> PortState {
+    match s {
+        ServerState::Starting => PortState::new("starting", None),
+        ServerState::Listening(a) => PortState::new("listening", Some(a.to_string())),
+        ServerState::WaitingForInterface(i) => {
+            PortState::new("waiting for interface", Some(i.clone()))
+        }
+        ServerState::Failed(e) => PortState::new("failed", Some(e.clone())),
+        ServerState::Stopped => PortState::new("stopped", None),
+    }
+}
+
+/// A port's settings as `status` shows them: what the config says, with
+/// references resolved for display.
+fn port_settings(cfg: &Config, p: &config::Port) -> Value {
+    let policy = |connect: &config::ConnectPolicy, idle: &Duration| json!({"connect": connect, "idle_timeout": format!("{}s", idle.as_secs())});
+    let mut v = match &p.kind {
+        PortKind::TcpClient {
+            host,
+            port,
+            connect,
+            idle_timeout,
+        } => {
+            let mut v = policy(connect, idle_timeout);
+            v["address"] = json!(format!("{host}:{port}"));
+            v
+        }
+        PortKind::SppClient {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        }
+        | PortKind::Serial {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        } => {
+            let mut v = policy(connect, idle_timeout);
+            v["tnc"] = json!(tnc);
+            v["exit_kiss_on_disconnect"] = json!(exit_kiss_on_disconnect);
+            v
+        }
+        PortKind::TcpServer {
+            listen,
+            max_clients,
+            allow,
+            announce,
+        } => json!({
+            "listen": listen.to_string(),
+            "max_clients": max_clients,
+            "allow": allow.iter().map(|n| n.to_string()).collect::<Vec<_>>(),
+            "announce": announce,
+        }),
+        PortKind::BleServer {
+            adapter,
+            max_clients,
+        } => json!({"adapter": cfg.describe_adapter(adapter), "max_clients": max_clients}),
+    };
+    if let Value::Object(m) = &mut v {
+        m.retain(|_, x| !x.is_null());
+    }
+    v
+}
+
 /// The bridge's TNC settings from its config.
 fn settings_for(b: &config::Bridge) -> Option<TncSettings> {
     let tnc = b.tnc_ports().next()?;
@@ -821,7 +1705,7 @@ fn announces(b: &config::Bridge) -> bool {
 
 fn log_plan(plan: &Plan) {
     if plan.is_noop() {
-        tracing::info!("config: no changes");
+        tracing::info!("config: no changes to running bridges");
         return;
     }
     for g in &plan.global {
@@ -1013,6 +1897,41 @@ impl Bt {
         out
     }
 
+    /// Adapters present now, with whether they're powered. Opens a BlueZ
+    /// session if there isn't one (without the agent: listing isn't using).
+    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+        let session = match &self.session {
+            Some(s) => s.clone(),
+            None => match bluer::Session::new().await {
+                Ok(s) => s,
+                Err(_) => return Vec::new(),
+            },
+        };
+        let mut names = session.adapter_names().await.unwrap_or_default();
+        names.sort();
+        let mut out = Vec::new();
+        for n in names {
+            if let Ok(a) = session.adapter(&n)
+                && let Ok(addr) = a.address().await
+            {
+                out.push((n, Mac(addr.0), a.is_powered().await.unwrap_or(false)));
+            }
+        }
+        out
+    }
+
+    /// Whether `address` is paired on the adapter `sel` means; `None` if
+    /// that can't be told.
+    async fn paired(&self, sel: &AdapterSel, address: Mac) -> Option<bool> {
+        let session = match &self.session {
+            Some(s) => s.clone(),
+            None => bluer::Session::new().await.ok()?,
+        };
+        let adapter = crate::bluetooth::find_adapter(&session, sel).await.ok()??;
+        let device = adapter.device(bluer::Address(address.0)).ok()?;
+        Some(device.is_paired().await.unwrap_or(false))
+    }
+
     /// Wait for the BLE ports to drop their phones (shutdown is cancelled).
     async fn stop(&mut self) {
         if let Some((_, task)) = self.ble.take() {
@@ -1029,13 +1948,17 @@ impl Bt {
 
     async fn add_ble(
         &mut self,
-        _slot: BleSlot,
+        slot: BleSlot,
         _runtime_dir: &std::path::Path,
         _shutdown: &CancellationToken,
     ) -> Result<(), Error> {
         // Not an error the daemon should exit over: there's no BlueZ to
         // wait for on this platform.
         tracing::warn!("ble-server ports need Linux; not started");
+        slot.status.send_replace(PortState::new(
+            "unsupported",
+            Some("ble-server ports need Linux".into()),
+        ));
         Ok(())
     }
 
@@ -1043,6 +1966,14 @@ impl Bt {
 
     async fn adapters(&self) -> Vec<(String, Mac)> {
         Vec::new()
+    }
+
+    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+        Vec::new()
+    }
+
+    async fn paired(&self, _sel: &AdapterSel, _address: Mac) -> Option<bool> {
+        None
     }
 
     async fn stop(&mut self) {}
@@ -1065,7 +1996,7 @@ mod ble {
     use tokio::sync::{mpsc, oneshot, watch};
     use tokio_util::sync::CancellationToken;
 
-    use super::BleSlot;
+    use super::{BleSlot, PortState};
     use crate::config::{AdapterSel, Mac};
     use crate::port::ble_server::{BleServerPort, BleState};
 
@@ -1303,6 +2234,11 @@ mod ble {
                     }
                     .spawn();
                     slot.last_adapter = Some(name.clone());
+                    tokio::spawn(report_state(
+                        handle.state.clone(),
+                        slot.status.clone(),
+                        name.clone(),
+                    ));
                     slot.running = Some(Running {
                         adapter: name,
                         token,
@@ -1312,11 +2248,42 @@ mod ble {
                 }
                 Some(name) => {
                     tracing::debug!(bridge = %slot.bridge_id, port = %slot.port_id, adapter = %name, "adapter is powered off; waiting");
+                    slot.status
+                        .send_replace(PortState::new("adapter off", Some(name)));
                 }
-                None => tracing::warn!(
-                    bridge = %slot.bridge_id, port = %slot.port_id, adapter = %slot.adapter,
-                    "waiting for the Bluetooth adapter to appear"
-                ),
+                None => {
+                    tracing::warn!(
+                        bridge = %slot.bridge_id, port = %slot.port_id, adapter = %slot.adapter,
+                        "waiting for the Bluetooth adapter to appear"
+                    );
+                    slot.status.send_replace(PortState::new(
+                        "waiting for adapter",
+                        Some(slot.adapter.to_string()),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Mirror a running port's state into its slot's status, for `status`.
+    async fn report_state(
+        mut state: watch::Receiver<BleState>,
+        status: watch::Sender<PortState>,
+        adapter: String,
+    ) {
+        loop {
+            let s = match &*state.borrow_and_update() {
+                BleState::Starting => PortState::new("starting", Some(adapter.clone())),
+                BleState::Advertising => PortState::new("advertising", Some(adapter.clone())),
+                BleState::Full => {
+                    PortState::new("full", Some(format!("{adapter}: not advertising")))
+                }
+                BleState::Failed(e) => PortState::new("failed", Some(e.clone())),
+                BleState::Stopped => PortState::new("stopped", None),
+            };
+            status.send_replace(s);
+            if state.changed().await.is_err() {
+                return;
             }
         }
     }
