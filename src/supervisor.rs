@@ -169,7 +169,12 @@ pub async fn run(
         log_level,
         shutdown: shutdown.clone(),
         bluez_errors: Vec::new(),
+        known_warnings: Default::default(),
     };
+    // The warnings logged at startup, rebuilt from the same sources.
+    if let Ok((_, report)) = config::build(&d.sources, true) {
+        d.known_warnings = report.warnings.iter().map(|w| w.to_string()).collect();
+    }
     let plan = d.plan_for(&cfg).await;
     d.apply(&plan, cfg).await;
     // A daemon that can't reach BlueZ at startup exits, and systemd starts
@@ -233,6 +238,8 @@ struct Daemon {
     shutdown: CancellationToken,
     /// BlueZ failures while applying a plan.
     bluez_errors: Vec<Error>,
+    /// Config warnings already logged, so reloads log only new ones.
+    known_warnings: std::collections::HashSet<String>,
 }
 
 impl Daemon {
@@ -248,9 +255,13 @@ impl Daemon {
             );
             return Err(ReloadError::WouldDisrupt(plan));
         }
-        for w in &report.warnings {
+        // Only what's new: the same warning on every reload is noise.
+        let warnings: std::collections::HashSet<String> =
+            report.warnings.iter().map(|w| w.to_string()).collect();
+        for w in warnings.difference(&self.known_warnings) {
             tracing::warn!("{w}");
         }
+        self.known_warnings = warnings;
         self.apply(&plan, cfg).await;
         self.sources = sources;
         for e in self.bluez_errors.drain(..) {

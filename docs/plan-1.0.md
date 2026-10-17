@@ -1586,20 +1586,43 @@ serial TNCs, all configured by hand.
 
 - [ ] `control::server`, protocol types, JSON Schema export, `subscribe` with
       `state`, `activity` and `frames` events, and counters.
-- [ ] Reconciler implementing the [reload semantics](#reload-semantics):
+- [x] Reconciler implementing the [reload semantics](#reload-semantics):
       resolved-config diff per port, live updates, port restarts, stop-before-start
       ordering, session kicks for `allow` and `max_clients`, the change report
       with its `disruptive` classification, and `non_disruptive` reloads.
       Unit tests for each row of the table, including "no change means no
       reconnect", and for the disruptive/not-disruptive split.
-- [ ] `SIGHUP` handler, and `ExecReload=` in the systemd unit.
-- [ ] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check), and
+- [x] `SIGHUP` handler, and `ExecReload=` in the systemd unit.
+- [x] Dynamic `dynamic.toml` store (toml_edit, atomic writes, hash check), and
       enable overrides added to `state.toml`.
 - [ ] `bridge.*`, `port.*`, `tnc.*`, `adapter.*`, `serial.list`,
       `config.check`, `config.get` and `config.put` commands, with static
       objects read-only, reference-integrity checks, revision checks, and
       `bridge.clone`.
 - [ ] `docs/control-api.md`.
+
+Dynamic config and the reconciler landed first, on the `phase3-control`
+branch, October 16, 2026; the control socket and its commands follow in a
+second PR. Notes:
+
+- The supervisor became the running daemon: it changes running bridges
+  only by applying a plan from `reconcile::plan`, in three passes (stops,
+  live updates, starts). Startup is a plan from nothing running, and
+  Bluetooth is set up the first time a port needs it, so a reload can add
+  the first BLE or SPP port.
+- `exit_kiss_on_disconnect` applies live: init always works out how to
+  leave KISS mode, and the bridge sends it only if the setting is on when
+  it lets go.
+- A reload logs only config warnings it hasn't logged before, and a
+  refused TCP client is logged once a minute per address (aprs.fi retries
+  every 5 s).
+- Checked on the dev Pi with the D75 over SPP, an iPad over BLE and an
+  iPhone over TCP, reloading with `SIGHUP`: a `public_name` change
+  re-advertised and re-announced with nobody disconnected; removing the
+  `ble-server` port dropped the iPad and adding it back let it reconnect
+  without a prompt; two TNC restarts (`model` changes) kept both apps
+  connected; tightening `allow` kicked the iPhone and refused its retries;
+  an invalid config was rejected whole.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 

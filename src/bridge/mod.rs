@@ -1646,6 +1646,9 @@ mod tests {
             .send(BridgeCmd::Settings(s.clone()))
             .await
             .unwrap();
+        // Commands and app events come on separate channels: wait for the
+        // settings to land before the session leaves.
+        h.handle.snapshot().await.unwrap();
         h.close(&a).await;
         assert_eq!(read_all(&mut tnc).await, Vec::<u8>::new());
         // Turned back on: sent.
@@ -1654,6 +1657,7 @@ mod tests {
             ..s
         };
         h.handle.cmd_tx.send(BridgeCmd::Settings(on)).await.unwrap();
+        h.handle.snapshot().await.unwrap();
         let (a, _rx) = h.open("phones", "A").await;
         let mut tnc = timeout(Duration::from_secs(5), h.peers.recv())
             .await

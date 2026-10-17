@@ -68,6 +68,17 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   adapter (when BlueZ is reachable), unstable serial paths such as
   `/dev/ttyACM0`, and serial devices that aren't present.
 - A udev rule that keeps ModemManager away from the TH-D75's USB port.
+- Dynamic config in `/var/lib/kiss-tnc-bridge/dynamic.toml`, which the
+  control API will write (`ktbctl`), alongside the static config in `/etc`.
+  Static config can't refer to dynamic objects, and static objects win
+  collisions. Enable overrides for static bridges live in `state.toml`.
+- Reloading: `SIGHUP` (and `systemctl reload`) re-reads the config and
+  changes only what changed. Settings like `allow`, `max_clients`,
+  `connect`, `idle_timeout`, `public_name` and `log_level` apply live;
+  a changed TNC address or device restarts just that port, with app
+  sessions staying connected; sessions a tighter `allow` or lower
+  `max_clients` no longer admit are disconnected. An invalid config is
+  rejected and the running bridges carry on.
 
 ### Fixed
 

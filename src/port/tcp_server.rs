@@ -115,6 +115,7 @@ impl TcpServerPort {
             );
         }
 
+        let mut rejections = Rejections::default();
         loop {
             let (stream, peer) = tokio::select! {
                 _ = self.shutdown.cancelled() => break,
@@ -129,13 +130,21 @@ impl TcpServerPort {
             };
             let live = self.live.borrow().clone();
             if !allowed(&live.allow, peer.ip()) {
-                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
+                if rejections.should_log(peer.ip()) {
+                    tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list (repeats from this address logged at debug for a minute)");
+                } else {
+                    tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %peer, "rejected: not in the allow list");
+                }
                 continue;
             }
             if let Some(max) = live.max_clients
                 && sessions.load(Ordering::Relaxed) >= max as usize
             {
-                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
+                if rejections.should_log(peer.ip()) {
+                    tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached (repeats from this address logged at debug for a minute)");
+                } else {
+                    tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %peer, max, "rejected: max clients reached");
+                }
                 continue;
             }
             let _ = stream.set_nodelay(true);
@@ -151,6 +160,28 @@ impl TcpServerPort {
         }
         state_tx.send_replace(ServerState::Stopped);
         tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "stopped listening");
+    }
+}
+
+/// Apps retry refused connections forever (aprs.fi every 5 s), so a refusal
+/// is logged as a warning once a minute per address, and at debug between.
+#[derive(Default)]
+struct Rejections {
+    last: std::collections::HashMap<std::net::IpAddr, tokio::time::Instant>,
+}
+
+impl Rejections {
+    const QUIET: Duration = Duration::from_secs(60);
+
+    fn should_log(&mut self, ip: std::net::IpAddr) -> bool {
+        let now = tokio::time::Instant::now();
+        self.last
+            .retain(|_, t| now.duration_since(*t) < Self::QUIET);
+        if self.last.contains_key(&ip) {
+            return false;
+        }
+        self.last.insert(ip, now);
+        true
     }
 }
 
@@ -205,4 +236,23 @@ async fn session(
     let _ = writer.shutdown().await;
     sessions.fetch_sub(1, Ordering::Relaxed);
     let _ = app_tx.send(AppEvent::SessionClosed { id }).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test(start_paused = true)]
+    async fn refusals_are_logged_once_a_minute_per_address() {
+        let mut r = Rejections::default();
+        let a: std::net::IpAddr = "192.168.13.129".parse().unwrap();
+        let b: std::net::IpAddr = "192.168.13.130".parse().unwrap();
+        assert!(r.should_log(a));
+        assert!(!r.should_log(a));
+        assert!(r.should_log(b));
+        tokio::time::advance(Duration::from_secs(59)).await;
+        assert!(!r.should_log(a));
+        tokio::time::advance(Duration::from_secs(2)).await;
+        assert!(r.should_log(a));
+    }
 }
