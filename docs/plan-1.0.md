@@ -908,21 +908,17 @@ filter on app-to-TNC traffic:
 
 ### Pairing agent
 
-Today the daemon registers a `NoInputNoOutput` agent so BLE phones pair with
-Just Works ([main.rs](../src/main.rs)). BlueZ uses the agent's declared
-capability for the whole session, and the radio may need PIN or passkey
-interaction. Plan:
+Phones don't pair with the bridge (see the Phase 3 notes), so the daemon
+registers no agent. Radios do: the D75 needs SSP numeric comparison
+(Phase 0), done with `bluetoothctl` until `ktbctl pair`. Plan for that:
 
-1. **Normal mode:** the current `NoInputNoOutput` agent, unchanged.
-2. **Pairing window:** when the control API receives `pair`, the daemon
-   unregisters the normal agent and registers a `KeyboardDisplay` agent whose
-   callbacks (`request_pin_code`, `display_passkey`, `request_confirmation`, …)
-   are forwarded as events to the requesting control client. Then it calls
-   `device.pair()`, waits up to 60 s, sets the device trusted, and restores the
-   normal agent. A BLE phone pairing during that window could see a numeric
-   prompt. Document this as acceptable.
-3. If Phase 0 shows the D75 pairs fine under `NoInputNoOutput`, skip step 2 for
-   1.0 and keep it as a fallback for other TNCs.
+- **Pairing window:** when the control API receives `pair`, the daemon
+  registers a `KeyboardDisplay` agent whose callbacks (`request_pin_code`,
+  `display_passkey`, `request_confirmation`, …) are forwarded as events to
+  the requesting control client, calls `device.pair()`, waits up to 60 s,
+  sets the device trusted, and unregisters the agent. The Phase 2
+  `NoInputNoOutput` agent (git 662d2e2) shows the D-Bus plumbing, which
+  bluer can't do without changing the capability.
 
 ---
 
@@ -1354,7 +1350,7 @@ src/
     protocol.rs            serde types + JSON Schema export
     server.rs              Unix socket server
   supervisor.rs            adapter lifecycle (by name or MAC) + reconciler
-  agent.rs                 pairing agent: normal mode + pairing window
+  agent.rs                 pairing window for radios (ktbctl pair)
   ctl/                     ktbctl: cli.rs, setup.rs, edit.rs, tui/
   bin/
     kiss-tnc-bridge.rs
@@ -1645,6 +1641,42 @@ Notes:
   (`docs/control-api.schema.json`), which CI checks is current; the daemon
   binary doesn't carry `schemars`.
 
+The hardware check of the control API turned up BLE problems, all fixed on
+the same branch:
+
+- **Phones no longer pair.** Kicking a bonded iPad left it "connected" and
+  deaf: BlueZ keeps a bonded device's CCCD after the link drops, so its
+  resubscribe never reached us (no `AcquireNotify`). iOS also holds a
+  bonded accessory's link after the app lets go, and a phone that
+  subscribed before its first pairing got no notifications at all (BlueZ
+  files the CCC state under the private address, then looks it up by the
+  identity address). All of it came from bonding, and bonding came from
+  bluetoothd itself: it reads a connecting phone's Battery Level, iOS
+  answers Insufficient Authentication, and BlueZ asks for security. The
+  bridge needs none, so the Phase 2 pairing agent is gone (git 662d2e2 has
+  it) and the README tells people to set `ReverseServiceDiscovery = false`
+  (or `[GATT] Client = false`, or run bluetoothd with `-P battery`); `-t`
+  and the daemon warn when none is set. Phones then connect with no
+  prompt.
+- **Two phones at once.** A connection ends the advertising set and the
+  kernel re-enables it only when that phone disconnects (Linux 6.18,
+  `hci_le_ext_adv_term_evt`), so a second phone could never find the
+  bridge. 0.5.1 seemed to serve two because failed pairings dropped each
+  phone every ~30 s and they took turns. The port now registers a new
+  advertisement when a phone connects below `max_clients`; the RTL8761B
+  runs it while connected, and two phones were served at once.
+- **Idle links.** iOS keeps the link after the app disconnects, bonded or
+  not, which keeps the controller from advertising. The port watches the
+  links of phones it has served and drops one that's connected with no
+  session (checked every 10 s).
+- **Open: BlueZ ends another phone's subscription.** When a phone's CCC
+  state is discarded (every disconnect of an unbonded phone),
+  `clear_ccc_state` calls `ccc_write_cb(NULL)`, and `match_client_att`
+  matches any client for a NULL ATT, so BlueZ closes some other phone's
+  notify fd. With two phones, one leaving cuts the other off until its
+  app reconnects. To look into next: how sessions are tracked, and
+  whether `AcquireNotify` (one fd per phone) is the right method.
+
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
 - [ ] All CLI commands above, plus `--json`.
@@ -1655,8 +1687,11 @@ Notes:
       check-and-reopen, plan, and confirm; the consent rule (confirm in a
       terminal, refuse without one, `--yes`, `--non-disruptive`) on `reload`
       and every other mutating command.
-- [ ] Pairing-window agent (unless Phase 0 made it unnecessary), `scan` with
-      radio detection, and the `setup` wizard.
+- [ ] Pairing-window agent for radios (`ktbctl pair`; the daemon registers
+      no agent otherwise, since phones don't pair), `scan` with radio
+      detection, and the `setup` wizard.
+- [ ] Live views (`ktbctl watch`, `monitor`, the TUI) reconnect and
+      resubscribe when the daemon restarts, rather than exiting.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH.
 - [ ] `monitor` with an AX.25 address-header decode (display only), shared

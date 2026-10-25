@@ -36,8 +36,9 @@ Bluetooth?
 
 ## Features
 
-- "Just Works" BLE pairing: client devices don't require a code to pair and
-  only prompt to pair one time.
+- Phones and tablets connect over BLE without pairing (see
+  [Phones and pairing](#phones-and-pairing) for the one BlueZ setting that
+  needs).
 - TNCs over Bluetooth Classic (SPP), USB or UART serial, and TCP. Kenwood
   TH-D74/D75 radios are put in KISS mode automatically
 - Several bridges, each advertised as its own BLE service; disabled bridges
@@ -137,6 +138,42 @@ $ sudo systemctl enable --now kiss-tnc-bridge
 The unit passes the config, state and runtime directories to the daemon and
 makes the rest of the filesystem read-only to it. View logs with
 `journalctl -u kiss-tnc-bridge -f`.
+
+### Phones and pairing
+
+Phones connect to the bridge without pairing; nothing the bridge offers
+needs it. Out of the box, though, BlueZ asks every phone that connects to
+pair: it reads the phone's battery level, which iOS gives only to paired
+devices. The bridge doesn't take part in that pairing, so it fails, the
+phone is dropped, and it reconnects, over and over. Turn the probing off
+with one of these, narrowest first:
+
+1. **`ReverseServiceDiscovery = false`** under `[General]` in
+   `/etc/bluetooth/main.conf`. BlueZ stops probing devices that connect to
+   the host; connections the host makes itself, to a radio or to BLE
+   sensors, are unaffected.
+2. **`Client = false`** under `[GATT]` in the same file. BlueZ stops acting
+   as a GATT client altogether, so the host can't read BLE devices it
+   connects to either.
+3. **bluetoothd without its battery plugin.** Add a systemd drop-in with
+   `sudo systemctl edit bluetooth`:
+
+   ```
+   [Service]
+   ExecStart=
+   ExecStart=/usr/libexec/bluetooth/bluetoothd -P battery
+   ```
+
+   (The path is Debian's and Raspberry Pi OS's; check `systemctl cat
+   bluetooth` for yours.) Other plugins that read protected attributes
+   could still ask phones to pair.
+
+Then `sudo systemctl restart bluetooth`. `kiss-tnc-bridge -t` warns when a
+bridge serves phones and none of these is set, and so does the daemon when
+it starts. A phone that paired with the bridge before still has the
+pairing: forget the bridge in the phone's Bluetooth settings, and remove
+the phone on the host with `bluetoothctl` (`select` the adapter, then
+`remove` the phone).
 
 
 ## Configuration
@@ -555,11 +592,13 @@ should be aware of.
   the config file to change the TNC name and restart `kiss-tnc-bridge`. It also seems
   that connecting to the "old" TNC name and disconnecting will update the operating
   system cache name.
-- Some Bluetooth controllers stop advertising while a phone is connected, so a
-  second phone can't find the bridge even with `max_clients = 2`. The Raspberry
-  Pi 4's built-in chip does this, and so did an RTL8761B USB dongle on a Pi 4
-  with BlueZ 5.82, though an earlier test saw an RTL8761B serve two phones at
-  once.
+- A second phone can find the bridge only if the Bluetooth controller can
+  advertise while a phone is connected. An RTL8761B USB dongle on a Pi 4 with
+  BlueZ 5.82 can, and served two phones at once. The Pi 4's built-in chip
+  couldn't in earlier testing.
+- With two phones connected, when one disconnects, BlueZ also ends the other
+  phone's subscription, so it stops receiving until its app reconnects (in
+  testing, aprs.fi did on its own within a minute).
 
 
 ## Recommended Hardware
@@ -582,15 +621,16 @@ Here's some popular devices which `kiss-tnc-bridge` works with:
   work out of the box
 - The Raspberry Pi 4's built-in Bluetooth (a Cypress chip) handles a radio over
   Bluetooth Classic and a phone over BLE at the same time: an hour of aprs.fi
-  traffic in testing with no drops. But it stops advertising while a phone is
-  connected, so a second phone can't discover the bridge.
+  traffic in testing with no drops. In earlier testing it stopped advertising
+  while a phone was connected, so a second phone couldn't discover the
+  bridge; that was before the daemon advertised again whenever a phone
+  connects, and hasn't been tried since.
 
 If your computer doesn't have a BLE compatible chip, you can buy an inexpensive
 USB adapter. If the adapter is supported in Linux and supports Bluetooth version
 4.0 or higher it should work. Many USB adapters use the Realtek 8761B chipset or
-one of its variants. Whether it can serve two phones at once seems to depend
-on the setup (see [Limitations and Caveats](#limitations-and-caveats)). As best
-I can tell, all these common adapters use that chipset:
+one of its variants, and served two phones at once in testing. As best I can
+tell, all these common adapters use that chipset:
 
 - TP-Link UB500 Plus - I have this adapter, and mine has the Realtek 8761B
 - ASUS USB-BT500
@@ -631,8 +671,7 @@ acting as a BLE GATT **peripheral** that APRS apps connect to.
 
 At startup the daemon acquires an exclusive `flock` on `/run/kiss-tnc-bridge.lock`
 and exits if another instance already holds it, so only one instance runs at a
-time. It then opens a BlueZ session, registers a `NoInputNoOutput` pairing agent
-(for "Just Works" pairing), and enters a **supervisor loop**.
+time. It then opens a BlueZ session and enters a **supervisor loop**.
 
 The supervisor watches adapter lifecycle events and owns the bridge for each
 adapter:
@@ -642,8 +681,7 @@ adapter:
 - Per-adapter events (`Powered` on/off) detect a built-in adapter being toggled,
   e.g. via `rfkill`.
 
-When an adapter is available, the supervisor powers it on, makes it pairable,
-sets its alias, registers the GATT application, and spawns a `BridgeManager`
+When an adapter is available, the supervisor powers it on, sets its alias, registers the GATT application, and spawns a `BridgeManager`
 task per configured TNC. When an adapter disappears or is powered off, the
 supervisor tears down that adapter's GATT application and bridge tasks but keeps
 running, then re-establishes everything automatically when the adapter returns.
@@ -662,16 +700,6 @@ with two characteristics:
 
 Both characteristics use BlueZ's I/O (file-descriptor) method, so reads and
 writes are streamed over sockets rather than per-attribute D-Bus calls.
-
-BlueZ remembers a bonded phone's subscription to the RX characteristic after
-its link drops, and when the phone comes back and subscribes again, BlueZ
-doesn't tell the daemon, so the phone would look connected but get nothing.
-When a subscribed phone leaves without unsubscribing (it went out of range,
-turned Bluetooth off, or was kicked), the daemon registers the service again,
-which makes BlueZ forget. It does that as soon as no other phone is
-connected; if others are, it waits until the phone comes back and fails to
-subscribe, then does it anyway, and the other phones resubscribe when BlueZ
-tells them the service changed.
 
 ### The bridge manager
 
@@ -780,17 +808,18 @@ limit is reached the daemon stops advertising so new devices don't discover it,
 and resumes advertising once a client disconnects and capacity frees up.
 Reconnections from an already-known device address don't count against the limit.
 
-Note that some Bluetooth controllers, such as the Raspberry Pi 4's built-in
-chip, stop advertising on their own once a single client connects, regardless
-of the `max_clients` setting (see [Limitations and Caveats](#limitations-and-caveats)).
-On that hardware a second phone can only connect if it reconnects on its own,
-without discovering the bridge.
+A phone connecting ends the advertisement, and the kernel brings it back
+only when that phone disconnects. So while there's room for more, the daemon
+registers a new advertisement each time a phone connects. Controllers that
+can advertise while connected, like the RTL8761B, then let a second phone
+find the bridge; on ones that can't, a second phone can connect only once
+the first has left (see [Limitations and Caveats](#limitations-and-caveats)).
 
-iOS keeps the Bluetooth link to a paired accessory open after the app
-disconnects, and offers no way to close it short of turning Bluetooth off.
-On those controllers that would hide the bridge from every other phone. So
-the daemon drops the link of a phone it has served when that phone is still
-connected without a session: it checks every 10 seconds.
+iOS keeps the Bluetooth link open after the app disconnects, with no way to
+close it short of turning Bluetooth off, and a connected link keeps most
+controllers from advertising. So the daemon drops the link of a phone it
+has served when that phone is still connected without a session: it checks
+every 10 seconds.
 
 
 ## Releases

@@ -30,10 +30,9 @@ use std::time::Duration;
 
 use bluer::adv::{Advertisement, AdvertisementHandle};
 use bluer::gatt::local::{
-    Application, ApplicationHandle, Characteristic, CharacteristicControl,
-    CharacteristicControlEvent, CharacteristicNotify, CharacteristicNotifyMethod,
-    CharacteristicWrite, CharacteristicWriteMethod, Service, characteristic_control,
-    service_control,
+    Application, Characteristic, CharacteristicControl, CharacteristicControlEvent,
+    CharacteristicNotify, CharacteristicNotifyMethod, CharacteristicWrite,
+    CharacteristicWriteMethod, Service, characteristic_control, service_control,
 };
 use bluer::gatt::{CharacteristicReader, CharacteristicWriter};
 use bluer::{Adapter, Address, DeviceEvent, DeviceProperty};
@@ -62,9 +61,6 @@ const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
 /// enough for a phone that's just connected to subscribe, which takes a
 /// second or two.
 const LINK_GRACE: Duration = Duration::from_secs(10);
-/// Between dropping the GATT application and registering it again, so
-/// BlueZ removes the old service before the new one appears.
-const REREGISTER_GAP: Duration = Duration::from_millis(250);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BleState {
@@ -111,56 +107,6 @@ enum BleEvent {
     Unwatched { addr: Address },
 }
 
-/// Phones whose session ended while they were subscribed, and whose
-/// subscription BlueZ may still hold.
-///
-/// BlueZ keeps a bonded phone's notification subscription (its CCCD) after
-/// the link drops. When the phone reconnects and subscribes again, BlueZ
-/// sees the value it already has and answers without asking us
-/// (`AcquireNotify`), so we never learn the phone is back: it looks
-/// connected to the app but gets nothing. Only removing the service clears
-/// those subscriptions, so the port registers its GATT application again:
-/// right away once no phone is left to disturb, or when a stale phone comes
-/// back and doesn't get a subscription through.
-#[derive(Debug, Default)]
-struct StaleSubscriptions(HashSet<Address>);
-
-impl StaleSubscriptions {
-    /// A session ended; the phone may now be stale if it had subscribed.
-    /// (One that unsubscribed first isn't, but the cost of counting it is
-    /// at most an unneeded refresh once the port is idle.)
-    fn ended(&mut self, addr: Address, was_subscribed: bool) {
-        if was_subscribed {
-            self.0.insert(addr);
-        }
-    }
-
-    /// Whether to refresh now: something may be stale and no phone is
-    /// connected to be disturbed.
-    fn refresh_when_idle(&self, clients: usize) -> bool {
-        clients == 0 && !self.0.is_empty()
-    }
-
-    /// Whether a phone that has been connected for [`LINK_GRACE`] is
-    /// stuck: it may be stale and still hasn't subscribed.
-    fn stuck(&self, addr: Address, subscribed: bool) -> bool {
-        !subscribed && self.0.contains(&addr)
-    }
-
-    fn clear(&mut self) -> Vec<Address> {
-        self.0.drain().collect()
-    }
-}
-
-/// The port's registered GATT application and the streams of requests to
-/// its characteristics.
-struct Gatt {
-    /// Dropping it unregisters the application.
-    handle: Option<ApplicationHandle>,
-    tx_control: CharacteristicControl,
-    rx_control: CharacteristicControl,
-}
-
 struct Client {
     generation: u64,
     /// Cancelled to kick the session, and when it ends anyway (which
@@ -185,14 +131,7 @@ impl BleServerPort {
     }
 
     async fn prepare(&self, public_name: &str) -> Result<(), String> {
-        let name = self.adapter.name();
         crate::bluetooth::power_on(&self.adapter).await?;
-        // Pairable, so the Just Works bond BlueZ starts when a phone touches a
-        // protected characteristic can complete.
-        self.adapter
-            .set_pairable(true)
-            .await
-            .map_err(|e| format!("{name}: set pairable: {e}"))?;
         self.set_alias(public_name).await
     }
 
@@ -233,10 +172,11 @@ impl BleServerPort {
         }
         let clients_file = self.clients_file().await;
         self.drop_stale(clients_file.as_deref()).await;
-        let mut gatt = match self.register().await {
-            Ok(g) => g,
+        let (app, mut tx_control, mut rx_control) = build_application();
+        let _app_handle = match self.adapter.serve_gatt_application(app).await {
+            Ok(h) => h,
             Err(e) => {
-                fail(&state_tx, e);
+                fail(&state_tx, format!("can't register the GATT service: {e}"));
                 return;
             }
         };
@@ -259,12 +199,8 @@ impl BleServerPort {
         let mut max_rx = self.max_clients.clone();
         let mut max = *max_rx.borrow_and_update() as usize;
         let mut follow_max = true;
-        let mut stale = StaleSubscriptions::default();
         // Phones the port has served, whose links it watches.
         let mut watched: HashSet<Address> = HashSet::new();
-        // Sessions up to this generation were subscribed to an application
-        // since registered again, which cleared their subscriptions.
-        let mut refreshed_at: u64 = 0;
 
         loop {
             tokio::select! {
@@ -307,7 +243,7 @@ impl BleServerPort {
                         }
                     }
                 }
-                ev = gatt.tx_control.next() => match ev {
+                ev = tx_control.next() => match ev {
                     Some(CharacteristicControlEvent::Write(req)) => {
                         let addr = req.device_address();
                         if !self.admit(&clients, addr, max).await {
@@ -336,7 +272,7 @@ impl BleServerPort {
                         break;
                     }
                 },
-                ev = gatt.rx_control.next() => match ev {
+                ev = rx_control.next() => match ev {
                     Some(CharacteristicControlEvent::Notify(notifier)) => {
                         let addr = notifier.device_address();
                         if !self.admit(&clients, addr, max).await {
@@ -379,18 +315,10 @@ impl BleServerPort {
                             continue;
                         }
                         BleEvent::Check { addr } => {
-                            let subscribed = clients.get(&addr).is_some_and(|c| c.writer_attached);
-                            if stale.stuck(addr, subscribed) {
-                                tracing::warn!(bridge = %self.bridge_id, port = %self.port_id, %addr, "a phone came back but BlueZ didn't pass on its subscription; registering the KISS service again, which briefly interrupts the other phones");
-                                if let Err(e) = self.refresh(&mut gatt, &mut stale).await {
-                                    fail(&state_tx, e);
-                                    break;
-                                }
-                                refreshed_at = generation;
-                            } else if !clients.contains_key(&addr) {
-                                // iOS keeps the link to a bonded accessory
-                                // after the app lets go, and many controllers
-                                // can't advertise while anything is connected.
+                            // iOS keeps the link after the app lets go, and
+                            // most controllers can't advertise while
+                            // anything is connected.
+                            if !clients.contains_key(&addr) {
                                 tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping the link of a phone with no session, so the bridge can advertise again");
                                 self.disconnect(addr).await;
                             }
@@ -404,25 +332,15 @@ impl BleServerPort {
                     if kicked {
                         self.disconnect(addr).await;
                     }
-                    let mut was_subscribed = false;
                     if let Some(c) = clients.remove(&addr) {
-                        was_subscribed = c.writer_attached && c.generation > refreshed_at;
                         c.kick.cancel();
                     }
                     record_clients(clients_file.as_deref(), &clients);
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
                     let _ = self.app_tx.send(AppEvent::SessionClosed { id: self.session_id(addr) }).await;
-                    stale.ended(addr, was_subscribed);
                     if watched.insert(addr) {
                         tokio::spawn(watch_link(self.adapter.clone(), addr, ev_tx.clone(), self.shutdown.clone()));
-                    }
-                    if stale.refresh_when_idle(clients.len()) {
-                        if let Err(e) = self.refresh(&mut gatt, &mut stale).await {
-                            fail(&state_tx, e);
-                            break;
-                        }
-                        refreshed_at = generation;
                     }
                     if clients.len() < max && adv.is_none() {
                         match self.advertise(&public_name).await {
@@ -478,34 +396,6 @@ impl BleServerPort {
                 tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "can't advertise again while a phone is connected: {e}")
             }
         }
-    }
-
-    async fn register(&self) -> Result<Gatt, String> {
-        let (app, tx_control, rx_control) = build_application();
-        let handle = self
-            .adapter
-            .serve_gatt_application(app)
-            .await
-            .map_err(|e| format!("can't register the GATT service: {e}"))?;
-        Ok(Gatt {
-            handle: Some(handle),
-            tx_control,
-            rx_control,
-        })
-    }
-
-    /// Register the GATT application again, so BlueZ forgets the stale
-    /// subscriptions (see [`StaleSubscriptions`]). Phones still connected
-    /// lose their subscription too; BlueZ tells them the service changed,
-    /// and they subscribe again.
-    async fn refresh(&self, gatt: &mut Gatt, stale: &mut StaleSubscriptions) -> Result<(), String> {
-        let phones = stale.clear();
-        tracing::info!(bridge = %self.bridge_id, port = %self.port_id, phones = ?phones, "registering the KISS service again so BlueZ forgets old subscriptions");
-        // Unregistering happens in the background once the handle is gone.
-        gatt.handle = None;
-        tokio::time::sleep(REREGISTER_GAP).await;
-        *gatt = self.register().await?;
-        Ok(())
     }
 
     fn session_id(&self, addr: Address) -> SessionId {
@@ -752,7 +642,7 @@ async fn writer_task(
                 Some(f) => f,
                 None => break,
             },
-            // The app stopped notifications. A bonded phone keeps its link
+            // The app stopped notifications. iOS keeps the link
             // up after the app lets go, so this, not a disconnect, is often
             // the only sign the session is over; without it the port would
             // stay "full" and never advertise again.
@@ -853,44 +743,5 @@ async fn wait_for_disconnect(adapter: &Adapter, addr: Address) {
         if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(false)) = ev {
             return;
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn addr(last: u8) -> Address {
-        Address::new([0x40, 0x53, 0x99, 0xd1, 0xb5, last])
-    }
-
-    #[test]
-    fn only_subscribed_phones_can_be_stale() {
-        let mut stale = StaleSubscriptions::default();
-        stale.ended(addr(1), false);
-        assert!(!stale.refresh_when_idle(0));
-        stale.ended(addr(2), true);
-        stale.ended(addr(2), true);
-        assert!(stale.refresh_when_idle(0));
-        assert_eq!(stale.clear(), vec![addr(2)]);
-    }
-
-    #[test]
-    fn refresh_waits_for_an_idle_port() {
-        let mut stale = StaleSubscriptions::default();
-        stale.ended(addr(1), true);
-        assert!(!stale.refresh_when_idle(1));
-        assert!(stale.refresh_when_idle(0));
-        assert_eq!(stale.clear(), vec![addr(1)]);
-        assert!(!stale.refresh_when_idle(0));
-    }
-
-    #[test]
-    fn a_returning_phone_is_stuck_until_it_subscribes() {
-        let mut stale = StaleSubscriptions::default();
-        stale.ended(addr(1), true);
-        assert!(stale.stuck(addr(1), false));
-        assert!(!stale.stuck(addr(1), true));
-        assert!(!stale.stuck(addr(2), false), "never subscribed here");
     }
 }

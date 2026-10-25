@@ -556,7 +556,6 @@ dependencies = [
  "bluer",
  "clap",
  "dbus",
- "dbus-crossroads",
  "dbus-tokio",
  "futures",
  "ipnet",

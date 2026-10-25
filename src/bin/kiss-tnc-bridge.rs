@@ -364,6 +364,9 @@ fn main() {
             "configured bridge"
         );
     }
+    if serves_phones(&cfg) && kiss_tnc_bridge::bluez_conf::host_probes_phones() == Some(true) {
+        tracing::warn!("{}", kiss_tnc_bridge::bluez_conf::ADVICE);
+    }
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     rt.block_on(async {
@@ -383,11 +386,28 @@ fn main() {
     });
 }
 
-/// `-t` host checks that need BlueZ: whether TNCs are paired. Problems go
-/// in the report as warnings; a check that couldn't run comes back as a
-/// note, since `-t` often runs where there's no Bluetooth (CI, image builds).
+/// Whether an enabled bridge has a `ble-server` port.
+fn serves_phones(cfg: &config::Config) -> bool {
+    cfg.bridges
+        .iter()
+        .filter(|b| b.enabled)
+        .flat_map(|b| &b.ports)
+        .any(|p| matches!(p.kind, config::PortKind::BleServer { .. }))
+}
+
+/// `-t` host checks that need BlueZ: whether BlueZ would ask phones to
+/// pair, and whether TNCs are paired. Problems go in the report as
+/// warnings; a check that couldn't run comes back as a note, since `-t`
+/// often runs where there's no Bluetooth (CI, image builds).
 #[cfg(target_os = "linux")]
 fn bluetooth_host_checks(cfg: &config::Config, report: &mut config::Report) -> Vec<String> {
+    if serves_phones(cfg) && kiss_tnc_bridge::bluez_conf::host_probes_phones() == Some(true) {
+        report.warnings.push(config::Problem::new(
+            None,
+            "ble-server ports",
+            kiss_tnc_bridge::bluez_conf::ADVICE,
+        ));
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

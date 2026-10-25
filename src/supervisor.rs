@@ -1798,8 +1798,6 @@ struct Bt {
     #[cfg(target_os = "linux")]
     session: Option<bluer::Session>,
     #[cfg(target_os = "linux")]
-    _agent: Option<crate::agent::Agent>,
-    #[cfg(target_os = "linux")]
     spp: Option<Arc<crate::port::spp_client::SppProfile>>,
     #[cfg(target_os = "linux")]
     ble: Option<(mpsc::Sender<ble::Cmd>, JoinHandle<()>)>,
@@ -1812,12 +1810,7 @@ impl Bt {
             return Ok(s.clone());
         }
         let session = bluer::Session::new().await?;
-        // Phones pair with Just Works and bond. Radios need numeric
-        // comparison, which is a pairing step (bluetoothctl for now,
-        // `ktbctl pair` later).
-        let agent = crate::agent::register().await.map_err(Error::Config)?;
         self.session = Some(session.clone());
-        self._agent = Some(agent);
         Ok(session)
     }
 

@@ -92,23 +92,25 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
 
 ### Fixed
 
-- Phones bond with the bridge: pairing used to fail every time (the
-  daemon's agent refused the authorization bluetoothd asks for), so
-  phones were asked to pair on every connection and could take 10-15 s
-  to connect. Now they're asked once.
+- Phones no longer pair with the bridge. BlueZ asks every phone that
+  connects to pair (it reads the phone's battery level), and the
+  pairing failed, so phones prompted, stalled and reconnected over and
+  over. The bridge never needed pairing; one BlueZ setting stops BlueZ
+  asking (`ReverseServiceDiscovery = false`, see "Phones and pairing" in
+  the README), and `-t` and the daemon warn when it isn't set.
 - When the daemon stops, phones connected over BLE are disconnected, so
   apps like aprs.fi notice instead of staying "connected" to nothing.
-- A phone that lost its BLE link while subscribed (out of range, Bluetooth
-  turned off, kicked) gets data again when it reconnects. BlueZ kept its
-  old subscription and didn't pass the new one on, so the app showed
-  "connected" and received nothing until the daemon restarted.
-- A phone whose app has disconnected no longer hides the bridge from other
-  phones. iOS keeps the link to a paired accessory open, and many
-  controllers can't advertise while anything is connected, so the daemon
-  now drops the link of a phone it has served that stays connected
-  without a session (checked every 10 s).
   After a crash, the restarted daemon disconnects the phones the old one
   left connected, so they reconnect to it.
+- A phone whose app has disconnected no longer hides the bridge from other
+  phones. iOS keeps the link open, and most controllers can't advertise
+  while anything is connected, so the daemon now drops the link of a
+  phone it has served that stays connected without a session (checked
+  every 10 s).
+- A second phone can find the bridge while one is connected, on
+  controllers that can advertise while connected (such as the RTL8761B):
+  the daemon registers a new advertisement each time a phone connects,
+  since the kernel brings the old one back only when that phone leaves.
 
 ## 0.5.1 (30 May 2026)
 

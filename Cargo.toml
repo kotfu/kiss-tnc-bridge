@@ -36,8 +36,6 @@ libdbus-sys = { version = "0.2", features = ["vendored"] }
 # Avahi for DNS-SD; the same versions bluer uses.
 dbus = { version = "0.9", features = ["futures"] }
 dbus-tokio = "0.7"
-# The pairing agent's D-Bus object.
-dbus-crossroads = "0.5"
 
 [dev-dependencies]
 tempfile = "3"
