@@ -596,9 +596,20 @@ should be aware of.
   advertise while a phone is connected. An RTL8761B USB dongle on a Pi 4 with
   BlueZ 5.82 can, and served two phones at once. The Pi 4's built-in chip
   couldn't in earlier testing.
-- With two phones connected, when one disconnects, BlueZ also ends the other
-  phone's subscription, so it stops receiving until its app reconnects (in
-  testing, aprs.fi did on its own within a minute).
+
+
+## Known bugs
+
+- **With two phones on one bridge, one leaving can cut the other off.** When
+  a phone disconnects while subscribed (it went out of range, turned
+  Bluetooth off, or was kicked), BlueZ closes the *other* phone's
+  notification channel by mistake. The other phone stays connected but
+  stops receiving until it reconnects: the daemon drops its link within
+  about 10 seconds, and aprs.fi reconnects on its own. A phone whose app
+  disconnects normally doesn't trigger it. The bug is in BlueZ (seen in
+  5.82 and 5.83, and still in its development tree), and a fix, tested on a
+  Pi with two phones, is waiting for review:
+  [gatt-database: Fix freeing wrong client notify IO](https://lore.kernel.org/linux-bluetooth/20261026032544.49563-1-jared@kotfu.net/T/#u).
 
 
 ## Recommended Hardware

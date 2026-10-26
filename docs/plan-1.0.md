@@ -1674,8 +1674,12 @@ the same branch:
   `clear_ccc_state` calls `ccc_write_cb(NULL)`, and `match_client_att`
   matches any client for a NULL ATT, so BlueZ closes some other phone's
   notify fd. With two phones, one leaving cuts the other off until its
-  app reconnects. To look into next: how sessions are tracked, and
-  whether `AcquireNotify` (one fd per phone) is the right method.
+  app reconnects (the idle-link drop gets it back within ~10 s). Jerry
+  Wu's fix had been posted in August and dropped unreviewed; it fixed
+  this on the dev Pi (patched 5.82 bluetoothd, two phones, kicks and
+  Bluetooth off), and we resent it with a `Tested-by`:
+  <https://lore.kernel.org/linux-bluetooth/20261026032544.49563-1-jared@kotfu.net/T/#u>.
+  No workaround in the daemon; the README lists it under Known bugs.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
