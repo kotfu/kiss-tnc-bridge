@@ -47,10 +47,10 @@ pub enum Outcome {
 }
 
 pub struct Ctl {
-    socket: PathBuf,
-    json: bool,
-    yes: bool,
-    non_disruptive: bool,
+    pub(super) socket: PathBuf,
+    pub(super) json: bool,
+    pub(super) yes: bool,
+    pub(super) non_disruptive: bool,
 }
 
 impl Ctl {
@@ -202,6 +202,10 @@ impl Ctl {
                 let (bridge, port) = split_port(&port)?;
                 self.act(c, Command::PortDisconnect { bridge, port }).await
             }
+            Cmd::Release { port } => {
+                let (bridge, port) = split_port(&port)?;
+                self.act(c, Command::PortRelease { bridge, port }).await
+            }
             Cmd::Kick { session } => self.act(c, Command::SessionKick { session }).await,
             Cmd::Edit { what } => self.edit(c, &what).await,
             Cmd::Check => {
@@ -217,6 +221,7 @@ impl Ctl {
                 self.change(c, |nd| Command::Reload { non_disruptive: nd })
                     .await
             }
+            Cmd::Setup => self.setup(c).await,
             Cmd::Monitor { .. } => unreachable!("handled in run"),
         }
     }
@@ -307,7 +312,7 @@ impl Ctl {
 
     /// `pair`: the request stays open while the daemon pairs, sending the
     /// steps that need someone at the radio; each is answered here.
-    async fn pair(&self, c: &mut Client, who: BtWho) -> Result<(), CtlError> {
+    pub(super) async fn pair(&self, c: &mut Client, who: BtWho) -> Result<(), CtlError> {
         if !self.json {
             eprintln!(
                 "Put the radio in pairing mode if it isn't (TH-D74/D75: Menu > Bluetooth > Pairing Mode)."
@@ -501,7 +506,32 @@ impl Ctl {
 
     /// A command that changes config, under the consent rule.
     async fn change(&self, c: &mut Client, make: impl Fn(bool) -> Command) -> Result<(), CtlError> {
-        let v = match c.call(make(!self.yes)).await {
+        let v = self.change_value(c, make).await?;
+        if self.json {
+            return self.print(&v, String::new);
+        }
+        let r: ChangeResult =
+            serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))?;
+        print!("{}", render::change(r.id.as_deref(), &r.plan));
+        Ok(())
+    }
+
+    /// [`change`](Self::change), returning what it did instead of printing it.
+    pub(super) async fn change_result(
+        &self,
+        c: &mut Client,
+        make: impl Fn(bool) -> Command,
+    ) -> Result<ChangeResult, CtlError> {
+        let v = self.change_value(c, make).await?;
+        serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))
+    }
+
+    async fn change_value(
+        &self,
+        c: &mut Client,
+        make: impl Fn(bool) -> Command,
+    ) -> Result<Value, CtlError> {
+        Ok(match c.call(make(!self.yes)).await {
             Err(CtlError::Api(e)) if e.code == ErrorCode::ReloadWouldDisrupt => {
                 let would = e
                     .data
@@ -525,14 +555,7 @@ impl Ctl {
                 c.call(make(false)).await?
             }
             other => other?,
-        };
-        if self.json {
-            return self.print(&v, String::new);
-        }
-        let r: ChangeResult =
-            serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))?;
-        print!("{}", render::change(r.id.as_deref(), &r.plan));
-        Ok(())
+        })
     }
 
     /// A command that acts at once, with no plan: connect, disconnect, kick.
@@ -718,7 +741,7 @@ impl Ctl {
         Ok(())
     }
 
-    fn report(&self, e: &CtlError) {
+    pub(super) fn report(&self, e: &CtlError) {
         match e {
             CtlError::Reported => {}
             CtlError::Api(api) if self.json => {
@@ -742,12 +765,12 @@ impl Ctl {
     }
 }
 
-fn interactive() -> bool {
+pub(super) fn interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
 /// Ask a yes/no question on the terminal.
-async fn confirm(question: &str, default_yes: bool) -> bool {
+pub(super) async fn confirm(question: &str, default_yes: bool) -> bool {
     let prompt = format!("{question} [{}] ", if default_yes { "Y/n" } else { "y/N" });
     tokio::task::spawn_blocking(move || {
         eprint!("{prompt}");
@@ -766,7 +789,7 @@ async fn confirm(question: &str, default_yes: bool) -> bool {
 }
 
 /// Read a line from the terminal; `None` for an empty answer.
-async fn ask_line(prompt: &str) -> Option<String> {
+pub(super) async fn ask_line(prompt: &str) -> Option<String> {
     let prompt = prompt.to_string();
     tokio::task::spawn_blocking(move || {
         eprint!("{prompt}");

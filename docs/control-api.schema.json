@@ -814,6 +814,27 @@
           "type": "object"
         },
         {
+          "description": "Let a TNC link follow its `connect` policy again after\n`port.connect` or `port.disconnect`.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.release",
+              "type": "string"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.",
           "properties": {
             "cmd": {

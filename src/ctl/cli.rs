@@ -47,6 +47,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
+    /// Set up a TNC and a bridge for it, step by step
+    Setup,
     /// Bridges, ports, sessions, TNCs and adapters
     Status {
         /// Only this bridge
@@ -98,6 +100,11 @@ pub enum Cmd {
     },
     /// Take a TNC link down and keep it down (apps stay connected)
     Disconnect {
+        /// BRIDGE/PORT
+        port: String,
+    },
+    /// Let a TNC link follow its connect policy again after connect or disconnect
+    Release {
         /// BRIDGE/PORT
         port: String,
     },

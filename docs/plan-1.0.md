@@ -1715,7 +1715,10 @@ the TUI.
       and `bluetooth.unpair`; `ktbctl scan`, `pair`, `unpair`. For this a
       connection may have several requests in flight. Tested on the Pi:
       unpairing and re-pairing the D75, which reconnected on its own.
-- [ ] The `setup` wizard.
+- [x] The `setup` wizard, as in the plan above. Its check (step 7) holds
+      the TNC link up with `port.connect` and then hands it back with a new
+      `port.release`, since an `on_demand` bridge with no apps wouldn't
+      connect at all.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing

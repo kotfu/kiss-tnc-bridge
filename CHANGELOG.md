@@ -109,6 +109,12 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   `bluetooth.pair` with `pairing` events and `bluetooth.pair_reply`, and
   `bluetooth.unpair`; a connection can now have several requests in
   flight.
+- `ktbctl setup`: a step-by-step wizard for a TNC (over Bluetooth, with
+  scanning and pairing, or USB/serial) and a bridge sharing it over BLE
+  and/or TCP, ending with a check that the radio connects and is heard.
+- `port.release` (`ktbctl release BRIDGE/PORT`) hands a TNC link held by
+  `connect` or `disconnect` back to its connect policy; `status` shows a
+  held link.
 
 ### Fixed
 

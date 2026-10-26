@@ -195,6 +195,10 @@ pub enum Command {
     /// `port.connect`. App sessions stay connected.
     #[serde(rename = "port.disconnect")]
     PortDisconnect { bridge: String, port: String },
+    /// Let a TNC link follow its `connect` policy again after
+    /// `port.connect` or `port.disconnect`.
+    #[serde(rename = "port.release")]
+    PortRelease { bridge: String, port: String },
     /// Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.
     #[serde(rename = "session.kick")]
     SessionKick { session: String },
@@ -323,6 +327,7 @@ impl Command {
         "port.remove",
         "port.connect",
         "port.disconnect",
+        "port.release",
         "session.kick",
         "tnc.create",
         "tnc.update",

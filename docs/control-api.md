@@ -253,11 +253,12 @@ On dynamic bridges. `port` is the port's id.
 | `port.remove` | `bridge`, `port` | Remove a port |
 | `port.connect` | `bridge`, `port` | Bring a TNC port's link up now and hold it up, whatever its `connect` policy, until `port.disconnect`. Any bridge. Returns `{}` |
 | `port.disconnect` | `bridge`, `port` | Take a TNC port's link down and hold it down until `port.connect`. App sessions stay connected. Any bridge. Returns `{}` |
+| `port.release` | `bridge`, `port` | Let a TNC link follow its `connect` policy again after `port.connect` or `port.disconnect`. Returns `{}` |
 | `session.kick` | `session` | Disconnect one session: `ktbr0/lan/192.168.4.20:51515`, `ktbr0/phones/7C:2A:…` (BLE sessions are dropped at the link layer). Acts at once. Returns `{}` |
 
 `port.add`, `port.update` and `port.remove` take `non_disruptive`;
-`port.connect`, `port.disconnect` and `session.kick` exist to disrupt, and
-act immediately.
+`port.connect`, `port.disconnect`, `port.release` and `session.kick` act
+immediately. `status` shows a held link in the port's `detail`.
 
 ### TNCs and adapters
 

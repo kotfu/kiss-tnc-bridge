@@ -676,8 +676,11 @@ impl Daemon {
                 })
                 .await
             }
-            Command::PortConnect { bridge, port } => self.hold(&bridge, &port, true).await,
-            Command::PortDisconnect { bridge, port } => self.hold(&bridge, &port, false).await,
+            Command::PortConnect { bridge, port } => self.hold(&bridge, &port, Some(true)).await,
+            Command::PortDisconnect { bridge, port } => {
+                self.hold(&bridge, &port, Some(false)).await
+            }
+            Command::PortRelease { bridge, port } => self.hold(&bridge, &port, None).await,
             Command::SessionKick { session } => self.kick(&session).await,
             Command::TncCreate {
                 definition,
@@ -1193,7 +1196,12 @@ impl Daemon {
             })
     }
 
-    async fn hold(&mut self, bridge: &str, port: &str, up: bool) -> Result<Value, ApiError> {
+    async fn hold(
+        &mut self,
+        bridge: &str,
+        port: &str,
+        up: Option<bool>,
+    ) -> Result<Value, ApiError> {
         let bridge = self.bridge_id(bridge)?;
         match self.port(&bridge, port) {
             Some(RunningPort::Tnc) => {
@@ -1203,7 +1211,7 @@ impl Daemon {
             Some(_) => Err(ApiError::new(
                 ErrorCode::BadRequest,
                 format!(
-                    "{bridge}/{port} isn't a TNC port; connect and disconnect apply to TNC ports"
+                    "{bridge}/{port} isn't a TNC port; connect, disconnect and release apply to TNC ports"
                 ),
             )),
             None => Err(ApiError::new(
@@ -1372,7 +1380,7 @@ impl Daemon {
                     .collect();
                 let (state, since) = match (rb.and_then(|rb| rb.ports.get(&p.id)), &snap) {
                     (Some(RunningPort::Tnc), Some(snap)) => (
-                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc)),
+                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc, snap.held)),
                         Some(rfc3339(snap.tnc_since)),
                     ),
                     (Some(RunningPort::Tcp { state, .. }), _) => (tcp_state(&state.borrow()), None),
@@ -1932,14 +1940,26 @@ fn to_value<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-fn tnc_detail(s: &TncState) -> Option<String> {
-    match s {
+/// What `status` says about a TNC link beyond its state: why it's waiting,
+/// and whether `port.connect` or `port.disconnect` is holding it.
+fn tnc_detail(s: &TncState, held: Option<bool>) -> Option<String> {
+    let why = match s {
         TncState::Backoff { attempt, retry_in } => Some(format!(
             "attempt {attempt}, retry in {}s",
             retry_in.as_secs()
         )),
         TncState::Unpaired(why) | TncState::WaitingForDevice(why) => Some(why.clone()),
         _ => None,
+    };
+    let held = held.map(|up| {
+        format!(
+            "held {} (release lets its connect policy decide)",
+            if up { "up" } else { "down" }
+        )
+    });
+    match (why, held) {
+        (Some(w), Some(h)) => Some(format!("{w}; {h}")),
+        (w, h) => w.or(h),
     }
 }
 

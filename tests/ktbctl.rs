@@ -293,3 +293,40 @@ fn bluetooth_commands_need_bluez() {
     assert!(!out.ok);
     assert!(out.stderr.contains("BlueZ"), "{}", out.stderr);
 }
+
+#[test]
+fn setup_needs_a_terminal() {
+    let d = daemon();
+    let out = ktbctl(&d.socket, &["setup"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("terminal"), "{}", out.stderr);
+}
+
+#[test]
+fn a_held_link_can_be_released() {
+    let d = daemon();
+    let s = &d.socket;
+    let _tnc = d.tnc.accept().unwrap();
+    // connect = "always": held down, it goes idle; released, it reconnects.
+    assert!(ktbctl(s, &["disconnect", "ktbr0/tnc"]).ok);
+    let start = Instant::now();
+    loop {
+        let st = ktbctl(s, &["status", "ktbr0"]).stdout;
+        if st.contains("held down") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "{st}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(ktbctl(s, &["release", "ktbr0/tnc"]).ok);
+    let _again = d.tnc.accept().unwrap();
+    let start = Instant::now();
+    loop {
+        let st = ktbctl(s, &["status", "ktbr0"]).stdout;
+        if st.contains("tnc        tcp-client  connected") && !st.contains("held") {
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "{st}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}

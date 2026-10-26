@@ -144,8 +144,10 @@ New bridges start disabled, so you can add their ports and enable them when
 they're complete; `ktbctl status` says what a bridge still needs. A change
 that would disconnect someone (an app, or a TNC link in use) is shown and
 asked about first; without a terminal it's refused unless you add `--yes`.
-`ktbctl edit` opens dynamic config in your editor and checks it when you
-save. Every command takes `--json` for scripts. `ktbctl --help` lists them
+`ktbctl setup` walks through all of it: the radio over Bluetooth (scanning
+and pairing it) or USB, a TNC for it, and a bridge, then connects and
+listens for a first frame. `ktbctl edit` opens dynamic config in your
+editor and checks it when you save. Every command takes `--json` for scripts. `ktbctl --help` lists them
 all.
 
 The protocol `ktbctl` speaks is described in
