@@ -1691,24 +1691,26 @@ the TUI.
 - [x] Disabled bridges may be incomplete, and new bridges start disabled, so
       `ktbctl bridge add` takes just a name: add the bridge, add its ports,
       enable it. `status` lists what an incomplete bridge still needs.
-- [ ] All CLI commands above, plus `--json`.
-- [ ] `ktbctl tnc models`: the models the daemon knows and what each does,
-      from the same `MODELS` table as the config error (through the control
-      API, since `ktbctl` doesn't read the daemon's code or files).
-- [ ] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`,
-      check-and-reopen, plan, and confirm; the consent rule (confirm in a
-      terminal, refuse without one, `--yes`, `--non-disruptive`) on `reload`
-      and every other mutating command.
+- [x] The CLI commands above (all but `scan`, `pair`, `unpair` and `setup`,
+      which come with pairing), plus `--json`. `ktbctl` with no command
+      shows `status` until the TUI exists.
+- [x] `ktbctl tnc models`, through a new `tnc.models` control command
+      serving the daemon's `MODELS` table.
+- [x] `ktbctl check`; `ktbctl edit` with `config.get`/`config.put`, the
+      daemon's check on save, and reopening the editor on errors; the
+      consent rule (confirm in a terminal, refuse without one, `--yes`,
+      `--non-disruptive`) on `reload` and every other command that changes
+      config. `connect`, `disconnect` and `kick` exist to disrupt and act at
+      once.
+- [x] `monitor`, with the AX.25 header decode the daemon already sends;
+      it waits and resubscribes when the daemon restarts.
+- [x] `ktbctl` in the deb, rpm and tarball, and in `scripts/pi-deploy.sh`.
 - [ ] Pairing-window agent for radios (`ktbctl pair`; the daemon registers
       no agent otherwise, since phones don't pair), `scan` with radio
       detection, and the `setup` wizard.
-- [ ] Live views (`ktbctl watch`, `monitor`, the TUI) reconnect and
-      resubscribe when the daemon restarts, rather than exiting.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
-      dialog, works at 80×24 over SSH.
-- [ ] `monitor` with an AX.25 address-header decode (display only), shared
-      with the TUI's frame pane.
-- [ ] Package `ktbctl` in deb/rpm/tarball.
+      dialog, works at 80×24 over SSH; it reconnects when the daemon
+      restarts, as `monitor` does.
 
 ### Phase 5: Hardening → release 1.0.0
 

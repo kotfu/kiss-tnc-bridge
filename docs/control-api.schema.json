@@ -381,7 +381,7 @@
           "type": "object"
         },
         {
-          "description": "A new dynamic bridge, ports and all. Without an `id`, the lowest free\n`ktbrN`.",
+          "description": "A new dynamic bridge. It needs only a `name`, and starts disabled\nunless the definition says `enabled = true`; ports can come with it\nor be added with `port.add`. Without an `id`, the lowest free `ktbrN`.",
           "properties": {
             "cmd": {
               "const": "bridge.create",
@@ -816,6 +816,19 @@
           "properties": {
             "cmd": {
               "const": "serial.list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The TNC models this daemon knows, and what each does.",
+          "properties": {
+            "cmd": {
+              "const": "tnc.models",
               "type": "string"
             }
           },
@@ -1948,6 +1961,37 @@
       ],
       "title": "Status",
       "type": "object"
+    },
+    "tnc.models": {
+      "$defs": {
+        "ModelEntry": {
+          "description": "One TNC model, as `tnc.models` lists them.",
+          "properties": {
+            "names": {
+              "description": "What to write for `model`; models that share a profile have several.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "summary": {
+              "description": "What the daemon does for it.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "names",
+            "summary"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/ModelEntry"
+      },
+      "title": "Array_of_ModelEntry",
+      "type": "array"
     }
   },
   "title": "kiss-tnc-bridge control protocol, version 1"

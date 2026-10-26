@@ -118,10 +118,39 @@ When running from the command line, `kiss-tnc-bridge` shows its log in the
 terminal. Type `Control-C` to quit. The `-d` option overrides the log level in
 the configuration file.
 
-The daemon is managed through its control socket,
-`/run/kiss-tnc-bridge/control.sock`, which members of the
-`kiss-tnc-bridge` group can use. `ktbctl` is its client; the protocol is
-described in [docs/control-api.md](docs/control-api.md).
+### Managing it with `ktbctl`
+
+`ktbctl` manages the running daemon through its control socket,
+`/run/kiss-tnc-bridge/control.sock`. Root can use it, and so can members of
+the `kiss-tnc-bridge` group (`sudo usermod -aG kiss-tnc-bridge $USER`, then
+log in again). Changes it makes are dynamic config, kept in
+`/var/lib/kiss-tnc-bridge/dynamic.toml`; the files in `/etc` stay as you
+wrote them, and `ktbctl` can only enable and disable the bridges they
+define.
+
+```
+$ ktbctl status                         # bridges, ports, sessions, TNCs, adapters
+$ ktbctl tnc add d75 --model th-d75 --spp-address 40:79:12:E4:95:9D --adapter builtin
+$ ktbctl bridge add --name "Portable D75"
+created ktbr1
+$ ktbctl port add ktbr1 spp-client --tnc d75
+$ ktbctl port add ktbr1 ble-server --adapter dongle
+$ ktbctl enable ktbr1
+ktbr1 started
+$ ktbctl monitor                        # live frames, decoded
+```
+
+New bridges start disabled, so you can add their ports and enable them when
+they're complete; `ktbctl status` says what a bridge still needs. A change
+that would disconnect someone (an app, or a TNC link in use) is shown and
+asked about first; without a terminal it's refused unless you add `--yes`.
+`ktbctl edit` opens dynamic config in your editor and checks it when you
+save. Every command takes `--json` for scripts. `ktbctl --help` lists them
+all.
+
+The protocol `ktbctl` speaks is described in
+[docs/control-api.md](docs/control-api.md), for anyone writing another
+client.
 
 ### Running as a systemd service
 

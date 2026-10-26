@@ -286,6 +286,16 @@ The serial devices present, by their stable udev names, for setting up
 radios without a USB serial number (the TH-D75), so with two of them, use
 their by-path names from `also`.
 
+### `tnc.models`
+
+The TNC models this daemon knows, with the names to use for `model` and
+what the daemon does for each:
+
+```jsonc
+[{"names": ["generic"], "summary": "the default: any TNC that's always in KISS mode; …"},
+ {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …"}]
+```
+
 ## Events
 
 | Topic | Event | Fields |

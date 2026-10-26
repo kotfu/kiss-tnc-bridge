@@ -682,6 +682,15 @@ impl Daemon {
                 .await
             }
             Command::SerialList => Ok(to_value(&crate::port::serial_list::list(&self.cfg))),
+            Command::TncModels => Ok(to_value(
+                &config::MODELS
+                    .iter()
+                    .map(|m| protocol::ModelEntry {
+                        names: m.names.iter().map(|n| n.to_string()).collect(),
+                        summary: m.summary.to_string(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
         }
     }
 
