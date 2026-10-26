@@ -102,7 +102,8 @@ impl Daemon {
         let shutdown = CancellationToken::new();
         let token = shutdown.clone();
         let task = tokio::spawn(async move {
-            supervisor::run(sources, cfg, paths, None, rx, token)
+            let hub = kiss_tnc_bridge::control::events::Hub::new(token.clone());
+            supervisor::run(sources, cfg, paths, None, hub, rx, token)
                 .await
                 .unwrap();
         });

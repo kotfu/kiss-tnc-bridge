@@ -49,6 +49,8 @@ use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{AppParams, ConnectPolicy};
+use crate::control::events::Hub;
+use crate::control::protocol::Dir;
 use crate::error::Error;
 use crate::port::stream::{KissReader, KissWriter};
 use policy::{Verdict, filter_app_frame};
@@ -143,6 +145,37 @@ impl SessionId {
     }
 }
 
+/// On the wire as one string, `port/peer`.
+impl serde::Serialize for SessionId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SessionId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        let (port, peer) = s
+            .split_once('/')
+            .ok_or_else(|| serde::de::Error::custom(format!("{s:?} is not port/peer")))?;
+        Ok(SessionId::new(port, peer))
+    }
+}
+
+#[cfg(feature = "schema")]
+impl schemars::JsonSchema for SessionId {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "SessionId".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "string",
+            "description": "port/peer: phones/7C:2A:…, lan/192.168.4.20:51515"
+        })
+    }
+}
+
 impl fmt::Display for SessionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}/{}", self.port, self.peer)
@@ -187,6 +220,20 @@ pub enum TncState {
     /// A `serial` TNC's device path doesn't exist. Checked again every
     /// [`DEVICE_POLL`].
     WaitingForDevice(String),
+}
+
+impl TncState {
+    /// The state without its details: `connected`, `backoff`, ….
+    pub fn name(&self) -> &'static str {
+        match self {
+            TncState::Idle => "idle",
+            TncState::Connecting => "connecting",
+            TncState::Connected => "connected",
+            TncState::Backoff { .. } => "backoff",
+            TncState::Unpaired(_) => "unpaired",
+            TncState::WaitingForDevice(_) => "waiting for device",
+        }
+    }
 }
 
 impl fmt::Display for TncState {
@@ -259,6 +306,10 @@ pub enum BridgeCmd {
     Connector(Box<dyn TncConnector>),
     /// Drop one app session.
     Kick(SessionId),
+    /// Hold the TNC link up (`true`) or down (`false`) whatever the
+    /// `connect` policy and sessions say, until told otherwise (`port.connect`
+    /// and `port.disconnect`).
+    Hold(bool),
     Snapshot(oneshot::Sender<Snapshot>),
 }
 
@@ -266,6 +317,10 @@ pub enum BridgeCmd {
 #[derive(Debug, Clone)]
 pub struct Snapshot {
     pub tnc: TncState,
+    /// When the TNC port entered its state.
+    pub tnc_since: SystemTime,
+    /// Held up or down by `port.connect` / `port.disconnect`.
+    pub held: Option<bool>,
     pub sessions: Vec<SessionInfo>,
 }
 
@@ -326,9 +381,16 @@ pub struct Bridge {
     state_tx: watch::Sender<TncState>,
     counters: Arc<Counters>,
     shutdown: CancellationToken,
+    hub: Option<Arc<Hub>>,
 }
 
 impl Bridge {
+    /// Report state, activity and frames to the control API's event hub.
+    pub fn with_hub(mut self, hub: Arc<Hub>) -> Self {
+        self.hub = Some(hub);
+        self
+    }
+
     /// `shutdown` stops the bridge when cancelled; ports get child tokens of
     /// it, so cancelling it takes the whole bridge down.
     pub fn new(
@@ -359,6 +421,7 @@ impl Bridge {
             state_tx,
             counters,
             shutdown,
+            hub: None,
         };
         (bridge, handle)
     }
@@ -374,6 +437,7 @@ impl Bridge {
             state_tx,
             counters,
             shutdown,
+            hub,
         } = self;
         let (tnc_tx, tnc_rx) = mpsc::channel(64);
         let mut run = Run {
@@ -398,6 +462,9 @@ impl Bridge {
             idle_timer: None,
             waiting: None,
             link_start: (0, 0),
+            hub,
+            state_since: SystemTime::now(),
+            held: None,
         };
         run.main().await;
     }
@@ -474,13 +541,18 @@ struct Run {
     /// Consecutive failed connects, for backoff.
     attempt: u32,
     /// Uplink frames waiting for the link, with when they arrived.
-    pending: VecDeque<(Instant, Frame)>,
+    pending: VecDeque<(Instant, Frame, Option<SessionId>)>,
     idle_timer: Option<Pin<Box<Sleep>>>,
     /// Set while polling for pairing or a device instead of backing off.
     waiting: Option<Wait>,
     /// Frames up and down when the link came up, for the totals logged when
     /// it goes.
     link_start: (u64, u64),
+    hub: Option<Arc<Hub>>,
+    /// When the TNC state last changed (its kind, not its details).
+    state_since: SystemTime,
+    /// `port.connect` / `port.disconnect`.
+    held: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -528,7 +600,7 @@ impl Run {
                 ev = link_event(&mut self.link), if self.link.is_waiting() => self.on_link(ev),
                 _ = idle_elapsed(&mut self.idle_timer), if self.idle_timer.is_some() => {
                     self.idle_timer = None;
-                    if self.sessions.is_empty() {
+                    if !self.wants_link() {
                         tracing::info!(bridge = %self.id, "idle timeout, disconnecting the TNC");
                         self.close();
                     }
@@ -548,8 +620,20 @@ impl Run {
         self.writer_tx.as_ref().is_none_or(|tx| tx.capacity() > 0)
     }
 
-    fn set_state(&self, state: TncState) {
-        self.state_tx.send_replace(state);
+    fn set_state(&mut self, state: TncState) {
+        let old = self.state_tx.send_replace(state);
+        let new = self.state_tx.borrow().name();
+        if old.name() != new {
+            self.state_since = SystemTime::now();
+            if let Some(hub) = &self.hub {
+                hub.state("tnc", self.tnc_object(), new);
+            }
+        }
+    }
+
+    /// `ktbr0/radio`: the TNC port, for events.
+    fn tnc_object(&self) -> String {
+        format!("{}/{}", self.id, self.settings.port_id)
     }
 
     fn start_connect(&mut self) {
@@ -660,7 +744,10 @@ impl Run {
     }
 
     fn wants_link(&self) -> bool {
-        self.settings.connect == ConnectPolicy::Always || !self.sessions.is_empty()
+        match self.held {
+            Some(up) => up,
+            None => self.settings.connect == ConnectPolicy::Always || !self.sessions.is_empty(),
+        }
     }
 
     fn on_app(&mut self, ev: AppEvent) {
@@ -668,6 +755,9 @@ impl Run {
             AppEvent::SessionOpened { id, tx, kick } => {
                 tracing::info!(bridge = %self.id, session = %id, "session opened");
                 self.next_seq += 1;
+                if let Some(hub) = &self.hub {
+                    hub.state("session", format!("{}/{id}", self.id), "opened");
+                }
                 self.sessions.insert(
                     id,
                     Session {
@@ -681,18 +771,21 @@ impl Run {
                     .sessions
                     .store(self.sessions.len(), Ordering::Relaxed);
                 self.idle_timer = None;
-                if matches!(self.link, TncLink::Idle) {
+                if matches!(self.link, TncLink::Idle) && self.wants_link() {
                     self.start_connect();
                 }
             }
             AppEvent::SessionClosed { id } => {
                 if self.sessions.remove(&id).is_some() {
                     tracing::info!(bridge = %self.id, session = %id, "session closed");
+                    if let Some(hub) = &self.hub {
+                        hub.state("session", format!("{}/{id}", self.id), "closed");
+                    }
                 }
                 self.counters
                     .sessions
                     .store(self.sessions.len(), Ordering::Relaxed);
-                if self.sessions.is_empty() && self.settings.connect == ConnectPolicy::OnDemand {
+                if self.sessions.is_empty() && !self.wants_link() {
                     if self.settings.idle_timeout.is_zero() {
                         tracing::info!(bridge = %self.id, "last session left, disconnecting the TNC");
                         self.close();
@@ -708,12 +801,17 @@ impl Run {
                     self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
+                if let Some(hub) = &self.hub
+                    && hub.wants_activity()
+                {
+                    hub.activity(format!("{}/{id}", self.id), Dir::Rx, frame.len());
+                }
                 match filter_app_frame(&frame, self.settings.app_params) {
                     Verdict::Drop(why) => {
                         tracing::warn!(bridge = %self.id, session = %id, "dropped frame from app: {why}");
                         self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                     }
-                    Verdict::Pass => self.uplink(frame),
+                    Verdict::Pass => self.uplink(frame, Some(id)),
                 }
             }
         }
@@ -729,6 +827,18 @@ impl Run {
                 self.attempt = 0;
                 if self.wants_link() {
                     self.start_connect();
+                }
+            }
+            BridgeCmd::Hold(up) => {
+                tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC link held {}", if up { "up" } else { "down" });
+                self.held = Some(up);
+                self.idle_timer = None;
+                if up {
+                    if matches!(self.link, TncLink::Idle) {
+                        self.start_connect();
+                    }
+                } else {
+                    self.close();
                 }
             }
             BridgeCmd::Kick(id) => match self.sessions.get(&id) {
@@ -751,6 +861,8 @@ impl Run {
                 sessions.sort_by_key(|s| s.seq);
                 let _ = reply.send(Snapshot {
                     tnc: self.state_tx.borrow().clone(),
+                    tnc_since: self.state_since,
+                    held: self.held,
                     sessions,
                 });
             }
@@ -782,8 +894,19 @@ impl Run {
         }
     }
 
-    fn uplink(&mut self, frame: Frame) {
+    fn uplink(&mut self, frame: Frame, from: Option<SessionId>) {
         let frame_len = frame.len();
+        if matches!(self.link, TncLink::Connected { .. })
+            && let Some(hub) = &self.hub
+            && hub.wants_frames()
+        {
+            hub.frame(
+                self.tnc_object(),
+                Dir::Tx,
+                from.as_ref().map(|s| format!("{}/{s}", self.id)),
+                &frame,
+            );
+        }
         match &self.link {
             TncLink::Connected { .. } => match self
                 .writer_tx
@@ -793,6 +916,11 @@ impl Run {
                 Some(Ok(())) => {
                     self.counters.frames_up.fetch_add(1, Ordering::Relaxed);
                     tracing::trace!(bridge = %self.id, bytes = frame_len, "frame to the TNC");
+                    if let Some(hub) = &self.hub
+                        && hub.wants_activity()
+                    {
+                        hub.activity(self.tnc_object(), Dir::Tx, frame_len);
+                    }
                 }
                 _ => {
                     // Only reachable if the writer went away under us.
@@ -800,22 +928,26 @@ impl Run {
                     self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 }
             },
+            TncLink::Idle if self.held == Some(false) => {
+                tracing::debug!(bridge = %self.id, "TNC link held down; dropping a frame");
+                self.counters.dropped.fetch_add(1, Ordering::Relaxed);
+            }
             TncLink::Idle => {
-                self.queue_pending(frame);
+                self.queue_pending(frame, from);
                 self.start_connect();
             }
             // Waiting for pairing or a device is still "connecting" as far
             // as uplink goes: queue, and let stale frames age out.
-            TncLink::Connecting { .. } | TncLink::Backoff { .. } => self.queue_pending(frame),
+            TncLink::Connecting { .. } | TncLink::Backoff { .. } => self.queue_pending(frame, from),
         }
     }
 
-    fn queue_pending(&mut self, frame: Frame) {
+    fn queue_pending(&mut self, frame: Frame, from: Option<SessionId>) {
         if self.pending.len() >= UPLINK_QUEUE_FRAMES {
             self.pending.pop_front();
             self.counters.dropped.fetch_add(1, Ordering::Relaxed);
         }
-        self.pending.push_back((Instant::now(), frame));
+        self.pending.push_back((Instant::now(), frame, from));
     }
 
     fn on_tnc(&mut self, ev: TncEvent) {
@@ -826,10 +958,22 @@ impl Run {
                 }
                 self.counters.frames_down.fetch_add(1, Ordering::Relaxed);
                 tracing::trace!(bridge = %self.id, bytes = frame.len(), sessions = self.sessions.len(), "frame from the TNC");
+                let hub = self.hub.clone();
+                let activity = hub.as_ref().is_some_and(|h| h.wants_activity());
+                if let Some(hub) = &hub {
+                    if hub.wants_frames() {
+                        hub.frame(self.tnc_object(), Dir::Rx, None, &frame);
+                    }
+                    if activity {
+                        hub.activity(self.tnc_object(), Dir::Rx, frame.len());
+                    }
+                }
                 for (id, session) in &self.sessions {
                     if session.tx.try_send(frame.clone()).is_err() {
                         tracing::warn!(bridge = %self.id, session = %id, "session can't keep up, dropping a frame");
                         self.counters.dropped.fetch_add(1, Ordering::Relaxed);
+                    } else if let Some(hub) = hub.as_ref().filter(|_| activity) {
+                        hub.activity(format!("{}/{id}", self.id), Dir::Tx, frame.len());
                     }
                 }
             }
@@ -887,12 +1031,12 @@ impl Run {
                 // Frames that arrived while connecting, if they're still fresh.
                 let cutoff = Instant::now() - UPLINK_QUEUE_AGE;
                 let pending: Vec<_> = self.pending.drain(..).collect();
-                for (at, frame) in pending {
+                for (at, frame, from) in pending {
                     if at < cutoff {
                         self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                         continue;
                     }
-                    self.uplink(frame);
+                    self.uplink(frame, from);
                 }
                 if !self.wants_link() && self.settings.idle_timeout.is_zero() {
                     // Everyone left while we were connecting.
@@ -1666,6 +1810,31 @@ mod tests {
         h.wait_state(|s| *s == TncState::Connected).await;
         h.close(&a).await;
         assert_eq!(read_all(&mut tnc).await, vec![0xC0, 0xFF, 0xC0]);
+        h.handle.shutdown.cancel();
+        h.task.await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn held_links_ignore_policy_and_sessions() {
+        let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
+        // Held up: connects with nobody there.
+        h.handle.cmd_tx.send(BridgeCmd::Hold(true)).await.unwrap();
+        let mut tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        let (a, _rx) = h.open("lan", "A").await;
+        h.close(&a).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(*h.handle.state.borrow(), TncState::Connected);
+        // Held down: goes down, and a session and its frames don't bring it back.
+        h.handle.cmd_tx.send(BridgeCmd::Hold(false)).await.unwrap();
+        h.wait_state(|s| *s == TncState::Idle).await;
+        assert!(matches!(tnc.read_frame().await, Err(Error::LinkClosed)));
+        let (a, _rx) = h.open("lan", "B").await;
+        h.send(&a, &[0x00, 0x01]).await;
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert_eq!(*h.handle.state.borrow(), TncState::Idle);
+        assert_eq!(h.connects.load(Ordering::Relaxed), 1);
+        assert_eq!(h.handle.snapshot().await.unwrap().held, Some(false));
         h.handle.shutdown.cancel();
         h.task.await.unwrap();
     }

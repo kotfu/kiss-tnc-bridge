@@ -22,7 +22,7 @@
 //! subscribes to notifications on RX; frames to the phone are chunked to
 //! the notification MTU.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -56,6 +56,11 @@ const SESSION_QUEUE: usize = 64;
 const NOTIFY_TIMEOUT: Duration = Duration::from_secs(2);
 /// How long to wait for BlueZ to drop a phone's link.
 const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
+/// How often a phone the port has served is checked while it's connected:
+/// one with no session gets its link dropped (see [`watch_link`]). Long
+/// enough for a phone that's just connected to subscribe, which takes a
+/// second or two.
+const LINK_GRACE: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BleState {
@@ -95,6 +100,11 @@ enum BleEvent {
     /// A client unsubscribed, its reader or writer ended, or its device
     /// disconnected.
     Gone { addr: Address, generation: u64 },
+    /// A phone the port has served has been connected for
+    /// [`LINK_GRACE`]: time to check it has a session.
+    Check { addr: Address },
+    /// A phone's link watcher ended (its device went away).
+    Unwatched { addr: Address },
 }
 
 struct Client {
@@ -121,14 +131,7 @@ impl BleServerPort {
     }
 
     async fn prepare(&self, public_name: &str) -> Result<(), String> {
-        let name = self.adapter.name();
         crate::bluetooth::power_on(&self.adapter).await?;
-        // Pairable, so the Just Works bond BlueZ starts when a phone touches a
-        // protected characteristic can complete.
-        self.adapter
-            .set_pairable(true)
-            .await
-            .map_err(|e| format!("{name}: set pairable: {e}"))?;
         self.set_alias(public_name).await
     }
 
@@ -196,6 +199,8 @@ impl BleServerPort {
         let mut max_rx = self.max_clients.clone();
         let mut max = *max_rx.borrow_and_update() as usize;
         let mut follow_max = true;
+        // Phones the port has served, whose links it watches.
+        let mut watched: HashSet<Address> = HashSet::new();
 
         loop {
             tokio::select! {
@@ -252,8 +257,12 @@ impl BleServerPort {
                                 continue;
                             }
                         };
+                        let known = clients.contains_key(&addr);
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
                         record_clients(clients_file.as_deref(), &clients);
+                        if !known && clients.len() < max {
+                            self.readvertise(&mut adv, &public_name).await;
+                        }
                         let id = self.session_id(addr);
                         tokio::spawn(reader_task(reader, id, self.app_tx.clone(), ev_tx.clone(), addr, generation));
                     }
@@ -270,6 +279,7 @@ impl BleServerPort {
                             drop(notifier);
                             continue;
                         }
+                        let known = clients.contains_key(&addr);
                         let generation = self.ensure_client(&mut clients, &mut generation, addr, &ev_tx, &sessions).await;
                         record_clients(clients_file.as_deref(), &clients);
                         let client = clients.get_mut(&addr).expect("just ensured");
@@ -281,9 +291,13 @@ impl BleServerPort {
                             }
                             None => tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "repeated subscribe ignored"),
                         }
-                        if clients.len() >= max && adv.take().is_some() {
-                            tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "max clients reached, advertisement withdrawn");
-                            state_tx.send_replace(BleState::Full);
+                        if clients.len() >= max {
+                            if adv.take().is_some() {
+                                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "max clients reached, advertisement withdrawn");
+                                state_tx.send_replace(BleState::Full);
+                            }
+                        } else if !known {
+                            self.readvertise(&mut adv, &public_name).await;
                         }
                     }
                     Some(_) => {}
@@ -296,6 +310,20 @@ impl BleServerPort {
                     let (addr, g, kicked) = match ev {
                         BleEvent::Gone { addr, generation } => (addr, generation, false),
                         BleEvent::Kicked { addr, generation } => (addr, generation, true),
+                        BleEvent::Unwatched { addr } => {
+                            watched.remove(&addr);
+                            continue;
+                        }
+                        BleEvent::Check { addr } => {
+                            // iOS keeps the link after the app lets go, and
+                            // most controllers can't advertise while
+                            // anything is connected.
+                            if !clients.contains_key(&addr) {
+                                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "dropping the link of a phone with no session, so the bridge can advertise again");
+                                self.disconnect(addr).await;
+                            }
+                            continue;
+                        }
                     };
                     let current = clients.get(&addr).map(|c| c.generation);
                     if current != Some(g) {
@@ -311,6 +339,9 @@ impl BleServerPort {
                     sessions.store(clients.len(), Ordering::Relaxed);
                     tracing::info!(bridge = %self.bridge_id, port = %self.port_id, %addr, "client disconnected");
                     let _ = self.app_tx.send(AppEvent::SessionClosed { id: self.session_id(addr) }).await;
+                    if watched.insert(addr) {
+                        tokio::spawn(watch_link(self.adapter.clone(), addr, ev_tx.clone(), self.shutdown.clone()));
+                    }
                     if clients.len() < max && adv.is_none() {
                         match self.advertise(&public_name).await {
                             Ok(h) => {
@@ -343,6 +374,28 @@ impl BleServerPort {
         drop(adv);
         state_tx.send_replace(BleState::Stopped);
         tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "stopped");
+    }
+
+    /// A new phone connected, and the connection ended the advertisement:
+    /// controllers stop advertising when a phone connects, and the kernel
+    /// turns that advertisement back on only when the phone disconnects. So
+    /// below `max_clients`, register a new one, which the kernel starts at
+    /// once if the controller can advertise while connected. The old one is
+    /// dropped only once the new one is in, so if the new one is refused,
+    /// the old one still comes back when the phone leaves.
+    async fn readvertise(&self, adv: &mut Option<AdvertisementHandle>, public_name: &str) {
+        if adv.is_none() {
+            return;
+        }
+        match self.advertise(public_name).await {
+            Ok(h) => {
+                *adv = Some(h);
+                tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, "advertising again for more phones");
+            }
+            Err(e) => {
+                tracing::info!(bridge = %self.bridge_id, port = %self.port_id, "can't advertise again while a phone is connected: {e}")
+            }
+        }
     }
 
     fn session_id(&self, addr: Address) -> SessionId {
@@ -589,7 +642,7 @@ async fn writer_task(
                 Some(f) => f,
                 None => break,
             },
-            // The app stopped notifications. A bonded phone keeps its link
+            // The app stopped notifications. iOS keeps the link
             // up after the app lets go, so this, not a disconnect, is often
             // the only sign the session is over; without it the port would
             // stay "full" and never advertise again.
@@ -625,6 +678,58 @@ async fn writer_task(
         }
     }
     // The port closed the session on purpose.
+}
+
+/// Watch the link of a phone the port has served, for as long as the port
+/// runs: every [`LINK_GRACE`] that it's connected, ask the port to check it
+/// has a session ([`BleEvent::Check`]).
+async fn watch_link(
+    adapter: Adapter,
+    addr: Address,
+    ev_tx: mpsc::Sender<BleEvent>,
+    stop: CancellationToken,
+) {
+    tokio::select! {
+        _ = stop.cancelled() => {}
+        _ = link_checks(&adapter, addr, &ev_tx) => {
+            let _ = ev_tx.send(BleEvent::Unwatched { addr }).await;
+        }
+    }
+}
+
+/// Returns when the device goes away or the port stops listening.
+async fn link_checks(
+    adapter: &Adapter,
+    addr: Address,
+    ev_tx: &mpsc::Sender<BleEvent>,
+) -> Option<()> {
+    let device = adapter.device(addr).ok()?;
+    let mut events = device.events().await.ok()?;
+    let mut connected = device.is_connected().await.unwrap_or(false);
+    loop {
+        if connected {
+            let check = tokio::time::sleep(LINK_GRACE);
+            tokio::pin!(check);
+            loop {
+                tokio::select! {
+                    _ = &mut check => {
+                        ev_tx.send(BleEvent::Check { addr }).await.ok()?;
+                        break;
+                    }
+                    ev = events.next() => {
+                        if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(false)) = ev? {
+                            connected = false;
+                            break;
+                        }
+                    }
+                }
+            }
+        } else if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(true)) =
+            events.next().await?
+        {
+            connected = true;
+        }
+    }
 }
 
 async fn wait_for_disconnect(adapter: &Adapter, addr: Address) {

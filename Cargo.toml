@@ -17,6 +17,9 @@ libc = "0.2"
 uuid = "1"
 serde = { version = "1.0.229", features = ["derive"] }
 toml = "1.1.8"
+serde_json = "1"
+# JSON Schema for the control protocol, exported by a test; not in the daemon.
+schemars = { version = "1", optional = true }
 # dynamic.toml: edits that keep comments and formatting.
 toml_edit = "0.25"
 ipnet = "2.12.2"
@@ -24,14 +27,15 @@ tokio-util = { version = "0.7.20", features = ["rt"] }
 # No libudev: devices are found by path, so cross builds need no C library.
 tokio-serial = { version = "5.4", default-features = false }
 
+[features]
+schema = ["dep:schemars"]
+
 [target.'cfg(target_os = "linux")'.dependencies]
 bluer = { version = "0.17", features = ["bluetoothd", "rfcomm"] }
 libdbus-sys = { version = "0.2", features = ["vendored"] }
 # Avahi for DNS-SD; the same versions bluer uses.
 dbus = { version = "0.9", features = ["futures"] }
 dbus-tokio = "0.7"
-# The pairing agent's D-Bus object.
-dbus-crossroads = "0.5"
 
 [dev-dependencies]
 tempfile = "3"

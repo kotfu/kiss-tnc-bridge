@@ -1,0 +1,1947 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Newline-delimited JSON over the daemon's control socket. Clients send Request; the daemon answers each with a Response, whose result depends on the command (see results), and streams EventMessage on subscribed topics. See docs/control-api.md.",
+  "messages": {
+    "EventMessage": {
+      "$defs": {
+        "Decoded": {
+          "description": "A KISS frame, decoded as far as it decodes.",
+          "properties": {
+            "ax25": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Header"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "For data frames that parse as AX.25 UI and I frames."
+            },
+            "channel": {
+              "description": "The KISS channel (the command byte's high nibble).",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "command": {
+              "description": "The KISS command (low nibble): 0 is data.",
+              "format": "uint8",
+              "maximum": 255,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "summary": {
+              "description": "One line for a person: the TNC2-style header and the information\nfield with unprintable bytes shown as `.`, or a description of a\nframe that isn't AX.25 data.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "channel",
+            "command",
+            "summary"
+          ],
+          "type": "object"
+        },
+        "Dir": {
+          "enum": [
+            "rx",
+            "tx"
+          ],
+          "type": "string"
+        },
+        "Header": {
+          "properties": {
+            "destination": {
+              "type": "string"
+            },
+            "path": {
+              "description": "Digipeaters, `*` on those that have repeated the frame.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "destination",
+            "path"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "oneOf": [
+        {
+          "description": "Something started, stopped, connected or disconnected. Re-read\n`status` for the whole picture.",
+          "properties": {
+            "event": {
+              "const": "state",
+              "type": "string"
+            },
+            "object": {
+              "description": "`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`.",
+              "type": "string"
+            },
+            "state": {
+              "description": "`started`, `stopped`, `connected`, `opened`, `closed`, `reloaded`, ….",
+              "type": "string"
+            },
+            "what": {
+              "description": "`bridge`, `tnc`, `session`, `port` or `config`.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "what",
+            "object",
+            "state"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bytes moved on a port (`ktbr0/radio`) or session\n(`ktbr0/phones/7C:2A:…`). `rx` is toward the bridge.",
+          "properties": {
+            "bytes": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "dir": {
+              "$ref": "#/$defs/Dir"
+            },
+            "event": {
+              "const": "activity",
+              "type": "string"
+            },
+            "object": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "event",
+            "object",
+            "dir",
+            "bytes"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A frame to (`tx`) or from (`rx`) a TNC.",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "decoded": {
+              "$ref": "#/$defs/Decoded"
+            },
+            "dir": {
+              "$ref": "#/$defs/Dir"
+            },
+            "event": {
+              "const": "frame",
+              "type": "string"
+            },
+            "kiss": {
+              "description": "The raw KISS frame between FENDs, still stuffed, as hex.",
+              "type": "string"
+            },
+            "object": {
+              "description": "The TNC port: `ktbr0/radio`.",
+              "type": "string"
+            },
+            "session": {
+              "description": "For `tx`, the session it came from: `ktbr0/lan/192.168.4.20:51515`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "event",
+            "object",
+            "dir",
+            "at",
+            "kiss",
+            "decoded"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "This connection fell behind and missed `missed` events.",
+          "properties": {
+            "event": {
+              "const": "lagged",
+              "type": "string"
+            },
+            "missed": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "missed"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v"
+      ],
+      "title": "EventMessage",
+      "type": "object"
+    },
+    "Request": {
+      "$defs": {
+        "ObjectKind": {
+          "description": "The kinds of object config files define.",
+          "enum": [
+            "adapter",
+            "tnc",
+            "bridge"
+          ],
+          "type": "string"
+        },
+        "Topic": {
+          "oneOf": [
+            {
+              "const": "state",
+              "description": "Things starting, stopping, connecting and disconnecting.",
+              "type": "string"
+            },
+            {
+              "const": "activity",
+              "description": "Bytes moving on ports and sessions, at most about 10 events a second\nper port or session.",
+              "type": "string"
+            },
+            {
+              "const": "frames",
+              "description": "Every frame to and from each TNC, with its AX.25 header decoded.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "`{\"v\":1,\"id\":7,\"cmd\":\"status\"}`",
+      "oneOf": [
+        {
+          "description": "Adapters, TNCs, bridges, ports, sessions, states and counters.",
+          "properties": {
+            "cmd": {
+              "const": "status",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Events on the given topics, on this connection, until it closes.",
+          "properties": {
+            "cmd": {
+              "const": "subscribe",
+              "type": "string"
+            },
+            "topics": {
+              "items": {
+                "$ref": "#/$defs/Topic"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cmd",
+            "topics"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Re-read the config from disk and apply it. With `non_disruptive`, a\nplan that would disrupt anyone is refused with\n`reload_would_disrupt` and nothing is applied.",
+          "properties": {
+            "cmd": {
+              "const": "reload",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Validate the config on disk, or with `dynamic` standing in for\n`dynamic.toml`, and return the plan a reload would apply. Applies\nnothing.",
+          "properties": {
+            "cmd": {
+              "const": "config.check",
+              "type": "string"
+            },
+            "dynamic": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The TOML for one dynamic object (`kind` and `object`, its id), or\nall of `dynamic.toml`, with its revision for `config.put`.",
+          "properties": {
+            "cmd": {
+              "const": "config.get",
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ObjectKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "object": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Replace that TOML if `revision` is still current, through the same\nchecks and consent as any change. For one object, revision `\"\"`\ncreates it and empty TOML deletes it.",
+          "properties": {
+            "cmd": {
+              "const": "config.put",
+              "type": "string"
+            },
+            "kind": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ObjectKind"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "object": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "revision": {
+              "type": "string"
+            },
+            "toml": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "toml",
+            "revision"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A new dynamic bridge, ports and all. Without an `id`, the lowest free\n`ktbrN`.",
+          "properties": {
+            "cmd": {
+              "const": "bridge.create",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Replace a dynamic bridge's definition.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.update",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.delete",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Copy any bridge, static or dynamic, into a new dynamic one, disabled.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.clone",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "new_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Enable a bridge (on a static one, an override in `state.toml`;\n`reset` drops the override instead). Refused if it conflicts with an\nenabled bridge; `bridge.switch` disables those.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.enable",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "reset": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.disable",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Enable a bridge and disable every enabled bridge in its way.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.switch",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Drop a DNS-SD collision adjustment and try the configured public\nname again.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "bridge.retry_public_name",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.add",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.update",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.remove",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Bring a bridge's TNC link up now, and keep it up, whatever its\n`connect` policy, until `port.disconnect`.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.connect",
+              "type": "string"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Take a bridge's TNC link down, and keep it down until\n`port.connect`. App sessions stay connected.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.disconnect",
+              "type": "string"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.",
+          "properties": {
+            "cmd": {
+              "const": "session.kick",
+              "type": "string"
+            },
+            "session": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "session"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "const": "tnc.create",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Replace a dynamic TNC's definition; a new `id` in it renames the TNC\nand the dynamic ports that use it.",
+          "properties": {
+            "cmd": {
+              "const": "tnc.update",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tnc": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "tnc",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Refused while a port uses it.",
+          "properties": {
+            "cmd": {
+              "const": "tnc.delete",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            },
+            "tnc": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "tnc"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "cmd": {
+              "const": "adapter.create",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Replace a dynamic adapter's definition; a new `id` renames it and\nthe dynamic references to it.",
+          "properties": {
+            "adapter": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "adapter.update",
+              "type": "string"
+            },
+            "definition": true,
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "adapter",
+            "definition"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Refused while anything refers to it.",
+          "properties": {
+            "adapter": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "adapter.delete",
+              "type": "string"
+            },
+            "non_disruptive": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "cmd",
+            "adapter"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Serial devices present, by stable path, flagging known TNCs.",
+          "properties": {
+            "cmd": {
+              "const": "serial.list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        }
+      ],
+      "properties": {
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "id"
+      ],
+      "title": "Request",
+      "type": "object"
+    },
+    "Response": {
+      "$defs": {
+        "ApiError": {
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/ErrorCode",
+              "description": "Stable and machine-readable: scripts and clients match on it."
+            },
+            "data": {
+              "description": "More detail: the problems for `config_invalid`, the plan for\n`reload_would_disrupt`."
+            },
+            "message": {
+              "description": "For people: what went wrong and what to do next.",
+              "type": "string"
+            },
+            "object": {
+              "description": "The object concerned: `bridge ktbr0`, `tnc d75`, a config path.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        "ErrorCode": {
+          "oneOf": [
+            {
+              "enum": [
+                "unknown_command",
+                "internal"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "bad_request",
+              "description": "Not JSON, not a request, or bad parameters.",
+              "type": "string"
+            },
+            {
+              "const": "unsupported_version",
+              "description": "A `v` this daemon doesn't speak.",
+              "type": "string"
+            },
+            {
+              "const": "config_invalid",
+              "description": "The config (on disk or a candidate) has errors; `data` lists them.",
+              "type": "string"
+            },
+            {
+              "const": "reload_would_disrupt",
+              "description": "`non_disruptive` and the change would disrupt; `data` is the plan.",
+              "type": "string"
+            },
+            {
+              "const": "not_found",
+              "description": "No such bridge, port, TNC, adapter or session.",
+              "type": "string"
+            },
+            {
+              "const": "static_object_readonly",
+              "description": "Static objects (in /etc) can't be changed through the API, only\nenabled and disabled; `object` names the file.",
+              "type": "string"
+            },
+            {
+              "const": "conflict",
+              "description": "An id or name that's already taken.",
+              "type": "string"
+            },
+            {
+              "const": "in_use",
+              "description": "A TNC or adapter that something still refers to; the message says\nwhat.",
+              "type": "string"
+            },
+            {
+              "const": "revision_conflict",
+              "description": "`config.put` with a revision that's no longer current: someone else\nchanged it since `config.get`.",
+              "type": "string"
+            },
+            {
+              "const": "changed_on_disk",
+              "description": "`dynamic.toml` was edited by hand since the daemon read it; reload\nfirst.",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApiError"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "description": "The request's id; `null` when the request couldn't be read at all.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "result": true,
+        "v": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "v",
+        "ok"
+      ],
+      "title": "Response",
+      "type": "object"
+    }
+  },
+  "results": {
+    "changes": {
+      "$defs": {
+        "Action": {
+          "enum": [
+            "unchanged",
+            "updated",
+            "restarted",
+            "started",
+            "stopped"
+          ],
+          "type": "string"
+        },
+        "BridgePlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "Bridge-level changes: `name`, `public_name`, `app_params`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ports": {
+              "items": {
+                "$ref": "#/$defs/PortPlan"
+              },
+              "type": "array"
+            },
+            "stops_in_use": {
+              "description": "Stopping a bridge whose TNC link or sessions are in use.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "ports",
+            "stops_in_use"
+          ],
+          "type": "object"
+        },
+        "Plan": {
+          "properties": {
+            "bridges": {
+              "items": {
+                "$ref": "#/$defs/BridgePlan"
+              },
+              "type": "array"
+            },
+            "global": {
+              "description": "Daemon-wide changes applied live: `log_level`, `control.group`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "global",
+            "bridges"
+          ],
+          "type": "object"
+        },
+        "PortPlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "What changed, for the report: `allow`, `listen`, ….",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disconnects": {
+              "description": "Sessions this would disconnect.",
+              "items": {
+                "$ref": "#/$defs/SessionId"
+              },
+              "type": "array"
+            },
+            "drops_tnc_link": {
+              "description": "A TNC port whose link is in use would drop it.",
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "disconnects",
+            "drops_tnc_link"
+          ],
+          "type": "object"
+        },
+        "ProblemJson": {
+          "description": "One config error or warning.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "object": {
+              "description": "`bridge ktbr0 port lan`, empty for the config as a whole.",
+              "type": "string"
+            },
+            "source": {
+              "description": "`static: /etc/…/file.toml` or `dynamic`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "message"
+          ],
+          "type": "object"
+        },
+        "SessionId": {
+          "description": "port/peer: phones/7C:2A:…, lan/192.168.4.20:51515",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The result of a command that changes config: the plan it applied, and\nthe id of anything it created.",
+      "properties": {
+        "applied": {
+          "description": "Whether the change was applied (`reload`) or would be (`config.check`).",
+          "type": "boolean"
+        },
+        "disruptions": {
+          "description": "Why the plan is disruptive; empty if it isn't.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disruptive": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ProblemJson"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "applied",
+        "plan",
+        "disruptions",
+        "disruptive",
+        "warnings"
+      ],
+      "title": "ChangeResult",
+      "type": "object"
+    },
+    "config.check": {
+      "$defs": {
+        "Action": {
+          "enum": [
+            "unchanged",
+            "updated",
+            "restarted",
+            "started",
+            "stopped"
+          ],
+          "type": "string"
+        },
+        "BridgePlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "Bridge-level changes: `name`, `public_name`, `app_params`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ports": {
+              "items": {
+                "$ref": "#/$defs/PortPlan"
+              },
+              "type": "array"
+            },
+            "stops_in_use": {
+              "description": "Stopping a bridge whose TNC link or sessions are in use.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "ports",
+            "stops_in_use"
+          ],
+          "type": "object"
+        },
+        "Plan": {
+          "properties": {
+            "bridges": {
+              "items": {
+                "$ref": "#/$defs/BridgePlan"
+              },
+              "type": "array"
+            },
+            "global": {
+              "description": "Daemon-wide changes applied live: `log_level`, `control.group`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "global",
+            "bridges"
+          ],
+          "type": "object"
+        },
+        "PortPlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "What changed, for the report: `allow`, `listen`, ….",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disconnects": {
+              "description": "Sessions this would disconnect.",
+              "items": {
+                "$ref": "#/$defs/SessionId"
+              },
+              "type": "array"
+            },
+            "drops_tnc_link": {
+              "description": "A TNC port whose link is in use would drop it.",
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "disconnects",
+            "drops_tnc_link"
+          ],
+          "type": "object"
+        },
+        "ProblemJson": {
+          "description": "One config error or warning.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "object": {
+              "description": "`bridge ktbr0 port lan`, empty for the config as a whole.",
+              "type": "string"
+            },
+            "source": {
+              "description": "`static: /etc/…/file.toml` or `dynamic`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "message"
+          ],
+          "type": "object"
+        },
+        "SessionId": {
+          "description": "port/peer: phones/7C:2A:…, lan/192.168.4.20:51515",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The result of `config.check`.",
+      "properties": {
+        "disruptions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disruptive": {
+          "type": "boolean"
+        },
+        "errors": {
+          "items": {
+            "$ref": "#/$defs/ProblemJson"
+          },
+          "type": "array"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Plan"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What a reload would do, if the config is valid."
+        },
+        "valid": {
+          "type": "boolean"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ProblemJson"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "valid",
+        "errors",
+        "warnings",
+        "disruptive",
+        "disruptions"
+      ],
+      "title": "CheckResult",
+      "type": "object"
+    },
+    "config.get": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The result of `config.get`.",
+      "properties": {
+        "revision": {
+          "description": "Pass back to `config.put`.",
+          "type": "string"
+        },
+        "toml": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "toml",
+        "revision"
+      ],
+      "title": "ConfigText",
+      "type": "object"
+    },
+    "reload": {
+      "$defs": {
+        "Action": {
+          "enum": [
+            "unchanged",
+            "updated",
+            "restarted",
+            "started",
+            "stopped"
+          ],
+          "type": "string"
+        },
+        "BridgePlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "Bridge-level changes: `name`, `public_name`, `app_params`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "id": {
+              "type": "string"
+            },
+            "ports": {
+              "items": {
+                "$ref": "#/$defs/PortPlan"
+              },
+              "type": "array"
+            },
+            "stops_in_use": {
+              "description": "Stopping a bridge whose TNC link or sessions are in use.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "ports",
+            "stops_in_use"
+          ],
+          "type": "object"
+        },
+        "Plan": {
+          "properties": {
+            "bridges": {
+              "items": {
+                "$ref": "#/$defs/BridgePlan"
+              },
+              "type": "array"
+            },
+            "global": {
+              "description": "Daemon-wide changes applied live: `log_level`, `control.group`.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "global",
+            "bridges"
+          ],
+          "type": "object"
+        },
+        "PortPlan": {
+          "properties": {
+            "action": {
+              "$ref": "#/$defs/Action"
+            },
+            "changes": {
+              "description": "What changed, for the report: `allow`, `listen`, ….",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "disconnects": {
+              "description": "Sessions this would disconnect.",
+              "items": {
+                "$ref": "#/$defs/SessionId"
+              },
+              "type": "array"
+            },
+            "drops_tnc_link": {
+              "description": "A TNC port whose link is in use would drop it.",
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "action",
+            "changes",
+            "disconnects",
+            "drops_tnc_link"
+          ],
+          "type": "object"
+        },
+        "ProblemJson": {
+          "description": "One config error or warning.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "object": {
+              "description": "`bridge ktbr0 port lan`, empty for the config as a whole.",
+              "type": "string"
+            },
+            "source": {
+              "description": "`static: /etc/…/file.toml` or `dynamic`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "object",
+            "message"
+          ],
+          "type": "object"
+        },
+        "SessionId": {
+          "description": "port/peer: phones/7C:2A:…, lan/192.168.4.20:51515",
+          "type": "string"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The result of `reload` and `config.check`.",
+      "properties": {
+        "applied": {
+          "description": "Whether the change was applied (`reload`) or would be (`config.check`).",
+          "type": "boolean"
+        },
+        "disruptions": {
+          "description": "Why the plan is disruptive; empty if it isn't.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "disruptive": {
+          "type": "boolean"
+        },
+        "plan": {
+          "$ref": "#/$defs/Plan"
+        },
+        "warnings": {
+          "items": {
+            "$ref": "#/$defs/ProblemJson"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "applied",
+        "plan",
+        "disruptions",
+        "disruptive",
+        "warnings"
+      ],
+      "title": "PlanResult",
+      "type": "object"
+    },
+    "serial.list": {
+      "$defs": {
+        "SerialEntry": {
+          "description": "One serial device, as `serial.list` finds it.",
+          "properties": {
+            "also": {
+              "description": "Other stable paths to the same device.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "description": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "device": {
+              "description": "What it points to now: `/dev/ttyACM0`.",
+              "type": "string"
+            },
+            "known_tnc": {
+              "description": "A TNC this daemon knows: `Kenwood TH-D75`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "The `model` to use for it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "path": {
+              "description": "The stable path to use in config: `/dev/serial/by-id/…`, or\n`/dev/serial/by-path/…` for devices with no by-id name.",
+              "type": "string"
+            },
+            "tnc": {
+              "description": "The TNC already defined with this path.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usb_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "path",
+            "device"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "items": {
+        "$ref": "#/$defs/SerialEntry"
+      },
+      "title": "Array_of_SerialEntry",
+      "type": "array"
+    },
+    "status": {
+      "$defs": {
+        "AdapterStatus": {
+          "description": "A Bluetooth adapter: present on this host, named by an `[[adapter]]`,\nor both.",
+          "properties": {
+            "hci": {
+              "description": "`hci0`, while present.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "description": "The `[[adapter]]` id, if one names this MAC.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "mac": {
+              "type": "string"
+            },
+            "powered": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "present": {
+              "type": "boolean"
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "mac",
+            "present"
+          ],
+          "type": "object"
+        },
+        "BridgeStatus": {
+          "properties": {
+            "counters": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Counters"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "While running."
+            },
+            "editable": {
+              "description": "Dynamic bridges can be changed through the API; static ones can only\nbe enabled and disabled.",
+              "type": "boolean"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "enabled_override": {
+              "description": "The `state.toml` override behind `enabled`, for static bridges.",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "ports": {
+              "items": {
+                "$ref": "#/$defs/PortStatus"
+              },
+              "type": "array"
+            },
+            "public_name": {
+              "$ref": "#/$defs/PublicName"
+            },
+            "source": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "enabled",
+            "public_name",
+            "source",
+            "editable",
+            "ports"
+          ],
+          "type": "object"
+        },
+        "Counters": {
+          "properties": {
+            "dropped": {
+              "description": "Frames dropped by policy, a full queue or a slow session.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "frames_down": {
+              "description": "Frames from the TNC, counted once however many sessions got them.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "frames_up": {
+              "description": "Frames from apps forwarded to the TNC.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "tnc_connects": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "frames_up",
+            "frames_down",
+            "dropped",
+            "tnc_connects"
+          ],
+          "type": "object"
+        },
+        "PortStatus": {
+          "properties": {
+            "detail": {
+              "description": "More about the state: why it's waiting, when it retries.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "sessions": {
+              "items": {
+                "$ref": "#/$defs/SessionStatus"
+              },
+              "type": "array"
+            },
+            "settings": {
+              "description": "The port's settings, as in the config: `tnc`, `listen`, `adapter`,\n`max_clients`, …."
+            },
+            "since": {
+              "description": "When the TNC port entered its state.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "description": "`connected`, `backoff`, `unpaired`, `listening`, `advertising`,\n`waiting for interface`, `stopped`, …",
+              "type": "string"
+            },
+            "type": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "type",
+            "role",
+            "state",
+            "settings",
+            "sessions"
+          ],
+          "type": "object"
+        },
+        "PublicName": {
+          "properties": {
+            "configured": {
+              "type": "string"
+            },
+            "effective": {
+              "description": "What's advertised and announced: differs after a DNS-SD collision.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "configured",
+            "effective"
+          ],
+          "type": "object"
+        },
+        "SerialStatus": {
+          "properties": {
+            "baud": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            },
+            "present": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path",
+            "baud",
+            "present"
+          ],
+          "type": "object"
+        },
+        "SessionStatus": {
+          "properties": {
+            "id": {
+              "description": "`bridge/port/peer`: `ktbr0/phones/7C:2A:…`,\n`ktbr0/lan/192.168.4.20:51515`, as `session.kick` takes it.",
+              "type": "string"
+            },
+            "since": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "since"
+          ],
+          "type": "object"
+        },
+        "SppStatus": {
+          "properties": {
+            "adapter": {
+              "description": "As configured: an adapter id with its MAC, a MAC, `hciN`, or the\ndefault adapter.",
+              "type": "string"
+            },
+            "address": {
+              "type": "string"
+            },
+            "paired": {
+              "description": "Whether it's paired on that adapter; absent if that can't be known\n(no BlueZ, adapter not present).",
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "address",
+            "adapter"
+          ],
+          "type": "object"
+        },
+        "TncStatus": {
+          "properties": {
+            "editable": {
+              "type": "boolean"
+            },
+            "id": {
+              "type": "string"
+            },
+            "in_use_by": {
+              "description": "The enabled bridge using it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "serial": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SerialStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "spp": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SppStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "name",
+            "model",
+            "source",
+            "editable"
+          ],
+          "type": "object"
+        }
+      },
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "description": "The result of `status`.",
+      "properties": {
+        "adapters": {
+          "items": {
+            "$ref": "#/$defs/AdapterStatus"
+          },
+          "type": "array"
+        },
+        "bridges": {
+          "items": {
+            "$ref": "#/$defs/BridgeStatus"
+          },
+          "type": "array"
+        },
+        "tncs": {
+          "items": {
+            "$ref": "#/$defs/TncStatus"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "adapters",
+        "tncs",
+        "bridges"
+      ],
+      "title": "Status",
+      "type": "object"
+    }
+  },
+  "title": "kiss-tnc-bridge control protocol, version 1"
+}

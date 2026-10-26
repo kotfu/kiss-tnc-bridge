@@ -47,6 +47,10 @@ struct Cli {
     #[arg(long, value_name = "DIR")]
     runtime_dir: Option<PathBuf>,
 
+    /// Control socket [default: control.sock in the runtime directory]
+    #[arg(long, value_name = "PATH")]
+    socket: Option<PathBuf>,
+
     /// Check the config, print the effective bridges and exit (0 = valid, 1 = errors)
     #[arg(short = 't', long = "test-config")]
     test_config: bool,
@@ -360,6 +364,9 @@ fn main() {
             "configured bridge"
         );
     }
+    if serves_phones(&cfg) && kiss_tnc_bridge::bluez_conf::host_probes_phones() == Some(true) {
+        tracing::warn!("{}", kiss_tnc_bridge::bluez_conf::ADVICE);
+    }
 
     let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
     rt.block_on(async {
@@ -368,18 +375,39 @@ fn main() {
             state_dir: state_dir.clone(),
             runtime_dir: runtime_dir.clone(),
         };
-        if let Err(e) = run(sources, cfg, paths, set_level).await {
+        let socket = cli
+            .socket
+            .clone()
+            .unwrap_or_else(|| runtime_dir.join(kiss_tnc_bridge::control::server::SOCKET_NAME));
+        if let Err(e) = run(sources, cfg, paths, socket, set_level).await {
             tracing::error!("fatal: {e}");
             std::process::exit(1);
         }
     });
 }
 
-/// `-t` host checks that need BlueZ: whether TNCs are paired. Problems go
-/// in the report as warnings; a check that couldn't run comes back as a
-/// note, since `-t` often runs where there's no Bluetooth (CI, image builds).
+/// Whether an enabled bridge has a `ble-server` port.
+fn serves_phones(cfg: &config::Config) -> bool {
+    cfg.bridges
+        .iter()
+        .filter(|b| b.enabled)
+        .flat_map(|b| &b.ports)
+        .any(|p| matches!(p.kind, config::PortKind::BleServer { .. }))
+}
+
+/// `-t` host checks that need BlueZ: whether BlueZ would ask phones to
+/// pair, and whether TNCs are paired. Problems go in the report as
+/// warnings; a check that couldn't run comes back as a note, since `-t`
+/// often runs where there's no Bluetooth (CI, image builds).
 #[cfg(target_os = "linux")]
 fn bluetooth_host_checks(cfg: &config::Config, report: &mut config::Report) -> Vec<String> {
+    if serves_phones(cfg) && kiss_tnc_bridge::bluez_conf::host_probes_phones() == Some(true) {
+        report.warnings.push(config::Problem::new(
+            None,
+            "ble-server ports",
+            kiss_tnc_bridge::bluez_conf::ADVICE,
+        ));
+    }
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -426,22 +454,47 @@ async fn run(
     sources: config::Sources,
     cfg: config::Config,
     paths: supervisor::Paths,
+    socket: PathBuf,
     set_level: Option<supervisor::LogLevelFn>,
 ) -> Result<(), error::Error> {
     let shutdown = tokio_util::sync::CancellationToken::new();
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel(8);
+    // Handlers first, so a signal that arrives while the daemon starts is
+    // handled rather than killing it.
+    #[cfg(unix)]
+    let (mut int, mut term, mut hup) = {
+        use tokio::signal::unix::{SignalKind, signal};
+        (
+            signal(SignalKind::interrupt())?,
+            signal(SignalKind::terminate())?,
+            signal(SignalKind::hangup())?,
+        )
+    };
+    let hub = kiss_tnc_bridge::control::events::Hub::new(shutdown.clone());
+    {
+        let group = cfg.control.group.clone();
+        let (cmd_tx, hub, shutdown) = (cmd_tx.clone(), hub.clone(), shutdown.clone());
+        tokio::spawn(async move {
+            if let Err(e) = kiss_tnc_bridge::control::server::serve(
+                socket.clone(),
+                group,
+                cmd_tx,
+                hub,
+                shutdown,
+            )
+            .await
+            {
+                tracing::error!(socket = %socket.display(), "no control socket: {e}");
+            }
+        });
+    }
     let stop = shutdown.clone();
     tokio::spawn(async move {
-        let ctrl_c = tokio::signal::ctrl_c();
-        tokio::pin!(ctrl_c);
         #[cfg(unix)]
         let why = {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut term = signal(SignalKind::terminate()).expect("SIGTERM handler");
-            let mut hup = signal(SignalKind::hangup()).expect("SIGHUP handler");
             loop {
                 tokio::select! {
-                    _ = &mut ctrl_c => break "interrupted",
+                    _ = int.recv() => break "interrupted",
                     _ = term.recv() => break "terminated",
                     _ = hup.recv() => {
                         let reload = supervisor::DaemonCmd::Reload {
@@ -457,7 +510,7 @@ async fn run(
         };
         #[cfg(not(unix))]
         let why = {
-            let _ = ctrl_c.await;
+            let _ = tokio::signal::ctrl_c().await;
             drop(cmd_tx);
             "interrupted"
         };
@@ -466,5 +519,5 @@ async fn run(
         stop.cancel();
         tracing::info!("{why}, shutting down");
     });
-    supervisor::run(sources, cfg, paths, set_level, cmd_rx, shutdown).await
+    supervisor::run(sources, cfg, paths, set_level, hub, cmd_rx, shutdown).await
 }
