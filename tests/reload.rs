@@ -151,6 +151,24 @@ async fn client(port: u16) -> KissConnection<TcpStream> {
     panic!("nothing listening on {port}");
 }
 
+/// Send `frame` from the TNC until `app` gets it. An app's session is
+/// registered a moment after its TCP connect, and a frame sent before then
+/// reaches nobody, so one send right after connecting can be lost.
+async fn relay(
+    link: &mut KissConnection<TcpStream>,
+    app: &mut KissConnection<TcpStream>,
+    frame: &[u8],
+) {
+    for _ in 0..10 {
+        link.write_frame(frame).await.unwrap();
+        if let Ok(got) = timeout(Duration::from_millis(500), app.read_frame()).await {
+            assert_eq!(got.unwrap(), frame);
+            return;
+        }
+    }
+    panic!("the app never got {frame:02x?}");
+}
+
 /// The connection is closed by the daemon (kicked, or refused).
 async fn closed(c: &mut KissConnection<TcpStream>) -> bool {
     matches!(timeout(T, c.read_frame()).await, Ok(Err(_)))
@@ -185,8 +203,7 @@ async fn an_unchanged_config_touches_nothing() {
     let d = Daemon::start(&text).await;
     let mut link = tnc.conn().await;
     let mut app = client(lan).await;
-    link.write_frame(&[0x00, 0x01]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x01]);
+    relay(&mut link, &mut app, &[0x00, 0x01]).await;
 
     // Reformatted and commented, but the same resolved config.
     d.write(&format!("# reformatted\n{}", text.replace("  ", "    ")));
@@ -194,8 +211,7 @@ async fn an_unchanged_config_touches_nothing() {
     assert!(report.plan.is_noop(), "{:#?}", report.plan);
 
     // No reconnect; the session carries on.
-    link.write_frame(&[0x00, 0x02]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x02]);
+    relay(&mut link, &mut app, &[0x00, 0x02]).await;
     assert_eq!(tnc.accepts.load(Ordering::SeqCst), 1);
     d.stop().await;
 }
@@ -264,8 +280,7 @@ async fn a_new_tnc_address_reconnects_and_apps_stay() {
 
     assert!(matches!(timeout(T, link_a.read_frame()).await, Ok(Err(_))));
     let mut link_b = b.conn().await;
-    link_b.write_frame(&[0x00, 0x42]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x42]);
+    relay(&mut link_b, &mut app, &[0x00, 0x42]).await;
     app.write_frame(&[0x00, 0x43]).await.unwrap();
     assert_eq!(link_b.read_frame().await.unwrap(), vec![0x00, 0x43]);
     d.stop().await;
@@ -307,8 +322,7 @@ async fn switching_bridges_moves_a_listen_socket_in_one_reload() {
     let mut link_b = b.conn().await;
     let mut app = client(lan).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
-    link_b.write_frame(&[0x00, 0x09]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x09]);
+    relay(&mut link_b, &mut app, &[0x00, 0x09]).await;
     d.stop().await;
 }
 
@@ -329,8 +343,7 @@ async fn an_invalid_config_is_rejected_whole() {
         other => panic!("expected the config to be rejected, got {other:?}"),
     }
     // Everything carries on as before.
-    link.write_frame(&[0x00, 0x05]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x05]);
+    relay(&mut link, &mut app, &[0x00, 0x05]).await;
     d.stop().await;
 }
 
@@ -355,8 +368,7 @@ async fn live_updates_dont_restart_anything() {
     let report = d.reload(true).await.unwrap();
     assert!(!report.plan.is_noop());
     assert!(!report.plan.disruptive(), "{:?}", report.plan.disruptions());
-    link.write_frame(&[0x00, 0x06]).await.unwrap();
-    assert_eq!(app.read_frame().await.unwrap(), vec![0x00, 0x06]);
+    relay(&mut link, &mut app, &[0x00, 0x06]).await;
     assert_eq!(tnc.accepts.load(Ordering::SeqCst), 1);
     d.stop().await;
 }
