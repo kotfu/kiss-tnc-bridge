@@ -20,8 +20,8 @@ use std::fmt::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::control::protocol::{
-    BridgeStatus, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus, ProblemJson,
-    SerialEntry, Status,
+    BridgeStatus, BtDevice, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus,
+    ProblemJson, SerialEntry, Status,
 };
 use crate::reconcile::{Action, Plan};
 
@@ -212,6 +212,40 @@ pub fn serial(list: &[SerialEntry]) -> String {
         for a in &e.also {
             let _ = writeln!(out, "    also {a}");
         }
+    }
+    out
+}
+
+/// `scan`: likely TNCs first, as the daemon sorted them.
+pub fn bt_devices(list: &[BtDevice]) -> String {
+    if list.is_empty() {
+        return "nothing found. Is the radio in pairing mode, with Bluetooth on?\n".into();
+    }
+    let mut out = String::new();
+    for d in list {
+        let what = match (&d.known_tnc, &d.model) {
+            (Some(k), Some(m)) => format!("{k} (model {m})"),
+            (Some(k), None) => k.clone(),
+            _ => d.icon.clone().unwrap_or_default(),
+        };
+        let mut extra = Vec::new();
+        if let Some(r) = d.rssi {
+            extra.push(format!("{r} dBm"));
+        }
+        if d.paired {
+            extra.push("paired".into());
+        }
+        if let Some(t) = &d.tnc {
+            extra.push(format!("tnc {t}"));
+        }
+        let _ = writeln!(
+            out,
+            "{}  {:<20} {:<32} {}",
+            d.address,
+            d.name.as_deref().unwrap_or("(no name)"),
+            what,
+            extra.join("  ")
+        );
     }
     out
 }
@@ -448,6 +482,23 @@ mod tests {
         let one = status(&s, Some("Spare"), now).unwrap();
         assert!(one.contains("ktbr1") && !one.contains("ktbr0"), "{one}");
         assert!(status(&s, Some("nope"), now).is_err());
+    }
+
+    #[test]
+    fn scans_show_what_each_device_is() {
+        let l: Vec<BtDevice> = serde_json::from_value(serde_json::json!([
+            {"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": true,
+             "known_tnc": "Kenwood TH-D75", "model": "th-d75", "tnc": "d75"},
+            {"address": "50:3B:70:E1:1C:11", "name": "jPhone", "icon": "phone", "paired": false}
+        ]))
+        .unwrap();
+        let out = bt_devices(&l);
+        let mut lines = out.lines();
+        let d75 = lines.next().unwrap();
+        assert!(d75.contains("Kenwood TH-D75 (model th-d75)"), "{d75}");
+        assert!(d75.contains("-52 dBm  paired  tnc d75"), "{d75}");
+        assert!(lines.next().unwrap().contains("phone"));
+        assert!(bt_devices(&[]).contains("pairing mode"));
     }
 
     #[test]

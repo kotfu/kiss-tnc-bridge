@@ -192,6 +192,149 @@
             "missed"
           ],
           "type": "object"
+        },
+        {
+          "description": "A step of the pairing started by this connection's `bluetooth.pair`\nrequest `request`. Sent only to that connection.",
+          "oneOf": [
+            {
+              "description": "The device isn't known yet; looking for it (it must be in pairing\nmode).",
+              "properties": {
+                "step": {
+                  "const": "searching",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Found; pairing now.",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "step": {
+                  "const": "pairing",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Does the device show this passkey? Reply with `accept`, and confirm\non the device too.",
+              "properties": {
+                "passkey": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "confirm",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "passkey"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Reply with the device's `pin` (legacy pairing).",
+              "properties": {
+                "step": {
+                  "const": "enter_pin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Reply with the `passkey` the device shows.",
+              "properties": {
+                "step": {
+                  "const": "enter_passkey",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Enter this on the device; no reply.",
+              "properties": {
+                "pin": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "show_pin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "pin"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Enter this on the device; no reply.",
+              "properties": {
+                "passkey": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "show_passkey",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "passkey"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "May the device pair? Reply with `accept`.",
+              "properties": {
+                "step": {
+                  "const": "authorize",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "event": {
+              "const": "pairing",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "request"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -836,6 +979,134 @@
             "cmd"
           ],
           "type": "object"
+        },
+        {
+          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.scan",
+              "type": "string"
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Pair with a device and trust it. The request stays open until the\npairing is done; meanwhile the daemon sends this connection\n`pairing` events, answered with `bluetooth.pair_reply`.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.pair",
+              "type": "string"
+            },
+            "tnc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to a `pairing` event that asks for one: `accept` for a\npasskey to confirm, `pin` or `passkey` for one to enter. `request`\nis the `bluetooth.pair` request's id.",
+          "properties": {
+            "accept": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.pair_reply",
+              "type": "string"
+            },
+            "passkey": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pin": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Forget a pairing.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.unpair",
+              "type": "string"
+            },
+            "tnc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -943,6 +1214,16 @@
             {
               "const": "changed_on_disk",
               "description": "`dynamic.toml` was edited by hand since the daemon read it; reload\nfirst.",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "description": "A Bluetooth operation (scan, pairing) was tried and failed; the\nmessage says why.",
+              "type": "string"
+            },
+            {
+              "const": "busy",
+              "description": "Another Bluetooth operation (scan, pairing) is running; try again\nwhen it's done.",
               "type": "string"
             }
           ]

@@ -31,6 +31,8 @@ pub mod control;
 pub mod ctl;
 pub mod error;
 pub mod kiss;
+#[cfg(target_os = "linux")]
+pub mod pairing;
 pub mod port;
 pub mod reconcile;
 pub mod supervisor;

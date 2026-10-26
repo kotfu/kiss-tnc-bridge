@@ -284,3 +284,12 @@ fn no_daemon_says_so() {
         out.stderr
     );
 }
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn bluetooth_commands_need_bluez() {
+    let d = daemon();
+    let out = ktbctl(&d.socket, &["scan", "--seconds", "1"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("BlueZ"), "{}", out.stderr);
+}

@@ -250,6 +250,54 @@ pub enum Command {
     /// The TNC models this daemon knows, and what each does.
     #[serde(rename = "tnc.models")]
     TncModels,
+
+    // Bluetooth Classic, for radios. A device is named by `tnc` (its
+    // `spp` address and adapter) or by `address` and optionally `adapter`
+    // (id, MAC or hciN; the default adapter otherwise).
+    /// Look for Bluetooth Classic devices for `seconds` (default 10), likely
+    /// TNCs first. Radios have to be in pairing mode to be found.
+    #[serde(rename = "bluetooth.scan")]
+    BluetoothScan {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<u64>,
+    },
+    /// Pair with a device and trust it. The request stays open until the
+    /// pairing is done; meanwhile the daemon sends this connection
+    /// `pairing` events, answered with `bluetooth.pair_reply`.
+    #[serde(rename = "bluetooth.pair")]
+    BluetoothPair {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tnc: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+    },
+    /// The answer to a `pairing` event that asks for one: `accept` for a
+    /// passkey to confirm, `pin` or `passkey` for one to enter. `request`
+    /// is the `bluetooth.pair` request's id.
+    #[serde(rename = "bluetooth.pair_reply")]
+    BluetoothPairReply {
+        request: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accept: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passkey: Option<u32>,
+    },
+    /// Forget a pairing.
+    #[serde(rename = "bluetooth.unpair")]
+    BluetoothUnpair {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tnc: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+    },
 }
 
 impl Command {
@@ -284,6 +332,10 @@ impl Command {
         "adapter.delete",
         "serial.list",
         "tnc.models",
+        "bluetooth.scan",
+        "bluetooth.pair",
+        "bluetooth.pair_reply",
+        "bluetooth.unpair",
     ];
 }
 
@@ -424,6 +476,12 @@ pub enum ErrorCode {
     /// `dynamic.toml` was edited by hand since the daemon read it; reload
     /// first.
     ChangedOnDisk,
+    /// A Bluetooth operation (scan, pairing) was tried and failed; the
+    /// message says why.
+    Failed,
+    /// Another Bluetooth operation (scan, pairing) is running; try again
+    /// when it's done.
+    Busy,
     Internal,
 }
 
@@ -536,6 +594,82 @@ pub struct ModelEntry {
     pub names: Vec<String>,
     /// What the daemon does for it.
     pub summary: String,
+}
+
+/// A Bluetooth Classic device, as `bluetooth.scan` finds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BtDevice {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Signal strength in dBm, when the scan saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rssi: Option<i16>,
+    /// What BlueZ makes of its class: `phone`, `audio-headset`, ….
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub paired: bool,
+    /// A TNC this daemon knows: `Kenwood TH-D75`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_tnc: Option<String>,
+    /// The `model` to use for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The TNC already defined with this address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tnc: Option<String>,
+}
+
+/// The result of `bluetooth.pair` and `bluetooth.unpair`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PairResult {
+    pub address: String,
+    /// The adapter, as `hciN (MAC)`.
+    pub adapter: String,
+    pub paired: bool,
+}
+
+/// What a pairing needs from the person at the other end, or tells them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum PairingStep {
+    /// The device isn't known yet; looking for it (it must be in pairing
+    /// mode).
+    Searching,
+    /// Found; pairing now.
+    Pairing {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Does the device show this passkey? Reply with `accept`, and confirm
+    /// on the device too.
+    Confirm { passkey: String },
+    /// Reply with the device's `pin` (legacy pairing).
+    EnterPin,
+    /// Reply with the `passkey` the device shows.
+    EnterPasskey,
+    /// Enter this on the device; no reply.
+    ShowPin { pin: String },
+    /// Enter this on the device; no reply.
+    ShowPasskey { passkey: String },
+    /// May the device pair? Reply with `accept`.
+    Authorize,
+}
+
+impl PairingStep {
+    /// Whether the daemon waits for a `bluetooth.pair_reply`.
+    pub fn needs_reply(&self) -> bool {
+        matches!(
+            self,
+            PairingStep::Confirm { .. }
+                | PairingStep::EnterPin
+                | PairingStep::EnterPasskey
+                | PairingStep::Authorize
+        )
+    }
 }
 
 /// The result of `config.check`.
@@ -741,6 +875,13 @@ pub enum Event {
     },
     /// This connection fell behind and missed `missed` events.
     Lagged { missed: u64 },
+    /// A step of the pairing started by this connection's `bluetooth.pair`
+    /// request `request`. Sent only to that connection.
+    Pairing {
+        request: u64,
+        #[serde(flatten)]
+        step: PairingStep,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -757,7 +898,7 @@ impl Event {
             Event::State { .. } => Some(Topic::State),
             Event::Activity { .. } => Some(Topic::Activity),
             Event::Frame { .. } => Some(Topic::Frames),
-            Event::Lagged { .. } => None,
+            Event::Lagged { .. } | Event::Pairing { .. } => None,
         }
     }
 }
@@ -822,6 +963,47 @@ mod tests {
         let r: Request = serde_json::from_str(r#"{"v":1,"id":6,"cmd":"config.check"}"#).unwrap();
         assert_eq!(r.command, Command::ConfigCheck { dynamic: None });
         assert!(serde_json::from_str::<Request>(r#"{"v":1,"id":6,"cmd":"nope"}"#).is_err());
+    }
+
+    #[test]
+    fn pairing_events_and_replies_on_the_wire() {
+        let ev = EventMessage {
+            v: VERSION,
+            event: Event::Pairing {
+                request: 7,
+                step: PairingStep::Confirm {
+                    passkey: "012345".into(),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap(),
+            json!({"v": 1, "event": "pairing", "request": 7, "step": "confirm", "passkey": "012345"})
+        );
+        let back: EventMessage =
+            serde_json::from_value(serde_json::to_value(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+        assert!(
+            PairingStep::Confirm {
+                passkey: "1".into()
+            }
+            .needs_reply()
+        );
+        assert!(!PairingStep::Searching.needs_reply());
+
+        let req: Request = serde_json::from_value(
+            json!({"v": 1, "id": 8, "cmd": "bluetooth.pair_reply", "request": 7, "accept": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            req.command,
+            Command::BluetoothPairReply {
+                request: 7,
+                accept: Some(true),
+                pin: None,
+                passkey: None
+            }
+        );
     }
 
     #[test]

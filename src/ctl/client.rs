@@ -54,6 +54,21 @@ pub enum CtlError {
     Reported,
 }
 
+/// Something the daemon sent.
+pub enum Message {
+    Response(Response),
+    Event(EventMessage),
+}
+
+/// A response's result, or its error.
+pub fn result(res: Response) -> Result<Value, CtlError> {
+    match (res.ok, res.result, res.error) {
+        (true, result, _) => Ok(result.unwrap_or(Value::Null)),
+        (false, _, Some(e)) => Err(CtlError::Api(e)),
+        (false, _, None) => Err(CtlError::Protocol("an error with no detail".into())),
+    }
+}
+
 pub struct Client {
     path: PathBuf,
     reader: BufReader<OwnedReadHalf>,
@@ -82,6 +97,18 @@ impl Client {
     /// Send `command` and return its result, skipping any events that
     /// arrive first.
     pub async fn call(&mut self, command: Command) -> Result<Value, CtlError> {
+        let id = self.send(command).await?;
+        loop {
+            match self.next_message().await?.ok_or(CtlError::Closed)? {
+                Message::Response(res) if res.id == Some(id) => return result(res),
+                _ => continue,
+            }
+        }
+    }
+
+    /// Send `command` without waiting for its response, and return its id.
+    /// The daemon answers requests by id, so several can be in flight.
+    pub async fn send(&mut self, command: Command) -> Result<u64, CtlError> {
         let id = self.next_id;
         self.next_id += 1;
         let mut line = serde_json::to_string(&Request {
@@ -92,21 +119,23 @@ impl Client {
         .map_err(|e| CtlError::Protocol(e.to_string()))?;
         line.push('\n');
         self.writer.write_all(line.as_bytes()).await?;
-        loop {
-            let msg = self.read_line().await?.ok_or(CtlError::Closed)?;
-            if msg.get("event").is_some() {
-                continue;
-            }
-            let res: Response =
-                serde_json::from_value(msg).map_err(|e| CtlError::Protocol(e.to_string()))?;
-            if res.id != Some(id) {
-                continue;
-            }
-            return match (res.ok, res.result, res.error) {
-                (true, result, _) => Ok(result.unwrap_or(Value::Null)),
-                (false, _, Some(e)) => Err(CtlError::Api(e)),
-                (false, _, None) => Err(CtlError::Protocol("an error with no detail".into())),
-            };
+        Ok(id)
+    }
+
+    /// The next response or event; `None` when the daemon goes away.
+    pub async fn next_message(&mut self) -> Result<Option<Message>, CtlError> {
+        let Some(msg) = self.read_line().await? else {
+            return Ok(None);
+        };
+        let protocol = |e: serde_json::Error| CtlError::Protocol(e.to_string());
+        if msg.get("event").is_some() {
+            serde_json::from_value(msg)
+                .map(|e| Some(Message::Event(e)))
+                .map_err(protocol)
+        } else {
+            serde_json::from_value(msg)
+                .map(|r| Some(Message::Response(r)))
+                .map_err(protocol)
         }
     }
 

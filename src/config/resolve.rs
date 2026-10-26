@@ -342,6 +342,20 @@ pub struct Config {
 }
 
 impl Config {
+    /// An adapter value from outside the config (an id, a MAC or `hciN`),
+    /// or `None` for an id no `[[adapter]]` defines.
+    pub fn adapter_sel(&self, value: &str) -> Option<AdapterSel> {
+        match AdapterValue::parse(value) {
+            AdapterValue::Mac(m) => Some(AdapterSel::Mac(m)),
+            AdapterValue::Hci(h) => Some(AdapterSel::Hci(h)),
+            AdapterValue::Id(id) => self
+                .adapters
+                .iter()
+                .find(|a| a.id == id)
+                .map(|a| AdapterSel::Mac(a.mac)),
+        }
+    }
+
     pub fn tnc(&self, id: &str) -> Option<&Tnc> {
         self.tncs.iter().find(|t| t.id == id)
     }
