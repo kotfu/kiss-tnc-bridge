@@ -396,35 +396,29 @@ set to. You don't need to turn KISS on from the radio's menu.
 ### Over Bluetooth
 
 1. On the radio, set `KISS (983)` to Bluetooth and turn Bluetooth on.
-2. Pair the radio once on the Pi, on the adapter the bridge will use for it.
-   The radio uses numeric comparison: it shows a six-digit number, and you
-   press OK on the radio within 30 seconds. Put the radio in pairing mode
-   (`Menu > Bluetooth > Pairing Mode`), then:
+2. Pair the radio once on the Pi, on the adapter the bridge will use for it,
+   with the daemon running. The radio uses numeric comparison: it shows a
+   six-digit number, and you press OK on the radio within 30 seconds. Put
+   the radio in pairing mode (`Menu > Bluetooth > Pairing Mode`), then find
+   its address and pair it (`hci0` here; an adapter's MAC or `[[adapter]]`
+   id works too):
 
    ```
-   $ bluetoothctl
-   [bluetooth]# list                           # adapters, if you have more than one
-   [bluetooth]# select 2C:CF:67:6E:2E:BC       # the adapter to pair on
-   [bluetooth]# agent KeyboardDisplay
-   [bluetooth]# scan bredr
-   [NEW] Device 40:79:12:E4:95:9D TH-D75
-   [bluetooth]# scan off
-   [bluetooth]# pair 40:79:12:E4:95:9D
-   [agent] Confirm passkey 774523 (yes/no): yes
+   $ ktbctl scan --adapter hci0
+   40:79:12:E4:95:9D  TH-D75               Kenwood TH-D75 (model th-d75)    -52 dBm
+   $ ktbctl pair --address 40:79:12:E4:95:9D --adapter hci0
+   Pairing with TH-D75...
+   The radio should show 774523. Does it? [Y/n] y
+   Now confirm it on the radio (press OK).
+   paired with 40:79:12:E4:95:9D on hci0 (2C:CF:67:6E:2E:BC), and trusted
    ```
 
-   Check that the number matches the radio's and press OK on the radio. If
-   pairing fails with `Authentication Failed` after about 30 seconds, OK
+   If it fails after about 30 seconds because the radio didn't confirm, OK
    wasn't pressed in time: dismiss any prompt still on the radio, put it in
-   pairing mode again and retry. Then trust it, so reconnects need no
-   prompt:
-
-   ```
-   [bluetooth]# trust 40:79:12:E4:95:9D
-   [bluetooth]# quit
-   ```
-
-   The daemon can stay running while you pair.
+   pairing mode again and retry. Once a TNC is configured for the radio,
+   `ktbctl pair d75` and `ktbctl unpair d75` work by its id. (Without
+   `ktbctl`, `bluetoothctl` can pair it too: `agent KeyboardDisplay`,
+   `scan bredr`, `pair ADDRESS`, then `trust ADDRESS`.)
 3. Configure a `[[tnc]]` with the radio's address and the adapter it's
    paired on, and a bridge with an `spp-client` port for it:
 
@@ -454,8 +448,11 @@ set to. You don't need to turn KISS on from the radio's menu.
      type = "ble-server"
    ```
 
+   The same can be made with `ktbctl` (`tnc add`, `bridge add`, `port add`;
+   see [Managing it with `ktbctl`](#managing-it-with-ktbctl)).
 4. Run `kiss-tnc-bridge -t`. It warns if the radio isn't paired on that
-   adapter; the bridge would report the port as unpaired and wait.
+   adapter; the bridge would report the port as unpaired and wait, and
+   connect a few seconds after `ktbctl pair`.
 
 With the default `connect = "on_demand"`, the bridge connects to the radio
 when the first app attaches. A connect takes about 5 seconds from cold, and

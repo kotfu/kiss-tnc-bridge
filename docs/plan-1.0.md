@@ -910,16 +910,19 @@ filter on app-to-TNC traffic:
 ### Pairing agent
 
 Phones don't pair with the bridge (see the Phase 3 notes), so the daemon
-registers no agent. Radios do: the D75 needs SSP numeric comparison
-(Phase 0), done with `bluetoothctl` until `ktbctl pair`. Plan for that:
+normally registers no agent. Radios do: the D75 needs SSP numeric
+comparison (Phase 0). As built in Phase 4:
 
-- **Pairing window:** when the control API receives `pair`, the daemon
-  registers a `KeyboardDisplay` agent whose callbacks (`request_pin_code`,
-  `display_passkey`, `request_confirmation`, …) are forwarded as events to
-  the requesting control client, calls `device.pair()`, waits up to 60 s,
-  sets the device trusted, and unregisters the agent. The Phase 2
-  `NoInputNoOutput` agent (git 662d2e2) shows the D-Bus plumbing, which
-  bluer can't do without changing the capability.
+- **Pairing window:** `bluetooth.pair` registers an agent with every
+  callback (so BlueZ sees `KeyboardDisplay`) on the daemon's own D-Bus
+  connection, only for that pairing. BlueZ gives a `Pair` call to the
+  caller's agent before any default (`agent_get(sender)` in 5.82), so the
+  agent never needs to be the default. Its callbacks become `pairing`
+  events to the requesting connection, answered with
+  `bluetooth.pair_reply`. The daemon calls `device.pair()`, waits up to
+  90 s, trusts the device, and drops the agent. bluer's own agent API does
+  this; the hand-rolled D-Bus agent of Phase 2 (git 662d2e2) existed only
+  because phones needed `NoInputNoOutput`.
 
 ---
 
@@ -1705,9 +1708,14 @@ the TUI.
 - [x] `monitor`, with the AX.25 header decode the daemon already sends;
       it waits and resubscribes when the daemon restarts.
 - [x] `ktbctl` in the deb, rpm and tarball, and in `scripts/pi-deploy.sh`.
-- [ ] Pairing-window agent for radios (`ktbctl pair`; the daemon registers
-      no agent otherwise, since phones don't pair), `scan` with radio
-      detection, and the `setup` wizard.
+- [x] Pairing for radios: `bluetooth.scan`, `bluetooth.pair` (an agent
+      registered only for the pairing, on the daemon's own D-Bus connection,
+      which BlueZ uses for that `Pair` call; steps relayed to the requesting
+      connection as `pairing` events, answered with `bluetooth.pair_reply`)
+      and `bluetooth.unpair`; `ktbctl scan`, `pair`, `unpair`. For this a
+      connection may have several requests in flight. Tested on the Pi:
+      unpairing and re-pairing the D75, which reconnected on its own.
+- [ ] The `setup` wizard.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing

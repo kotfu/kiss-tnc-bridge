@@ -144,7 +144,7 @@ pub async fn pairing_warnings(cfg: &Config) -> Result<Vec<Problem>, String> {
                 source,
                 object,
                 format!(
-                    "{} is not paired on adapter {}; pair it with bluetoothctl (see the README)",
+                    "{} is not paired on adapter {}; pair it with: ktbctl pair {tnc}",
                     spp.address,
                     describe(&adapter).await
                 ),

@@ -23,8 +23,8 @@
 //! A `channel` in the TNC's config skips SDP for devices that need it.
 //!
 //! A TNC that isn't paired on its adapter is reported as unpaired and
-//! checked again every few seconds, without paging the radio. Pairing is a
-//! manual step with `bluetoothctl` until `ktbctl pair` exists.
+//! checked again every few seconds, without paging the radio, so it
+//! connects soon after `ktbctl pair` pairs it.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -223,7 +223,7 @@ impl TncConnector for SppConnector {
                 .map_err(|e| fail(format!("BlueZ: {e}")))?;
             if !device.is_paired().await.unwrap_or(false) {
                 return Err(Error::Unpaired(format!(
-                    "tnc {tnc_id} ({addr}) is not paired on adapter {adapter_desc}; pair it with bluetoothctl (see the README)"
+                    "tnc {tnc_id} ({addr}) is not paired on adapter {adapter_desc}; pair it with: ktbctl pair {tnc_id}"
                 )));
             }
 
