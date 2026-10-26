@@ -44,7 +44,7 @@ use std::path::PathBuf;
 pub use load::{Loaded, load};
 pub use model::{AppParams, ConnectPolicy, Role};
 pub use resolve::{
-    Adapter, AdapterSel, AdapterValue, Bridge, Config, Control, Global, Listen, Mac, Port,
+    Adapter, AdapterSel, AdapterValue, Bridge, Config, Control, Global, Listen, MODELS, Mac, Port,
     PortKind, SerialDevice, Spp, Tnc, TncModel, resolve,
 };
 pub use validate::{Report, validate};

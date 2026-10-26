@@ -28,6 +28,7 @@ pub mod bluez_conf;
 pub mod bridge;
 pub mod config;
 pub mod control;
+pub mod ctl;
 pub mod error;
 pub mod kiss;
 pub mod port;

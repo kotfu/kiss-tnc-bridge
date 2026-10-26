@@ -92,6 +92,8 @@ fi
 staging="$(mktemp -d)"
 trap 'rm -rf "$staging"' EXIT
 cp "$binary" "$staging/kiss-tnc-bridge"
+ktbctl="$(dirname "$binary")/ktbctl"
+[[ -x "$ktbctl" ]] && cp "$ktbctl" "$staging/ktbctl"
 
 if [[ -n "$PI_CONFIG" ]]; then
     [[ -f "$PI_CONFIG" ]] || die "PI_CONFIG file not found: $PI_CONFIG"

@@ -89,6 +89,18 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   (static ones through overrides), hold TNC links up or down, kick
   sessions, and list serial devices. Every change can be refused rather
   than disrupt anyone (`non_disruptive`). `ktbctl` comes next.
+- A disabled bridge may be incomplete (no TNC port, or no app port yet),
+  so a bridge can be built up a port at a time and enabled when it's
+  complete. Bridges created through the control API start disabled, and
+  `status` and `-t` show what an incomplete bridge still needs.
+- `ktbctl`, the command-line client for the control socket: `status`;
+  listing adapters, TNCs, serial devices and TNC models; adding and
+  removing adapters, TNCs, bridges and ports; `enable`, `disable`,
+  `switch`, `connect`, `disconnect` and `kick`; `edit` in `$EDITOR`;
+  `check`, `reload` and `monitor` (live decoded frames). Changes that would
+  disconnect someone are confirmed in a terminal and refused without one
+  unless given `--yes`. Every command takes `--json`. Packaged alongside
+  the daemon.
 
 ### Fixed
 

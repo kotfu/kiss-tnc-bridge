@@ -102,8 +102,9 @@ pub enum Command {
 
     // Bridges, named by id or name in `bridge`. Definitions use the same
     // keys as a `[[bridge]]` in TOML, with ports under `port`.
-    /// A new dynamic bridge, ports and all. Without an `id`, the lowest free
-    /// `ktbrN`.
+    /// A new dynamic bridge. It needs only a `name`, and starts disabled
+    /// unless the definition says `enabled = true`; ports can come with it
+    /// or be added with `port.add`. Without an `id`, the lowest free `ktbrN`.
     #[serde(rename = "bridge.create")]
     BridgeCreate {
         definition: Value,
@@ -246,6 +247,9 @@ pub enum Command {
     /// Serial devices present, by stable path, flagging known TNCs.
     #[serde(rename = "serial.list")]
     SerialList,
+    /// The TNC models this daemon knows, and what each does.
+    #[serde(rename = "tnc.models")]
+    TncModels,
 }
 
 impl Command {
@@ -279,6 +283,7 @@ impl Command {
         "adapter.update",
         "adapter.delete",
         "serial.list",
+        "tnc.models",
     ];
 }
 
@@ -523,6 +528,16 @@ pub struct SerialEntry {
     pub tnc: Option<String>,
 }
 
+/// One TNC model, as `tnc.models` lists them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ModelEntry {
+    /// What to write for `model`; models that share a profile have several.
+    pub names: Vec<String>,
+    /// What the daemon does for it.
+    pub summary: String,
+}
+
 /// The result of `config.check`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -618,6 +633,11 @@ pub struct BridgeStatus {
     /// Dynamic bridges can be changed through the API; static ones can only
     /// be enabled and disabled.
     pub editable: bool,
+    /// What it still needs before it can be enabled ("no TNC port", "no
+    /// app port"); empty when it's complete. Only disabled bridges can be
+    /// incomplete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incomplete: Vec<String>,
     pub ports: Vec<PortStatus>,
     /// While running.
     #[serde(default, skip_serializing_if = "Option::is_none")]

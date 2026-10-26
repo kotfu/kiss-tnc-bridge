@@ -92,6 +92,7 @@ jobs:
           ARCHIVE_NAME="kiss-tnc-bridge-${VERSION}-linux-${{ matrix.arch }}"
           mkdir -p "${ARCHIVE_NAME}"
           cp "target/${{ matrix.target }}/release/kiss-tnc-bridge" "${ARCHIVE_NAME}/"
+          cp "target/${{ matrix.target }}/release/ktbctl" "${ARCHIVE_NAME}/"
           cp kiss-tnc-bridge.example.toml "${ARCHIVE_NAME}/"
           cp kiss-tnc-bridge.service "${ARCHIVE_NAME}/"
           cp 70-kiss-tnc-bridge.rules "${ARCHIVE_NAME}/"

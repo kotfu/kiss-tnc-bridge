@@ -53,6 +53,7 @@ depends = "$auto, bluez"
 section = "net"
 assets = [
     ["target/release/kiss-tnc-bridge", "usr/bin/", "755"],
+    ["target/release/ktbctl", "usr/bin/", "755"],
     ["kiss-tnc-bridge.example.toml", "usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", "644"],
     ["kiss-tnc-bridge.service", "lib/systemd/system/", "644"],
     ["70-kiss-tnc-bridge.rules", "lib/udev/rules.d/", "644"],
@@ -63,6 +64,7 @@ maintainer-scripts = "debian/"
 release = "1"
 assets = [
     { source = "target/release/kiss-tnc-bridge", dest = "/usr/bin/kiss-tnc-bridge", mode = "755" },
+    { source = "target/release/ktbctl", dest = "/usr/bin/ktbctl", mode = "755" },
     { source = "kiss-tnc-bridge.example.toml", dest = "/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml", mode = "644", config = "noreplace" },
     { source = "kiss-tnc-bridge.example.toml", dest = "/usr/share/kiss-tnc-bridge/kiss-tnc-bridge.example.toml", mode = "644" },
     { source = "kiss-tnc-bridge.service", dest = "/lib/systemd/system/kiss-tnc-bridge.service", mode = "644" },

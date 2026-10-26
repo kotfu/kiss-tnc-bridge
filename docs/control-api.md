@@ -166,6 +166,10 @@ Everything at once. No parameters.
   `failed` or `stopped`. Ports of disabled bridges are `disabled`.
 - A static bridge's `enabled_override` is there when `bridge.enable` or
   `bridge.disable` has overridden what its file says.
+- A disabled bridge that can't be enabled yet lists what it needs in
+  `incomplete` (`"no TNC port"`, `"no app port"`, `"2 TNC ports (a bridge
+  takes one)"`). Enabled bridges are always complete: changes that would
+  leave one incomplete are refused.
 - `paired` is absent when it can't be known (no BlueZ, adapter not
   present); `counters` is absent for bridges that aren't running.
 - A session's `id` (`ktbr0/lan/192.168.4.20:51515`) is the same in
@@ -221,11 +225,11 @@ array under `port`. `bridge` names one by id or name.
 
 | Command | Parameters | Does |
 |---|---|---|
-| `bridge.create` | `definition` | A new dynamic bridge, ports and all (a bridge needs its TNC port and an app port to be valid). Without `id`, the lowest free `ktbrN`. Ports without ids get explicit ones (`tcp-server0`). Returns the id |
+| `bridge.create` | `definition` | A new dynamic bridge. It needs only a `name`, and starts disabled unless the definition says `enabled = true`; ports can come with it or be added one at a time with `port.add`. Without `id`, the lowest free `ktbrN`. Ports without ids get explicit ones (`tcp-server0`). Returns the id |
 | `bridge.update` | `bridge`, `definition` | Replace a dynamic bridge's definition. Its id can't change |
 | `bridge.delete` | `bridge` | Delete a dynamic bridge |
 | `bridge.clone` | `bridge`, `name`, optional `new_id` | Copy any bridge, static or dynamic, into a new dynamic one: disabled, with its public name following its new name. Returns the id |
-| `bridge.enable` | `bridge`, optional `reset` | Enable a bridge. On a static bridge this stores an override in `state.toml`; `reset` drops the override and goes back to what the file says. Fails with `config_invalid` if it conflicts with an enabled bridge (the same TNC, listen socket, public name or BLE adapter); the message names it |
+| `bridge.enable` | `bridge`, optional `reset` | Enable a bridge. On a static bridge this stores an override in `state.toml`; `reset` drops the override and goes back to what the file says. Fails with `config_invalid` if the bridge is incomplete (it needs exactly one TNC port and at least one app port), or if it conflicts with an enabled bridge (the same TNC, listen socket, public name or BLE adapter); the message says which |
 | `bridge.disable` | `bridge` | Disable a bridge (an override, for a static one) |
 | `bridge.switch` | `bridge` | Enable a bridge and disable every enabled bridge that conflicts with it, in one change |
 | `bridge.retry_public_name` | `bridge` | Drop a DNS-SD collision adjustment and use the configured public name again. Works on static bridges too. Returns `{}` |
@@ -281,6 +285,16 @@ The serial devices present, by their stable udev names, for setting up
 `path` is the by-id name when there is one; by-id names are per model for
 radios without a USB serial number (the TH-D75), so with two of them, use
 their by-path names from `also`.
+
+### `tnc.models`
+
+The TNC models this daemon knows, with the names to use for `model` and
+what the daemon does for each:
+
+```jsonc
+[{"names": ["generic"], "summary": "the default: any TNC that's always in KISS mode; …"},
+ {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …"}]
+```
 
 ## Events
 

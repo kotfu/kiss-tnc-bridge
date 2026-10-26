@@ -27,7 +27,7 @@
 #![cfg(feature = "schema")]
 
 use kiss_tnc_bridge::control::protocol::{
-    ChangeResult, CheckResult, ConfigText, EventMessage, PlanResult, Request, Response,
+    ChangeResult, CheckResult, ConfigText, EventMessage, ModelEntry, PlanResult, Request, Response,
     SerialEntry, Status,
 };
 use serde_json::{Value, json};
@@ -52,6 +52,7 @@ fn generate() -> String {
             "config.check": schema::<CheckResult>(),
             "config.get": schema::<ConfigText>(),
             "serial.list": schema::<Vec<SerialEntry>>(),
+            "tnc.models": schema::<Vec<ModelEntry>>(),
             "changes": schema::<ChangeResult>(),
         },
     });
