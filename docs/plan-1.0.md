@@ -1708,6 +1708,8 @@ the TUI.
 - [ ] Pairing-window agent for radios (`ktbctl pair`; the daemon registers
       no agent otherwise, since phones don't pair), `scan` with radio
       detection, and the `setup` wizard.
+- [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
+      follow at first. Specific changes held until there's more use of it.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH; it reconnects when the daemon
       restarts, as `monitor` does.
