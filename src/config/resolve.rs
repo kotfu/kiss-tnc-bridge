@@ -429,6 +429,23 @@ impl Bridge {
         self.ports.iter().filter(|p| p.role == Role::App)
     }
 
+    /// What keeps this bridge from running, if anything: a bridge needs
+    /// exactly one TNC port and at least one app port. Only an enabled
+    /// bridge must be complete; a disabled one can be built up a port at a
+    /// time.
+    pub fn incomplete(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        match self.tnc_ports().count() {
+            0 => out.push("no TNC port".to_string()),
+            1 => {}
+            n => out.push(format!("{n} TNC ports (a bridge takes one)")),
+        }
+        if self.app_ports().next().is_none() {
+            out.push("no app port".to_string());
+        }
+        out
+    }
+
     pub fn port(&self, id: &str) -> Option<&Port> {
         self.ports.iter().find(|p| p.id == id)
     }

@@ -1667,6 +1667,13 @@
             "id": {
               "type": "string"
             },
+            "incomplete": {
+              "description": "What it still needs before it can be enabled (\"no TNC port\", \"no\napp port\"); empty when it's complete. Only disabled bridges can be\nincomplete.",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
             "name": {
               "type": "string"
             },

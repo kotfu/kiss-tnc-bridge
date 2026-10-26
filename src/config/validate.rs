@@ -148,24 +148,26 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
                 );
             }
         }
+        // Only an enabled bridge has to be complete; a disabled one can be
+        // built up a port at a time (Bridge::incomplete reports what's left).
         let tnc = b.tnc_ports().count();
         let app = b.app_ports().count();
-        if tnc != 1 {
+        if b.enabled && tnc != 1 {
             err(
                 &mut r,
                 &b.source,
                 &object,
                 format!(
-                    "a bridge needs exactly one TNC port (spp-client, serial, tcp-client, or a port with role = \"tnc\"); this one has {tnc}"
+                    "an enabled bridge needs exactly one TNC port (spp-client, serial, tcp-client, or a port with role = \"tnc\"); this one has {tnc}. Fix its ports, or disable it"
                 ),
             );
         }
-        if app == 0 {
+        if b.enabled && app == 0 {
             err(
                 &mut r,
                 &b.source,
                 &object,
-                "a bridge needs at least one app port (a ble-server or tcp-server)".into(),
+                "an enabled bridge needs at least one app port (a ble-server or tcp-server). Add one, or disable it".into(),
             );
         }
 
@@ -420,11 +422,27 @@ name = "Graywolf at home"
             "{e:?}"
         );
 
-        // Two TNC ports, even on a disabled bridge.
-        let e = errors(
-            "[[bridge]]\nid = \"ktbr0\"\nname = \"x\"\nenabled = false\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"a:1\"\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"b:1\"\n[[bridge.port]]\ntype = \"ble-server\"\n",
-        );
+        // Two TNC ports on an enabled bridge.
+        let two = "[[bridge]]\nid = \"ktbr0\"\nname = \"x\"\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"a:1\"\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"b:1\"\n[[bridge.port]]\ntype = \"ble-server\"\n";
+        let e = errors(two);
         assert!(e.iter().any(|m| m.contains("this one has 2")), "{e:?}");
+
+        // A disabled bridge can be incomplete: it says what's missing
+        // instead of failing validation.
+        let disabled = two.replace("name = \"x\"\n", "name = \"x\"\nenabled = false\n");
+        let e = errors(&disabled);
+        assert!(e.is_empty(), "{e:?}");
+        assert_eq!(
+            cfg(&disabled).bridges[0].incomplete(),
+            ["2 TNC ports (a bridge takes one)"]
+        );
+        let empty = "[[bridge]]\nid = \"ktbr0\"\nname = \"x\"\nenabled = false\n";
+        assert!(errors(empty).is_empty());
+        assert_eq!(
+            cfg(empty).bridges[0].incomplete(),
+            ["no TNC port", "no app port"]
+        );
+        assert!(cfg(HOME).bridges[0].incomplete().is_empty());
 
         // A role override makes a tcp-client an app port.
         let e = errors(

@@ -1067,6 +1067,7 @@ impl Daemon {
                 },
                 source: b.source.to_string(),
                 editable: !b.source.is_static(),
+                incomplete: b.incomplete(),
                 ports,
                 counters: rb.map(|rb| {
                     let c = &rb.handle.counters;

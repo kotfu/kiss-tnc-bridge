@@ -618,6 +618,11 @@ pub struct BridgeStatus {
     /// Dynamic bridges can be changed through the API; static ones can only
     /// be enabled and disabled.
     pub editable: bool,
+    /// What it still needs before it can be enabled ("no TNC port", "no
+    /// app port"); empty when it's complete. Only disabled bridges can be
+    /// incomplete.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub incomplete: Vec<String>,
     pub ports: Vec<PortStatus>,
     /// While running.
     #[serde(default, skip_serializing_if = "Option::is_none")]

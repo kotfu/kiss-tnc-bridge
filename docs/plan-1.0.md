@@ -594,9 +594,10 @@ Errors:
   the same serial path, or two adapter objects with the same MAC. These are
   checked whether or not anything is enabled, because they're duplicate
   definitions of the same hardware.
-- A bridge without exactly one TNC port, or without at least one app port.
-  This also applies to disabled bridges, so a bridge is known valid before
-  it's enabled.
+- An **enabled** bridge without exactly one TNC port, or without at least
+  one app port. A disabled bridge may be incomplete, so it can be built up
+  a port at a time; `status` and `-t` say what it still needs, and enabling
+  it fails until it's complete.
 - Among **enabled** bridges only, resource conflicts:
   - the same TNC on two ports, whatever the transport. A TNC accepts one SPP
     connection, a serial device should be opened once, and as far as we
@@ -1627,10 +1628,11 @@ Notes:
   kind (`bridge`, `port`, `tnc`, `adapter`, `session`, `object`) and new
   definitions go under `definition`. The first draft flattened an object
   `id` next to the request's, and they collided.
-- A bridge must be valid even when disabled, so `bridge.create` takes the
-  whole definition, ports included; `port.add`/`remove` then change it.
-  `ktbctl bridge add` will build that definition from its flags or the
-  setup wizard.
+- At first a bridge had to be complete even when disabled, so
+  `bridge.create` needed the whole definition, ports included. Phase 4
+  dropped that: a disabled bridge may be incomplete, new bridges start
+  disabled, and `bridge.enable` checks completeness, so `ktbctl` can add a
+  bridge, add its ports, then enable it.
 - Every change edits a copy of `dynamic.toml`, rebuilds from the static
   files as last read plus the copy, validates, plans, honours
   `non_disruptive`, then saves and applies, so changes touch only what
@@ -1683,6 +1685,12 @@ the same branch:
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
+Three PRs: the CLI (`phase4-ktbctl-cli`); pairing, `scan` and `setup`; then
+the TUI.
+
+- [x] Disabled bridges may be incomplete, and new bridges start disabled, so
+      `ktbctl bridge add` takes just a name: add the bridge, add its ports,
+      enable it. `status` lists what an incomplete bridge still needs.
 - [ ] All CLI commands above, plus `--json`.
 - [ ] `ktbctl tnc models`: the models the daemon knows and what each does,
       from the same `MODELS` table as the config error (through the control

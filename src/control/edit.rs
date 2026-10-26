@@ -249,6 +249,11 @@ pub fn create_bridge(
     check_bridge_name(store, world, name, None)?;
     let mut t = json_to_table(def)?;
     t.insert("id", toml_edit::value(id.clone()));
+    // New bridges start disabled, so they can be built up a port at a time
+    // and enabled when they're complete.
+    if !t.contains_key("enabled") {
+        t.insert("enabled", toml_edit::value(false));
+    }
     name_ports(&mut t);
     store.put(Kind::Bridge, &id, t);
     Ok(id)

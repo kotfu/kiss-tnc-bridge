@@ -252,6 +252,10 @@ fn print_summary(cfg: &config::Config, report: &config::Report) {
         if b.public_name != b.name {
             println!("    public name \"{}\"", b.public_name);
         }
+        let incomplete = b.incomplete();
+        if !incomplete.is_empty() {
+            println!("    incomplete: {}", incomplete.join(", "));
+        }
         for p in &b.ports {
             println!(
                 "    {:<12} {:<11} {:<4} {}",

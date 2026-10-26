@@ -89,6 +89,10 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   (static ones through overrides), hold TNC links up or down, kick
   sessions, and list serial devices. Every change can be refused rather
   than disrupt anyone (`non_disruptive`). `ktbctl` comes next.
+- A disabled bridge may be incomplete (no TNC port, or no app port yet),
+  so a bridge can be built up a port at a time and enabled when it's
+  complete. Bridges created through the control API start disabled, and
+  `status` and `-t` show what an incomplete bridge still needs.
 
 ### Fixed
 

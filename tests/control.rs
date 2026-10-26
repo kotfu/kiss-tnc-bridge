@@ -395,33 +395,62 @@ async fn a_dynamic_bridge_from_creation_to_deletion() {
     let r = rig().await;
     let mut c = Client::connect(&r.socket).await;
     let (tnc_port, lan2) = (r.tnc.local_addr().unwrap().port(), free_port());
+
+    // A new bridge needs only a name, and starts disabled and empty.
     let res = c
-        .call(json!({"cmd": "bridge.create", "definition": {
-            "name": "Dyn",
-            "port": [
-                {"type": "tcp-client", "address": format!("127.0.0.1:{tnc_port}")},
-                {"id": "lan", "type": "tcp-server", "listen": format!("127.0.0.1:{lan2}")}
-            ]
-        }}))
+        .call(json!({"cmd": "bridge.create", "definition": {"name": "Dyn"}}))
         .await;
     let res = ok(&res);
     assert_eq!(res["id"], "ktbr1");
     assert_eq!(res["applied"], true);
-    let started = res["plan"]["bridges"]
+    let text = std::fs::read_to_string(r.state_file("dynamic.toml")).unwrap();
+    assert!(text.contains("enabled = false"), "{text}");
+    let st = c.call(json!({"cmd": "status"})).await;
+    let b = bridge(ok(&st), "ktbr1").unwrap().clone();
+    assert_eq!(b["enabled"], false);
+    assert_eq!(b["incomplete"], json!(["no TNC port", "no app port"]));
+
+    // It can't be enabled until it's complete.
+    let res = c
+        .call(json!({"cmd": "bridge.enable", "bridge": "Dyn"}))
+        .await;
+    assert_eq!(code(&res), "config_invalid");
+    assert!(
+        res["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("exactly one TNC port"),
+        "{res}"
+    );
+
+    // Ports one at a time, by the bridge's name, then enable it.
+    let res = c
+        .call(json!({"cmd": "port.add", "bridge": "Dyn", "definition":
+            {"type": "tcp-client", "address": format!("127.0.0.1:{tnc_port}")}}))
+        .await;
+    assert_eq!(ok(&res)["id"], "tcp-client0");
+    ok(&c
+        .call(json!({"cmd": "port.add", "bridge": "Dyn", "definition":
+            {"id": "lan", "type": "tcp-server", "listen": format!("127.0.0.1:{lan2}")}}))
+        .await);
+    let st = c.call(json!({"cmd": "status"})).await;
+    assert!(
+        bridge(ok(&st), "ktbr1")
+            .unwrap()
+            .get("incomplete")
+            .is_none()
+    );
+    let res = c
+        .call(json!({"cmd": "bridge.enable", "bridge": "Dyn"}))
+        .await;
+    let started = ok(&res)["plan"]["bridges"]
         .as_array()
         .unwrap()
         .iter()
         .find(|b| b["id"] == "ktbr1")
-        .unwrap();
-    assert_eq!(
-        (started["id"].as_str(), started["action"].as_str()),
-        (Some("ktbr1"), Some("started"))
-    );
-    let text = std::fs::read_to_string(r.state_file("dynamic.toml")).unwrap();
-    assert!(
-        text.contains("id = \"ktbr1\"") && text.contains("id = \"tcp-client0\""),
-        "{text}"
-    );
+        .unwrap()
+        .clone();
+    assert_eq!(started["action"], "started");
 
     let st = c.call(json!({"cmd": "status"})).await;
     let b = bridge(ok(&st), "ktbr1").unwrap().clone();
@@ -432,7 +461,7 @@ async fn a_dynamic_bridge_from_creation_to_deletion() {
     // Its tcp-server is up: an app can connect.
     TcpStream::connect(("127.0.0.1", lan2)).await.unwrap();
 
-    // A port, added by the bridge's name, then removed again.
+    // A port added to the running bridge, then removed again.
     let lan3 = free_port();
     let res = c
         .call(json!({"cmd": "port.add", "bridge": "Dyn", "definition": {"type": "tcp-server", "listen": format!("127.0.0.1:{lan3}")}}))
@@ -444,7 +473,7 @@ async fn a_dynamic_bridge_from_creation_to_deletion() {
         .await);
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(TcpStream::connect(("127.0.0.1", lan3)).await.is_err());
-    // Removing its last app port would leave it invalid.
+    // Removing its last app port would leave an enabled bridge incomplete.
     let res = c
         .call(json!({"cmd": "port.remove", "bridge": "ktbr1", "port": "lan"}))
         .await;
@@ -523,14 +552,15 @@ async fn switch_takes_over_a_listen_socket() {
             {"type": "tcp-server", "listen": format!("127.0.0.1:{}", r.lan)}
         ]
     });
+    let mut enabled = def.clone();
+    enabled["enabled"] = json!(true);
     let res = c
-        .call(json!({"cmd": "bridge.create", "definition": def.clone()}))
+        .call(json!({"cmd": "bridge.create", "definition": enabled}))
         .await;
     assert_eq!(code(&res), "config_invalid");
-    let mut disabled = def;
-    disabled["enabled"] = json!(false);
+    // New bridges start disabled.
     ok(&c
-        .call(json!({"cmd": "bridge.create", "definition": disabled}))
+        .call(json!({"cmd": "bridge.create", "definition": def}))
         .await);
     let res = c
         .call(json!({"cmd": "bridge.enable", "bridge": "Other"}))
