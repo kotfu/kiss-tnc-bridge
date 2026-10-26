@@ -389,9 +389,13 @@ impl Ctl {
                                 d
                             })
                             .collect();
+                        // Best: one no bridge advertises on, and not the
+                        // radio's own, which is busy with the radio.
+                        let radio = t.spp.as_ref().map(|s| s.adapter.as_str()).unwrap_or("");
                         let default = many
                             .iter()
-                            .position(|a| !taken.contains(&a.mac))
+                            .position(|a| !taken.contains(&a.mac) && !radio.contains(&a.mac))
+                            .or_else(|| many.iter().position(|a| !taken.contains(&a.mac)))
                             .unwrap_or(0);
                         Some(adapter_ref(
                             many[menu("Which adapter should advertise it?", &options, default)
