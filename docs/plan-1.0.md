@@ -1674,7 +1674,7 @@ the same branch:
   not, which keeps the controller from advertising. The port watches the
   links of phones it has served and drops one that's connected with no
   session (checked every 10 s).
-- **Open: BlueZ ends another phone's subscription.** When a phone's CCC
+- **Fixed upstream: BlueZ ends another phone's subscription.** When a phone's CCC
   state is discarded (every disconnect of an unbonded phone),
   `clear_ccc_state` calls `ccc_write_cb(NULL)`, and `match_client_att`
   matches any client for a NULL ATT, so BlueZ closes some other phone's
@@ -1684,7 +1684,10 @@ the same branch:
   this on the dev Pi (patched 5.82 bluetoothd, two phones, kicks and
   Bluetooth off), and we resent it with a `Tested-by`:
   <https://lore.kernel.org/linux-bluetooth/20261026032544.49563-1-jared@kotfu.net/T/#u>.
-  No workaround in the daemon; the README lists it under Known bugs.
+  It was merged on 2026-10-26 as
+  [f7e2cd91c266](https://git.kernel.org/pub/scm/bluetooth/bluez.git/commit/?id=f7e2cd91c2669cf50d07fe05caedf794e88f7476),
+  after 5.87. No workaround in the daemon; the README lists it under Known
+  bugs until distributions ship a release with it.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 

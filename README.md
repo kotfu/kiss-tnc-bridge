@@ -636,9 +636,11 @@ should be aware of.
   stops receiving until it reconnects: the daemon drops its link within
   about 10 seconds, and aprs.fi reconnects on its own. A phone whose app
   disconnects normally doesn't trigger it. The bug is in BlueZ (seen in
-  5.82 and 5.83, and still in its development tree), and a fix, tested on a
-  Pi with two phones, is waiting for review:
-  [gatt-database: Fix freeing wrong client notify IO](https://lore.kernel.org/linux-bluetooth/20261026032544.49563-1-jared@kotfu.net/T/#u).
+  5.82 and 5.83, and present through 5.87). The fix,
+  [gatt-database: Fix freeing wrong client notify IO](https://git.kernel.org/pub/scm/bluetooth/bluez.git/commit/?id=f7e2cd91c2669cf50d07fe05caedf794e88f7476),
+  was merged into BlueZ on 26 October 2026 and will be in the first release
+  after 5.87. Until your distribution ships that release, two phones on one
+  bridge will see this now and then.
 
 
 ## Recommended Hardware
