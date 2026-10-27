@@ -35,6 +35,7 @@
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use tokio::signal::unix::{SignalKind, signal};
 
 use super::cli::BtWho;
 use super::client::{Client, CtlError, Message, result};
@@ -514,7 +515,7 @@ impl Ctl {
             == 1;
 
         // Step 6.
-        let bridge = loop {
+        let (bridge, name) = loop {
             let name = ask_default("A name for the bridge", &default_name).await;
             match self
                 .change_result(c, |nd| Command::BridgeCreate {
@@ -523,7 +524,7 @@ impl Ctl {
                 })
                 .await
             {
-                Ok(r) => break r.id.unwrap_or_default(),
+                Ok(r) => break (r.id.unwrap_or_default(), name),
                 Err(CtlError::Api(e)) if e.code == ErrorCode::Conflict => {
                     self.report(&CtlError::Api(e));
                 }
@@ -582,7 +583,10 @@ impl Ctl {
             }
             Err(e) => return Err(e),
         }
-        println!("{bridge} is enabled.");
+        println!(
+            "\nYour setup is saved. Bridge {bridge} ({name}) is enabled: the daemon runs it \
+             from now on, including after a restart."
+        );
 
         // Step 7.
         self.check_tnc(c, &bridge, &tnc_port_id).await;
@@ -594,6 +598,9 @@ impl Ctl {
     /// policy again.
     async fn check_tnc(&self, c: &mut Client, bridge: &str, port: &str) {
         println!("\nConnecting to the TNC to check it...");
+        // Control-C ends the check but not ktbctl, so the link is still
+        // handed back below. Registered first, so it's caught from here on.
+        let mut interrupt = signal(SignalKind::interrupt()).ok();
         let mut events = match Client::connect(&self.socket).await {
             Ok(mut e) => match e.subscribe(vec![Topic::Frames]).await {
                 Ok(()) => Some(e),
@@ -601,34 +608,49 @@ impl Ctl {
             },
             Err(_) => None,
         };
-        let connect = Command::PortConnect {
-            bridge: bridge.to_string(),
-            port: port.to_string(),
-        };
-        if let Err(e) = c.call(connect).await {
-            self.report(&e);
-            return;
-        }
-        let connected = wait_for_link(c, bridge, port, Duration::from_secs(30)).await;
-        match connected {
-            Ok(()) => {
-                println!("The TNC is connected. Listening for a frame (up to 30 s)...");
-                let object = format!("{bridge}/{port}");
-                let heard = match events.as_mut() {
-                    Some(e) => first_frame(e, &object, Duration::from_secs(30)).await,
-                    None => None,
-                };
-                match heard {
-                    Some(summary) => println!("Heard: {summary}\nAll set."),
-                    None => println!(
-                        "Nothing heard in 30 s, which is normal on a quiet frequency. \
-                         `ktbctl monitor` shows frames as they come."
-                    ),
-                }
+        let check = async {
+            let connect = Command::PortConnect {
+                bridge: bridge.to_string(),
+                port: port.to_string(),
+            };
+            if let Err(e) = c.call(connect).await {
+                self.report(&e);
+                return;
             }
-            Err(why) => println!(
-                "The TNC didn't connect: {why}. `ktbctl status` shows the bridge as it tries."
-            ),
+            match wait_for_link(c, bridge, port, Duration::from_secs(30)).await {
+                Ok(()) => {
+                    println!(
+                        "The TNC is connected. Listening for a frame for up to 30 s \
+                         (Control-C stops listening; the bridge keeps running)..."
+                    );
+                    let object = format!("{bridge}/{port}");
+                    let heard = match events.as_mut() {
+                        Some(e) => first_frame(e, &object, Duration::from_secs(30)).await,
+                        None => None,
+                    };
+                    match heard {
+                        Some(summary) => println!("Heard: {summary}\nAll set."),
+                        None => {
+                            println!("Nothing heard in 30 s, which is normal on a quiet frequency.")
+                        }
+                    }
+                }
+                Err(why) => println!(
+                    "The TNC didn't connect: {why}. `ktbctl status` shows the bridge as it tries."
+                ),
+            }
+        };
+        let interrupted = async {
+            match interrupt.as_mut() {
+                Some(s) => {
+                    s.recv().await;
+                }
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::select! {
+            () = check => {}
+            () = interrupted => println!("\nStopped the check; {bridge} keeps running."),
         }
         let _ = c
             .call(Command::PortRelease {
@@ -636,6 +658,7 @@ impl Ctl {
                 port: port.to_string(),
             })
             .await;
+        println!("'ktbctl monitor' shows all frames that pass through the bridge.");
     }
 
     /// The value to use for `adapter` in config: its id, or after offering
