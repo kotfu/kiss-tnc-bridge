@@ -192,6 +192,12 @@ fn build_a_bridge_then_enable_it() {
 
     let out = ktbctl(s, &["tnc", "models"]);
     assert!(out.stdout.contains("th-d74, th-d75"), "{}", out.stdout);
+    assert!(
+        out.stdout
+            .contains("Kenwood TH-D75 (model = \"th-d75\"): Bluetooth, USB"),
+        "{}",
+        out.stdout
+    );
     let out = ktbctl(s, &["check"]);
     assert!(out.ok && out.stdout.contains("config ok"), "{}", out.stdout);
 

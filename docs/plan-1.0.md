@@ -1715,7 +1715,11 @@ the TUI.
       and `bluetooth.unpair`; `ktbctl scan`, `pair`, `unpair`. For this a
       connection may have several requests in flight. Tested on the Pi:
       unpairing and re-pairing the D75, which reconnected on its own.
-- [x] The `setup` wizard, as in the plan above. Its check (step 7) holds
+- [x] The `setup` wizard: how it reaches the TNC first (Bluetooth, USB or
+      serial, or the network), then which radio for Bluetooth and USB, with
+      each radio's setup instructions in the daemon's model table (served
+      by `tnc.models`; generic wording for other radios), and one "how
+      should apps reach it" choice (BLE, TCP or both). Its check (step 7) holds
       the TNC link up with `port.connect` and then hands it back with a new
       `port.release`, since an `on_demand` bridge with no apps wouldn't
       connect at all.
@@ -1724,6 +1728,18 @@ the TUI.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH; it reconnects when the daemon
       restarts, as `monitor` does.
+
+- [ ] **Deferred: BLE TNCs** (a `ble-client` TNC port). Some radios'
+      built-in TNCs are reached over Bluetooth LE rather than Classic SPP
+      (the BTech UV-Pro, Mobilinkd TNC4). The daemon would be a BLE central
+      to the radio: the mirror of `ble-server`, if the radio speaks the same
+      BLE KISS service (`00000001-ba2a-…`; to be confirmed per radio, the
+      UV-Pro first). `bluetooth.scan` would then scan both transports and
+      tell them apart by what each offers, so `setup`'s one "Bluetooth"
+      choice covers both. Open questions: whether such radios need pairing,
+      and whether one adapter can be a central to the radio and a
+      peripheral to phones at once (it depends on the controller; sharing
+      over TCP only avoids it). Needs a radio to develop against.
 
 ### Phase 5: Hardening → release 1.0.0
 

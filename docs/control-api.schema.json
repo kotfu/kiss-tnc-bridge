@@ -2276,6 +2276,13 @@
               },
               "type": "array"
             },
+            "radios": {
+              "description": "The radios with this TNC, and how to set each one up.",
+              "items": {
+                "$ref": "#/$defs/RadioEntry"
+              },
+              "type": "array"
+            },
             "summary": {
               "description": "What the daemon does for it.",
               "type": "string"
@@ -2284,6 +2291,92 @@
           "required": [
             "names",
             "summary"
+          ],
+          "type": "object"
+        },
+        "RadioBluetoothEntry": {
+          "properties": {
+            "name_prefix": {
+              "description": "The start of the name it announces in a scan.",
+              "type": "string"
+            },
+            "pairing": {
+              "description": "What happens while it pairs.",
+              "type": "string"
+            },
+            "pairing_mode": {
+              "description": "How to make it discoverable for pairing.",
+              "type": "string"
+            },
+            "setup": {
+              "description": "What to do on the radio before the bridge can use its TNC.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name_prefix",
+            "setup",
+            "pairing_mode",
+            "pairing"
+          ],
+          "type": "object"
+        },
+        "RadioEntry": {
+          "description": "A radio the daemon knows, as `tnc.models` lists it.",
+          "properties": {
+            "bluetooth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RadioBluetoothEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present when it has a TNC over Bluetooth Classic."
+            },
+            "model": {
+              "description": "The `model` to write for it.",
+              "type": "string"
+            },
+            "name": {
+              "description": "`Kenwood TH-D75`.",
+              "type": "string"
+            },
+            "usb": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RadioUsbEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present when it has a TNC over USB."
+            }
+          },
+          "required": [
+            "name",
+            "model"
+          ],
+          "type": "object"
+        },
+        "RadioUsbEntry": {
+          "properties": {
+            "setup": {
+              "description": "What to do on the radio before the bridge can use its TNC.",
+              "type": "string"
+            },
+            "usb_id": {
+              "description": "`vendor:product`, as `serial.list` shows it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "setup"
           ],
           "type": "object"
         }

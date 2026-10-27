@@ -15,14 +15,17 @@
 
 //! `ktbctl setup`: a TNC and a bridge for it, step by step.
 //!
-//! 1. How the TNC is connected: Bluetooth, or USB/serial.
-//! 2. Bluetooth: an existing TNC, or pick the adapter, scan, pick the
-//!    radio, and pair it.
-//! 3. USB/serial: pick the device from the stable serial paths.
+//! 1. How the bridge reaches the TNC: Bluetooth, USB/serial, or the
+//!    network (a KISS TCP server, which needs nothing more).
+//! 2. For Bluetooth and USB, which radio it is, from the radios in the
+//!    daemon's model table, or another; its entry gives the instructions
+//!    from here on, and generic ones stand in for another radio.
+//! 3. Bluetooth: an existing TNC, or pick the adapter, scan, pick the
+//!    radio, and pair it. USB: pick the device from the stable paths.
 //! 4. The TNC: one already at that address or path, a new section on the
 //!    same radio's TNC, or a new TNC.
-//! 5. The bridge: its name, BLE (and on which adapter), TCP (and where,
-//!    with the exposure warning), and when to connect.
+//! 5. The bridge: how apps reach it (BLE and on which adapter, TCP and
+//!    where, with the exposure warning, or both), and when to connect.
 //! 6. Create it, add its ports, enable it (offering `switch` if another
 //!    bridge is in the way).
 //! 7. Connect, and wait for the first frame or 30 s of silence.
@@ -38,10 +41,22 @@ use super::client::{Client, CtlError, Message};
 use super::run::{Ctl, ask_line, confirm, interactive};
 use crate::control::protocol::{
     AdapterStatus, BtDevice, Command, ConfigText, ErrorCode, Event, ModelEntry, ObjectKind,
-    SerialEntry, Status, Topic,
+    RadioEntry, SerialEntry, Status, Topic,
 };
 
-const PAIRING_MODE: &str = "TH-D74/D75: Menu > Bluetooth > Pairing Mode";
+/// How the bridge reaches the TNC.
+enum Link {
+    Bluetooth,
+    Serial,
+}
+
+/// The bridge's TNC port, once the TNC side is settled.
+enum TncSide {
+    /// A `[[tnc]]` by id.
+    Tnc(String),
+    /// A KISS TCP server, at `host:port`.
+    Network(String),
+}
 
 impl Ctl {
     pub(super) async fn setup(&self, c: &mut Client) -> Result<(), CtlError> {
@@ -54,21 +69,64 @@ impl Ctl {
         println!("anything made by then stays, and `ktbctl status` shows it.\n");
         let s: Status = c.call_as(Command::Status).await?;
         let how = menu(
-            "How is the TNC connected?",
-            &["Bluetooth".into(), "USB or serial".into()],
+            "How will the bridge reach the TNC?",
+            &[
+                "Bluetooth".into(),
+                "USB or serial".into(),
+                "On the network (a KISS TCP server, such as Dire Wolf or Graywolf)".into(),
+            ],
             0,
         )
         .await;
-        let tnc = if how == 0 {
-            self.setup_bluetooth(c, &s).await?
-        } else {
-            self.setup_serial(c, &s).await?
+        let side = match how {
+            0 => {
+                let radio = self.pick_radio(c, Link::Bluetooth).await?;
+                TncSide::Tnc(self.setup_bluetooth(c, &s, radio.as_ref()).await?)
+            }
+            1 => {
+                let radio = self.pick_radio(c, Link::Serial).await?;
+                TncSide::Tnc(self.setup_serial(c, &s, radio.as_ref()).await?)
+            }
+            _ => {
+                println!(
+                    "\nThe TNC's KISS TCP address. Dire Wolf and Graywolf listen on port 8001 by default."
+                );
+                TncSide::Network(ask_default("Address (host:port)", "127.0.0.1:8001").await)
+            }
         };
-        self.setup_bridge(c, &tnc).await
+        self.setup_bridge(c, side).await
+    }
+
+    /// Which radio it is, from the radios the daemon knows that connect
+    /// this way; `None` for another radio or TNC.
+    async fn pick_radio(&self, c: &mut Client, link: Link) -> Result<Option<RadioEntry>, CtlError> {
+        let models: Vec<ModelEntry> = c.call_as(Command::TncModels).await?;
+        let radios: Vec<RadioEntry> = models
+            .into_iter()
+            .flat_map(|m| m.radios)
+            .filter(|r| match link {
+                Link::Bluetooth => r.bluetooth.is_some(),
+                Link::Serial => r.usb.is_some(),
+            })
+            .collect();
+        let mut options: Vec<String> = radios.iter().map(|r| r.name.clone()).collect();
+        options.push("Another radio or TNC".into());
+        let pick = menu("Which radio is it?", &options, 0).await;
+        Ok(radios.get(pick).cloned())
     }
 
     /// Steps 2 and 4 over Bluetooth. Returns the TNC's id.
-    async fn setup_bluetooth(&self, c: &mut Client, s: &Status) -> Result<String, CtlError> {
+    async fn setup_bluetooth(
+        &self,
+        c: &mut Client,
+        s: &Status,
+        radio: Option<&RadioEntry>,
+    ) -> Result<String, CtlError> {
+        let bt = radio.and_then(|r| r.bluetooth.as_ref());
+        let pairing_mode = match bt {
+            Some(b) => format!("Put the radio in pairing mode ({}).", b.pairing_mode),
+            None => "Make it discoverable (pairing mode); its manual says how.".into(),
+        };
         let existing: Vec<_> = s.tncs.iter().filter(|t| t.spp.is_some()).collect();
         if !existing.is_empty() {
             let mut options: Vec<String> = existing
@@ -86,11 +144,19 @@ impl Ctl {
                     )
                 })
                 .collect();
-            options.push("A radio not set up yet".into());
-            let pick = menu("Which radio?", &options, 0).await;
+            options.push("One not set up yet".into());
+            let pick = menu(
+                "Is it a TNC that's already set up?",
+                &options,
+                options.len() - 1,
+            )
+            .await;
             if let Some(t) = existing.get(pick) {
                 if t.spp.as_ref().and_then(|s| s.paired) != Some(true) {
-                    println!("\nPut the radio in pairing mode ({PAIRING_MODE}).");
+                    println!("\n{pairing_mode}");
+                    if let Some(b) = bt {
+                        println!("{}", b.pairing);
+                    }
                     self.pair(
                         c,
                         BtWho {
@@ -106,7 +172,11 @@ impl Ctl {
         }
 
         println!(
-            "\nOn the radio, set KISS to Bluetooth (TH-D74/D75: Menu 983) and turn Bluetooth on."
+            "\n{}",
+            bt.map(|b| b.setup.clone()).unwrap_or_else(|| {
+                "Turn on its Bluetooth, and its KISS TNC if it has a switch for it; its manual says how."
+                    .into()
+            })
         );
         let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
         let adapter = match present.as_slice() {
@@ -119,7 +189,8 @@ impl Ctl {
             many => {
                 let options: Vec<String> = many.iter().map(|a| describe_adapter(a)).collect();
                 many[menu(
-                    "Which adapter should talk to the radio? (The one it's paired on, or will be.)",
+                    "Which of this computer's adapters should talk to the radio? \
+                     (The one it's paired on, or will be.)",
                     &options,
                     0,
                 )
@@ -129,7 +200,7 @@ impl Ctl {
         let adapter_value = self.adapter_value(c, adapter, s).await?;
 
         let device = loop {
-            println!("\nPut the radio in pairing mode ({PAIRING_MODE}).");
+            println!("\n{pairing_mode}");
             if !confirm("Ready to look for it?", true).await {
                 return Err(CtlError::Message("stopped".into()));
             }
@@ -155,7 +226,17 @@ impl Ctl {
             if found.is_empty() {
                 println!("Nothing found.");
             }
-            let pick = menu("Which is the radio?", &options, 0).await;
+            // The radio they said it is, if the scan saw one.
+            let likely = bt
+                .and_then(|b| {
+                    found.iter().position(|d| {
+                        d.name
+                            .as_deref()
+                            .is_some_and(|n| n.starts_with(&b.name_prefix))
+                    })
+                })
+                .unwrap_or(0);
+            let pick = menu("Which is it?", &options, likely).await;
             if let Some(d) = found.get(pick) {
                 break d.clone();
             }
@@ -164,6 +245,9 @@ impl Ctl {
             println!("That's TNC {t}, already set up.");
         }
         if !device.paired {
+            if let Some(b) = bt {
+                println!("{}", b.pairing);
+            }
             self.pair(
                 c,
                 BtWho {
@@ -177,21 +261,29 @@ impl Ctl {
         if let Some(t) = device.tnc {
             return Ok(t);
         }
+        let model = model_for(radio, device.known_tnc.as_deref(), device.model.as_deref());
+        let name = device.name.clone().or(radio.map(|r| short_name(&r.name)));
         let section = json!({"address": device.address, "adapter": adapter_value});
-        self.setup_tnc(
-            c,
-            s,
-            "spp",
-            section,
-            device.model.as_deref(),
-            device.name.as_deref(),
-        )
-        .await
+        self.setup_tnc(c, s, "spp", section, &model, name.as_deref())
+            .await
     }
 
     /// Steps 3 and 4 over USB or serial. Returns the TNC's id.
-    async fn setup_serial(&self, c: &mut Client, s: &Status) -> Result<String, CtlError> {
-        println!("\nConnect the radio's USB cable. On a TH-D74/D75, set KISS to USB (Menu 983).");
+    async fn setup_serial(
+        &self,
+        c: &mut Client,
+        s: &Status,
+        radio: Option<&RadioEntry>,
+    ) -> Result<String, CtlError> {
+        let usb = radio.and_then(|r| r.usb.as_ref());
+        println!(
+            "\n{}",
+            usb.map(|u| u.setup.clone()).unwrap_or_else(|| {
+                "Connect it to this computer, and turn on its KISS TNC if it has a switch for it; \
+                 its manual says how."
+                    .into()
+            })
+        );
         let entry = loop {
             if !confirm("Ready?", true).await {
                 return Err(CtlError::Message("stopped".into()));
@@ -212,7 +304,13 @@ impl Ctl {
             if list.is_empty() {
                 println!("No serial devices found.");
             }
-            let pick = menu("Which is the TNC?", &options, 0).await;
+            let likely = radio
+                .and_then(|r| {
+                    list.iter()
+                        .position(|e| e.model.as_deref() == Some(r.model.as_str()))
+                })
+                .unwrap_or(0);
+            let pick = menu("Which is it?", &options, likely).await;
             if let Some(e) = list.get(pick) {
                 break e.clone();
             }
@@ -227,19 +325,13 @@ impl Ctl {
             let baud = ask_default("Baud rate", "9600").await;
             section["baud"] = json!(baud.parse::<u32>().unwrap_or(9600));
         }
-        let name = entry
-            .known_tnc
-            .as_deref()
-            .map(|k| k.trim_start_matches("Kenwood ").to_string());
-        self.setup_tnc(
-            c,
-            s,
-            "serial",
-            section,
-            entry.model.as_deref(),
-            name.as_deref(),
-        )
-        .await
+        let model = model_for(radio, entry.known_tnc.as_deref(), entry.model.as_deref());
+        let name = radio
+            .map(|r| r.name.clone())
+            .or(entry.known_tnc.clone())
+            .map(|n| short_name(&n));
+        self.setup_tnc(c, s, "serial", section, &model, name.as_deref())
+            .await
     }
 
     /// Step 4: add `section` (`spp` or `serial`) to the same radio's TNC, or
@@ -250,7 +342,7 @@ impl Ctl {
         s: &Status,
         kind: &str,
         section: Value,
-        model: Option<&str>,
+        model: &str,
         name: Option<&str>,
     ) -> Result<String, CtlError> {
         // The same radio set up the other way (a D75 over Bluetooth, now
@@ -297,24 +389,9 @@ impl Ctl {
             }
         }
 
-        let model = match model {
-            Some(m) => {
-                println!("It's a {m}.");
-                m.to_string()
-            }
-            None => {
-                let models: Vec<ModelEntry> = c.call_as(Command::TncModels).await?;
-                let options: Vec<String> = models
-                    .iter()
-                    .map(|m| format!("{:<16} {}", m.names.join(", "), m.summary))
-                    .collect();
-                let pick = menu("What kind of TNC is it?", &options, 0).await;
-                models[pick].names[0].clone()
-            }
-        };
         let ids: Vec<&str> = s.tncs.iter().map(|t| t.id.as_str()).collect();
         loop {
-            let id = ask_default("An id for the TNC", &suggest_tnc_id(&model, &ids)).await;
+            let id = ask_default("An id for the TNC", &suggest_tnc_id(model, &ids)).await;
             let name = ask_default("Its name", name.unwrap_or(&id)).await;
             let mut def = json!({"id": id, "name": name, "model": model});
             def[kind] = section.clone();
@@ -340,99 +417,113 @@ impl Ctl {
     }
 
     /// Steps 5 to 7.
-    async fn setup_bridge(&self, c: &mut Client, tnc: &str) -> Result<(), CtlError> {
+    async fn setup_bridge(&self, c: &mut Client, side: TncSide) -> Result<(), CtlError> {
+        // Read again: step 4 may have made a TNC or an adapter.
         let s: Status = c.call_as(Command::Status).await?;
-        let t = s
-            .tncs
-            .iter()
-            .find(|t| t.id == tnc)
-            .ok_or_else(|| CtlError::Message(format!("TNC {tnc} went away")))?;
-        let tnc_port = if t.spp.is_some() && t.serial.is_some() {
-            let pick = menu(
-                "Which way should this bridge reach the radio?",
-                &["Bluetooth".into(), "USB or serial".into()],
-                0,
-            )
-            .await;
-            if pick == 0 { "spp-client" } else { "serial" }
-        } else if t.spp.is_some() {
-            "spp-client"
-        } else {
-            "serial"
-        };
-
-        println!();
-        let (ble, tcp) = loop {
-            let ble = if confirm(
-                "Share it with apps over Bluetooth LE (aprs.fi on a phone)?",
-                true,
-            )
-            .await
-            {
-                let present: Vec<&AdapterStatus> =
-                    s.adapters.iter().filter(|a| a.present).collect();
-                let taken = ble_adapters_in_use(&s);
-                match present.as_slice() {
-                    [] => {
-                        println!("No Bluetooth adapter is present, so not over BLE.");
-                        None
-                    }
-                    [one] => Some(adapter_ref(one)),
-                    many => {
-                        let options: Vec<String> = many
-                            .iter()
-                            .map(|a| {
-                                let mut d = describe_adapter(a);
-                                if taken.contains(&a.mac) {
-                                    d.push_str("  (another enabled bridge uses it for BLE)");
-                                }
-                                d
-                            })
-                            .collect();
-                        // Best: one no bridge advertises on, and not the
-                        // radio's own, which is busy with the radio.
-                        let radio = t.spp.as_ref().map(|s| s.adapter.as_str()).unwrap_or("");
-                        let default = many
-                            .iter()
-                            .position(|a| !taken.contains(&a.mac) && !radio.contains(&a.mac))
-                            .or_else(|| many.iter().position(|a| !taken.contains(&a.mac)))
-                            .unwrap_or(0);
-                        Some(adapter_ref(
-                            many[menu("Which adapter should advertise it?", &options, default)
-                                .await],
-                        ))
-                    }
-                }
-            } else {
-                None
-            };
-            let tcp = if confirm("Share it over TCP too?", false).await {
-                println!(
-                    "Where should it listen? A port alone (8001) is this host only; \
-                     wlan0:8001 or eth0:8001 is that network."
-                );
-                let listen = ask_default("Listen on", "8001").await;
-                let mut allow = None;
-                if reaches_network(&listen) {
-                    println!(
-                        "Anyone who can reach {listen} can transmit through your radio, under your callsign."
-                    );
-                    allow = ask_line(
-                        "Limit it to an address or network (e.g. 192.168.1.0/24), or Enter for anyone: ",
+        // The TNC port, the name to suggest for the bridge, and the radio's
+        // own adapter (best not also used for BLE).
+        let (tnc_port, default_name, radio_adapter) = match &side {
+            TncSide::Network(address) => (
+                json!({"id": "tnc", "type": "tcp-client", "address": address}),
+                format!("KISS at {address}"),
+                String::new(),
+            ),
+            TncSide::Tnc(tnc) => {
+                let t = s
+                    .tncs
+                    .iter()
+                    .find(|t| t.id == *tnc)
+                    .ok_or_else(|| CtlError::Message(format!("TNC {tnc} went away")))?;
+                let kind = if t.spp.is_some() && t.serial.is_some() {
+                    let pick = menu(
+                        "Which way should this bridge reach the radio?",
+                        &["Bluetooth".into(), "USB or serial".into()],
+                        0,
                     )
                     .await;
-                }
-                Some((listen, allow))
-            } else {
-                None
-            };
-            if ble.is_some() || tcp.is_some() {
-                break (ble, tcp);
+                    if pick == 0 { "spp-client" } else { "serial" }
+                } else if t.spp.is_some() {
+                    "spp-client"
+                } else {
+                    "serial"
+                };
+                (
+                    json!({"id": "radio", "type": kind, "tnc": tnc}),
+                    t.name.clone(),
+                    t.spp
+                        .as_ref()
+                        .map(|s| s.adapter.clone())
+                        .unwrap_or_default(),
+                )
             }
-            println!("A bridge needs at least one way for apps to reach it.");
         };
+        let tnc_port_id = tnc_port["id"].as_str().unwrap_or("tnc").to_string();
+
+        let share = menu(
+            "How should apps reach it?",
+            &[
+                "Bluetooth LE (phone and tablet apps, such as aprs.fi)".into(),
+                "TCP (desktop apps, or apps on other computers)".into(),
+                "Both".into(),
+            ],
+            0,
+        )
+        .await;
+        let mut ble = None;
+        if share != 1 {
+            let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
+            let taken = ble_adapters_in_use(&s);
+            ble = match present.as_slice() {
+                [] => {
+                    println!("No Bluetooth adapter is present, so not over Bluetooth LE.");
+                    None
+                }
+                [one] => Some(adapter_ref(one)),
+                many => {
+                    let options: Vec<String> = many
+                        .iter()
+                        .map(|a| {
+                            let mut d = describe_adapter(a);
+                            if taken.contains(&a.mac) {
+                                d.push_str("  (another enabled bridge uses it for BLE)");
+                            }
+                            d
+                        })
+                        .collect();
+                    // Best: one no bridge advertises on, and not the
+                    // radio's own, which is busy with the radio.
+                    let default = many
+                        .iter()
+                        .position(|a| !taken.contains(&a.mac) && !radio_adapter.contains(&a.mac))
+                        .or_else(|| many.iter().position(|a| !taken.contains(&a.mac)))
+                        .unwrap_or(0);
+                    Some(adapter_ref(
+                        many[menu("Which adapter should advertise it?", &options, default).await],
+                    ))
+                }
+            };
+        }
+        let mut tcp = None;
+        if share != 0 || ble.is_none() {
+            println!(
+                "\nWhere should it listen for apps? A port alone (8001) is this computer only; \
+                 wlan0:8001 or eth0:8001 is that network."
+            );
+            let listen = ask_default("Listen on", "8001").await;
+            let mut allow = None;
+            if reaches_network(&listen) {
+                println!(
+                    "Anyone who can reach {listen} can transmit through your radio, under your callsign."
+                );
+                allow = ask_line(
+                    "Limit it to an address or network (e.g. 192.168.1.0/24), or Enter for anyone: ",
+                )
+                .await;
+            }
+            tcp = Some((listen, allow));
+        }
         let always = menu(
-            "When should the bridge connect to the radio?",
+            "When should the bridge connect to the TNC?",
             &[
                 "While apps are connected (on demand)".into(),
                 "All the time".into(),
@@ -444,7 +535,7 @@ impl Ctl {
 
         // Step 6.
         let bridge = loop {
-            let name = ask_default("A name for the bridge", &t.name).await;
+            let name = ask_default("A name for the bridge", &default_name).await;
             match self
                 .change_result(c, |nd| Command::BridgeCreate {
                     definition: json!({"name": name}),
@@ -460,7 +551,7 @@ impl Ctl {
             }
         };
         let mut ports = vec![{
-            let mut p = json!({"id": "radio", "type": tnc_port, "tnc": tnc});
+            let mut p = tnc_port;
             if always {
                 p["connect"] = json!("always");
             }
@@ -514,15 +605,15 @@ impl Ctl {
         println!("{bridge} is enabled.");
 
         // Step 7.
-        self.check_tnc(c, &bridge).await;
+        self.check_tnc(c, &bridge, &tnc_port_id).await;
         Ok(())
     }
 
     /// Bring the TNC link up, wait for it and then for a first frame (or
     /// 30 s of quiet), say what happened, and let the link follow its
     /// policy again.
-    async fn check_tnc(&self, c: &mut Client, bridge: &str) {
-        println!("\nConnecting to the radio to check it...");
+    async fn check_tnc(&self, c: &mut Client, bridge: &str, port: &str) {
+        println!("\nConnecting to the TNC to check it...");
         let mut events = match Client::connect(&self.socket).await {
             Ok(mut e) => match e.subscribe(vec![Topic::Frames]).await {
                 Ok(()) => Some(e),
@@ -530,19 +621,19 @@ impl Ctl {
             },
             Err(_) => None,
         };
-        let port = || Command::PortConnect {
+        let connect = Command::PortConnect {
             bridge: bridge.to_string(),
-            port: "radio".into(),
+            port: port.to_string(),
         };
-        if let Err(e) = c.call(port()).await {
+        if let Err(e) = c.call(connect).await {
             self.report(&e);
             return;
         }
-        let connected = wait_for_link(c, bridge, Duration::from_secs(30)).await;
+        let connected = wait_for_link(c, bridge, port, Duration::from_secs(30)).await;
         match connected {
             Ok(()) => {
-                println!("The radio is connected. Listening for a frame (up to 30 s)...");
-                let object = format!("{bridge}/radio");
+                println!("The TNC is connected. Listening for a frame (up to 30 s)...");
+                let object = format!("{bridge}/{port}");
                 let heard = match events.as_mut() {
                     Some(e) => first_frame(e, &object, Duration::from_secs(30)).await,
                     None => None,
@@ -556,13 +647,13 @@ impl Ctl {
                 }
             }
             Err(why) => println!(
-                "The radio didn't connect: {why}. `ktbctl status` shows the bridge as it tries."
+                "The TNC didn't connect: {why}. `ktbctl status` shows the bridge as it tries."
             ),
         }
         let _ = c
             .call(Command::PortRelease {
                 bridge: bridge.to_string(),
-                port: "radio".into(),
+                port: port.to_string(),
             })
             .await;
     }
@@ -596,6 +687,27 @@ impl Ctl {
         .await?;
         Ok(id)
     }
+}
+
+/// The model for a TNC: the radio they picked, or what was recognized, or
+/// generic.
+fn model_for(radio: Option<&RadioEntry>, known: Option<&str>, detected: Option<&str>) -> String {
+    match (radio, detected) {
+        (Some(r), _) => r.model.clone(),
+        (None, Some(m)) => {
+            println!("That's a {}.", known.unwrap_or(m));
+            m.to_string()
+        }
+        (None, None) => "generic".into(),
+    }
+}
+
+/// `TH-D75` for `Kenwood TH-D75`: what to call it day to day.
+fn short_name(name: &str) -> String {
+    name.split_once(' ')
+        .map(|(_, rest)| rest)
+        .unwrap_or(name)
+        .to_string()
 }
 
 /// A numbered menu; returns the index chosen.
@@ -717,7 +829,12 @@ fn add_section(toml: &str, kind: &str, section: &Value) -> Result<String, CtlErr
 
 /// Poll `status` until the bridge's radio port is connected, or say why
 /// not.
-async fn wait_for_link(c: &mut Client, bridge: &str, limit: Duration) -> Result<(), String> {
+async fn wait_for_link(
+    c: &mut Client,
+    bridge: &str,
+    port: &str,
+    limit: Duration,
+) -> Result<(), String> {
     let start = tokio::time::Instant::now();
     let mut last = String::from("no answer");
     while start.elapsed() < limit {
@@ -726,7 +843,7 @@ async fn wait_for_link(c: &mut Client, bridge: &str, limit: Duration) -> Result<
                 .bridges
                 .iter()
                 .find(|b| b.id == bridge)
-                .and_then(|b| b.ports.iter().find(|p| p.id == "radio"))
+                .and_then(|b| b.ports.iter().find(|p| p.id == port))
         {
             if p.state == "connected" {
                 return Ok(());
@@ -771,6 +888,20 @@ async fn first_frame(e: &mut Client, object: &str, limit: Duration) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn names_and_models_for_a_new_tnc() {
+        assert_eq!(short_name("Kenwood TH-D75"), "TH-D75");
+        assert_eq!(short_name("Mobilinkd"), "Mobilinkd");
+        let d75: RadioEntry =
+            serde_json::from_value(json!({"name": "Kenwood TH-D75", "model": "th-d75"})).unwrap();
+        assert_eq!(model_for(Some(&d75), None, Some("th-d74")), "th-d75");
+        assert_eq!(
+            model_for(None, Some("Kenwood TH-D74"), Some("th-d74")),
+            "th-d74"
+        );
+        assert_eq!(model_for(None, None, None), "generic");
+    }
 
     #[test]
     fn ids_are_suggested_and_numbered() {

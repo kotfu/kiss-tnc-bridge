@@ -599,6 +599,48 @@ pub struct ModelEntry {
     pub names: Vec<String>,
     /// What the daemon does for it.
     pub summary: String,
+    /// The radios with this TNC, and how to set each one up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub radios: Vec<RadioEntry>,
+}
+
+/// A radio the daemon knows, as `tnc.models` lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioEntry {
+    /// `Kenwood TH-D75`.
+    pub name: String,
+    /// The `model` to write for it.
+    pub model: String,
+    /// Present when it has a TNC over Bluetooth Classic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bluetooth: Option<RadioBluetoothEntry>,
+    /// Present when it has a TNC over USB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb: Option<RadioUsbEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioBluetoothEntry {
+    /// The start of the name it announces in a scan.
+    pub name_prefix: String,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: String,
+    /// How to make it discoverable for pairing.
+    pub pairing_mode: String,
+    /// What happens while it pairs.
+    pub pairing: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioUsbEntry {
+    /// `vendor:product`, as `serial.list` shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_id: Option<String>,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: String,
 }
 
 /// A Bluetooth Classic device, as `bluetooth.scan` finds it.

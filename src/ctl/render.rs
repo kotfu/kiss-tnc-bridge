@@ -254,6 +254,23 @@ pub fn models(list: &[ModelEntry]) -> String {
     let mut out = String::new();
     for m in list {
         let _ = writeln!(out, "{:<16} {}", m.names.join(", "), m.summary);
+        for r in &m.radios {
+            let mut how = Vec::new();
+            if r.bluetooth.is_some() {
+                how.push("Bluetooth");
+            }
+            if r.usb.is_some() {
+                how.push("USB");
+            }
+            let _ = writeln!(
+                out,
+                "{:<16}   {} (model = \"{}\"): {}",
+                "",
+                r.name,
+                r.model,
+                how.join(", ")
+            );
+        }
     }
     out
 }

@@ -748,6 +748,7 @@ impl Daemon {
                     .map(|m| protocol::ModelEntry {
                         names: m.names.iter().map(|n| n.to_string()).collect(),
                         summary: m.summary.to_string(),
+                        radios: m.radios.iter().map(radio_entry).collect(),
                     })
                     .collect::<Vec<_>>(),
             )),
@@ -1960,6 +1961,23 @@ fn tnc_detail(s: &TncState, held: Option<bool>) -> Option<String> {
     match (why, held) {
         (Some(w), Some(h)) => Some(format!("{w}; {h}")),
         (w, h) => w.or(h),
+    }
+}
+
+fn radio_entry(r: &config::RadioInfo) -> protocol::RadioEntry {
+    protocol::RadioEntry {
+        name: r.name.to_string(),
+        model: r.model.to_string(),
+        bluetooth: r.bluetooth.as_ref().map(|b| protocol::RadioBluetoothEntry {
+            name_prefix: b.name_prefix.to_string(),
+            setup: b.setup.to_string(),
+            pairing_mode: b.pairing_mode.to_string(),
+            pairing: b.pairing.to_string(),
+        }),
+        usb: r.usb.as_ref().map(|u| protocol::RadioUsbEntry {
+            usb_id: u.id.map(|(v, p)| format!("{v:04x}:{p:04x}")),
+            setup: u.setup.to_string(),
+        }),
     }
 }
 

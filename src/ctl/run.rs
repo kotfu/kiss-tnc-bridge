@@ -139,8 +139,8 @@ impl Ctl {
             Cmd::Scan { adapter, seconds } => {
                 if !self.json {
                     eprintln!(
-                        "Looking for {seconds} s. Radios have to be in pairing mode to be found \
-                         (TH-D74/D75: Menu > Bluetooth > Pairing Mode)."
+                        "Looking for {seconds} s. Radios have to be in pairing mode \
+                         (discoverable) to be found."
                     );
                 }
                 let l: Vec<BtDevice> = c
@@ -314,9 +314,7 @@ impl Ctl {
     /// steps that need someone at the radio; each is answered here.
     pub(super) async fn pair(&self, c: &mut Client, who: BtWho) -> Result<(), CtlError> {
         if !self.json {
-            eprintln!(
-                "Put the radio in pairing mode if it isn't (TH-D74/D75: Menu > Bluetooth > Pairing Mode)."
-            );
+            eprintln!("Put the radio in pairing mode (discoverable) if it isn't.");
         }
         let id = c
             .send(Command::BluetoothPair {
@@ -403,7 +401,7 @@ impl Ctl {
                     false
                 };
                 if ok {
-                    say("Now confirm it on the radio (press OK).".into());
+                    say("Now confirm it on the radio too.".into());
                 }
                 Some((Some(ok), None, None))
             }

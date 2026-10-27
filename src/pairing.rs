@@ -40,20 +40,10 @@ pub const PAIR_TIMEOUT: Duration = Duration::from_secs(90);
 /// pairing it.
 const FIND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Radios this daemon knows by the name they announce: the name's prefix,
-/// what it is, and its `model`.
-const KNOWN: &[(&str, &str, &str)] = &[
-    ("TH-D75", "Kenwood TH-D75", "th-d75"),
-    ("TH-D74", "Kenwood TH-D74", "th-d74"),
-];
-
-/// What a Bluetooth name says about the device: (what it is, its model).
+/// What a Bluetooth name says about the device: (what it is, its model),
+/// from the radios in the model table.
 pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
-    let name = name?;
-    KNOWN
-        .iter()
-        .find(|(prefix, _, _)| name.starts_with(prefix))
-        .map(|(_, what, model)| (*what, *model))
+    crate::config::radio_by_bluetooth_name(name?).map(|r| (r.name, r.model))
 }
 
 /// Look for Bluetooth Classic devices on `adapter` for `seconds`. Likely
@@ -303,8 +293,8 @@ async fn find(adapter: &Adapter, addr: Address) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "didn't find {addr} on {} in {} s. Is it on and in pairing mode? \
-             (TH-D74/D75: Menu > Bluetooth > Pairing Mode)",
+            "didn't find {addr} on {} in {} s. Is it on, nearby, and in pairing mode \
+             (discoverable)?",
             adapter.name(),
             FIND_TIMEOUT.as_secs()
         ))
@@ -316,8 +306,8 @@ fn pair_error(e: &bluer::Error) -> String {
     use bluer::ErrorKind;
     match &e.kind {
         ErrorKind::AuthenticationFailed => {
-            "pairing failed: the device didn't confirm. Press OK on it when it asks \
-             (within 30 seconds on a TH-D75), and check the passkeys match"
+            "pairing failed: the device didn't confirm. Confirm on it when it asks (some \
+             radios give only 30 seconds), and check the passkeys match"
                 .into()
         }
         ErrorKind::AuthenticationCanceled | ErrorKind::AuthenticationRejected => {

@@ -281,6 +281,40 @@ pub struct ModelInfo {
     /// profile.
     pub names: &'static [&'static str],
     pub summary: &'static str,
+    /// The radios with this TNC, and how to set each one up.
+    pub radios: &'static [RadioInfo],
+}
+
+/// A radio (or TNC) this daemon knows: how to recognize it, and what to
+/// tell someone setting it up. `ktbctl setup`, `scan` and `serial list` take
+/// it from here, through `tnc.models`.
+pub struct RadioInfo {
+    /// `Kenwood TH-D75`.
+    pub name: &'static str,
+    /// The `model` to write for it.
+    pub model: &'static str,
+    pub bluetooth: Option<RadioBluetooth>,
+    pub usb: Option<RadioUsb>,
+}
+
+/// Setting a radio up over Bluetooth Classic.
+pub struct RadioBluetooth {
+    /// The start of the name it announces in a scan.
+    pub name_prefix: &'static str,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: &'static str,
+    /// How to make it discoverable for pairing.
+    pub pairing_mode: &'static str,
+    /// What happens while it pairs.
+    pub pairing: &'static str,
+}
+
+/// Setting a radio up over USB.
+pub struct RadioUsb {
+    /// Its USB vendor and product id, to recognize it among serial devices.
+    pub id: Option<(u16, u16)>,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: &'static str,
 }
 
 /// Every model, in the order to list them. The config error, `-t` and the
@@ -290,6 +324,7 @@ pub const MODELS: &[ModelInfo] = &[
         model: TncModel::Generic,
         names: &["generic"],
         summary: "the default: any TNC that's always in KISS mode; nothing is sent to it",
+        radios: &[],
     },
     ModelInfo {
         model: TncModel::ThD7x,
@@ -297,8 +332,63 @@ pub const MODELS: &[ModelInfo] = &[
         summary: "Kenwood TH-D74/D75: switched to KISS mode at every connect, checked for KISS on \
                   the right interface (menu 983), reconnected if it stops answering, and with \
                   exit_kiss_on_disconnect put back in the mode it was found in",
+        radios: &[
+            RadioInfo {
+                name: "Kenwood TH-D75",
+                model: "th-d75",
+                bluetooth: Some(RadioBluetooth {
+                    name_prefix: "TH-D75",
+                    setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
+                            Bluetooth, and turn Bluetooth on.",
+                    pairing_mode: "Menu > Bluetooth > Pairing Mode",
+                    pairing: "The radio shows a six-digit number. Check that it matches, then \
+                              press OK on the radio within 30 seconds.",
+                }),
+                usb: Some(RadioUsb {
+                    id: Some((0x2166, 0x9023)),
+                    setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
+                            USB, and connect its USB cable to this computer.",
+                }),
+            },
+            RadioInfo {
+                name: "Kenwood TH-D74",
+                model: "th-d74",
+                bluetooth: Some(RadioBluetooth {
+                    name_prefix: "TH-D74",
+                    setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
+                            Bluetooth, and turn Bluetooth on.",
+                    pairing_mode: "Menu > Bluetooth > Pairing Mode",
+                    pairing: "The radio shows a six-digit number. Check that it matches, then \
+                              press OK on the radio within 30 seconds.",
+                }),
+                usb: Some(RadioUsb {
+                    id: None,
+                    setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
+                            USB, and connect its USB cable to this computer.",
+                }),
+            },
+        ],
     },
 ];
+
+/// Every radio this daemon knows, across the models.
+pub fn radios() -> impl Iterator<Item = &'static RadioInfo> {
+    MODELS.iter().flat_map(|m| m.radios.iter())
+}
+
+/// The radio announcing `name` over Bluetooth, if it's one we know.
+pub fn radio_by_bluetooth_name(name: &str) -> Option<&'static RadioInfo> {
+    radios().find(|r| {
+        r.bluetooth
+            .as_ref()
+            .is_some_and(|b| name.starts_with(b.name_prefix))
+    })
+}
+
+/// The radio with this USB vendor and product id, if it's one we know.
+pub fn radio_by_usb_id(vendor: u16, product: u16) -> Option<&'static RadioInfo> {
+    radios().find(|r| r.usb.as_ref().and_then(|u| u.id) == Some((vendor, product)))
+}
 
 impl TncModel {
     pub fn info(self) -> &'static ModelInfo {
@@ -1060,6 +1150,24 @@ fn resolve_adapter(def: &AdapterDef, source: &Source) -> Result<Adapter, Problem
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn radios_come_from_the_model_table() {
+        let d75 = radio_by_bluetooth_name("TH-D75").unwrap();
+        assert_eq!((d75.name, d75.model), ("Kenwood TH-D75", "th-d75"));
+        assert_eq!(
+            radio_by_bluetooth_name("TH-D74 Mike").unwrap().model,
+            "th-d74"
+        );
+        assert!(radio_by_bluetooth_name("jPhone").is_none());
+        assert_eq!(radio_by_usb_id(0x2166, 0x9023).unwrap().model, "th-d75");
+        assert!(radio_by_usb_id(0x1234, 0x5678).is_none());
+        // Every radio's model is one a config can name.
+        for r in radios() {
+            assert!(r.model.parse::<TncModel>().is_ok(), "{}", r.model);
+            assert!(r.bluetooth.is_some() || r.usb.is_some(), "{}", r.name);
+        }
+    }
     use super::*;
 
     #[test]

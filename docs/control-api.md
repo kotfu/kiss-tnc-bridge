@@ -295,12 +295,21 @@ their by-path names from `also`.
 
 ### `tnc.models`
 
-The TNC models this daemon knows, with the names to use for `model` and
-what the daemon does for each:
+The TNC models this daemon knows, with the names to use for `model`, what
+the daemon does for each, and the radios it knows with that TNC: how to
+recognize them (the start of their Bluetooth name, their USB id) and what to
+tell someone setting them up. `ktbctl setup`, `scan` and `serial.list` use
+the same table.
 
 ```jsonc
 [{"names": ["generic"], "summary": "the default: any TNC that's always in KISS mode; …"},
- {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …"}]
+ {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …",
+  "radios": [{"name": "Kenwood TH-D75", "model": "th-d75",
+              "bluetooth": {"name_prefix": "TH-D75", "setup": "On the radio, set Menu > …",
+                            "pairing_mode": "Menu > Bluetooth > Pairing Mode",
+                            "pairing": "The radio shows a six-digit number. …"},
+              "usb": {"usb_id": "2166:9023", "setup": "On the radio, set Menu > … to USB, …"}},
+             {"name": "Kenwood TH-D74", "model": "th-d74", …}]}]
 ```
 
 ### Bluetooth: `bluetooth.scan`, `pair`, `unpair`
