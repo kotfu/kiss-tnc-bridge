@@ -1913,6 +1913,13 @@
         "AdapterStatus": {
           "description": "A Bluetooth adapter: present on this host, named by an `[[adapter]]`,\nor both.",
           "properties": {
+            "bus": {
+              "description": "What it is, while present: `board` (built into the board), `usb`,\n`pci` or `other`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "hci": {
               "description": "`hci0`, while present.",
               "type": [
@@ -1939,7 +1946,21 @@
             "present": {
               "type": "boolean"
             },
+            "product": {
+              "description": "A USB adapter's product name: `TP-Link UB500 Adapter`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usb_id": {
+              "description": "A USB adapter's `vendor:product`: `2357:0604`.",
               "type": [
                 "string",
                 "null"

@@ -174,13 +174,16 @@ pub fn adapters(s: &Status) -> String {
             (true, Some(false)) => "off",
             (true, None) => "present",
         };
-        let _ = writeln!(
-            out,
+        let mut line = format!(
             "  {:<10} {:<6} {}  {state}",
             a.id.as_deref().unwrap_or("-"),
             a.hci.as_deref().unwrap_or("-"),
             a.mac
         );
+        if let Some(hw) = a.hardware() {
+            let _ = write!(line, "  {hw}");
+        }
+        let _ = writeln!(out, "{line}");
     }
     out
 }
@@ -458,7 +461,8 @@ mod tests {
     fn status_shows_ports_sessions_and_what_a_bridge_needs() {
         let s: Status = serde_json::from_value(serde_json::json!({
             "version": "1.0.0",
-            "adapters": [{"id": "dongle", "mac": "AC:A7:F1:29:9C:7F", "hci": "hci1", "present": true, "powered": true}],
+            "adapters": [{"id": "dongle", "mac": "AC:A7:F1:29:9C:7F", "hci": "hci1", "present": true, "powered": true,
+                          "bus": "usb", "product": "TP-Link UB500 Adapter", "usb_id": "2357:0604"}],
             "tncs": [{"id": "d75", "name": "TH-D75", "model": "th-d74/th-d75",
                       "spp": {"address": "40:79:12:E4:95:9D", "adapter": "builtin", "paired": true},
                       "in_use_by": "ktbr0", "source": "dynamic", "editable": true}],
@@ -496,6 +500,7 @@ mod tests {
         assert!(out.contains("needs: no TNC port, no app port"), "{out}");
         assert!(out.contains("from the TNC 18, to it 2"), "{out}");
         assert!(out.contains("used by ktbr0"), "{out}");
+        assert!(out.contains("powered  USB: TP-Link UB500 Adapter"), "{out}");
         let one = status(&s, Some("Spare"), now).unwrap();
         assert!(one.contains("ktbr1") && !one.contains("ktbr0"), "{one}");
         assert!(status(&s, Some("nope"), now).is_err());

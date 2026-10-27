@@ -670,10 +670,11 @@ impl Ctl {
             return Ok(id.clone());
         }
         let ids: Vec<&str> = s.adapters.iter().filter_map(|a| a.id.as_deref()).collect();
-        let suggested = suggest_adapter_id(a.hci.as_deref(), &ids);
+        let suggested = suggest_adapter_id(a, &ids);
+        let what = a.hardware().unwrap_or_else(|| a.mac.clone());
         let id = ask_line(&format!(
-            "Give {} an id for the config ({suggested}?), or press Enter to use its MAC: ",
-            a.mac
+            "Give this adapter ({what}) a short id for the config, like {suggested}, \
+             or press Enter to use its MAC: "
         ))
         .await;
         let Some(id) = id else {
@@ -733,13 +734,17 @@ async fn ask_default(question: &str, default: &str) -> String {
         .unwrap_or_else(|| default.to_string())
 }
 
+/// `hci1  AC:A7:F1:29:9C:7F  USB: TP-Link UB500 Adapter  (id dongle)`.
 fn describe_adapter(a: &AdapterStatus) -> String {
-    format!(
-        "{}  {}  {}",
-        a.hci.as_deref().unwrap_or("-"),
-        a.mac,
-        a.id.as_deref().unwrap_or("")
-    )
+    let mut d = format!("{}  {}", a.hci.as_deref().unwrap_or("-"), a.mac);
+    if let Some(hw) = a.hardware() {
+        d.push_str("  ");
+        d.push_str(&hw);
+    }
+    if let Some(id) = &a.id {
+        d.push_str(&format!("  (id {id})"));
+    }
+    d
 }
 
 /// How config refers to an adapter: its id if it has one, else its MAC.
@@ -769,16 +774,16 @@ fn suggest_tnc_id(model: &str, taken: &[&str]) -> String {
     numbered(base, taken)
 }
 
-/// `builtin` for hci0 (usually the board's own), `dongle` otherwise.
-fn suggest_adapter_id(hci: Option<&str>, taken: &[&str]) -> String {
-    numbered(
-        if hci == Some("hci0") {
-            "builtin"
-        } else {
-            "dongle"
-        },
-        taken,
-    )
+/// `builtin` for the board's own adapter, `dongle` for a USB one.
+fn suggest_adapter_id(a: &AdapterStatus, taken: &[&str]) -> String {
+    let base = match a.bus.as_deref() {
+        Some("board") => "builtin",
+        Some(_) => "dongle",
+        // Without sysfs to go by, hci0 is usually the board's own.
+        None if a.hci.as_deref() == Some("hci0") => "builtin",
+        None => "dongle",
+    };
+    numbered(base, taken)
 }
 
 fn numbered(base: &str, taken: &[&str]) -> String {
@@ -908,8 +913,20 @@ mod tests {
         assert_eq!(suggest_tnc_id("th-d75", &[]), "d75");
         assert_eq!(suggest_tnc_id("th-d75", &["d75"]), "d752");
         assert_eq!(suggest_tnc_id("generic", &["tnc", "tnc2"]), "tnc3");
-        assert_eq!(suggest_adapter_id(Some("hci0"), &[]), "builtin");
-        assert_eq!(suggest_adapter_id(Some("hci1"), &["dongle"]), "dongle2");
+        let adapter = |hci: &str, bus: Option<&str>| -> AdapterStatus {
+            serde_json::from_value(json!({"mac": "AC:A7:F1:29:9C:7F", "hci": hci,
+                                          "present": true, "bus": bus}))
+            .unwrap()
+        };
+        assert_eq!(
+            suggest_adapter_id(&adapter("hci1", Some("board")), &[]),
+            "builtin"
+        );
+        assert_eq!(
+            suggest_adapter_id(&adapter("hci0", Some("usb")), &["dongle"]),
+            "dongle2"
+        );
+        assert_eq!(suggest_adapter_id(&adapter("hci0", None), &[]), "builtin");
     }
 
     #[test]

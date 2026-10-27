@@ -760,6 +760,33 @@ pub struct AdapterStatus {
     pub powered: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// What it is, while present: `board` (built into the board), `usb`,
+    /// `pci` or `other`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
+    /// A USB adapter's product name: `TP-Link UB500 Adapter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// A USB adapter's `vendor:product`: `2357:0604`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_id: Option<String>,
+}
+
+impl AdapterStatus {
+    /// What it is, for people: `built into the board`, `USB: TP-Link UB500
+    /// Adapter`, `USB device 2357:0604`, `PCI card`.
+    pub fn hardware(&self) -> Option<String> {
+        match self.bus.as_deref()? {
+            "board" => Some("built into the board".into()),
+            "usb" => Some(match (&self.product, &self.usb_id) {
+                (Some(p), _) => format!("USB: {p}"),
+                (None, Some(id)) => format!("USB device {id}"),
+                (None, None) => "USB".into(),
+            }),
+            "pci" => Some("PCI card".into()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

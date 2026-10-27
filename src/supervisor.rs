@@ -1307,6 +1307,7 @@ impl Daemon {
             .iter()
             .map(|(hci, mac, powered)| {
                 let named = cfg.adapters.iter().find(|a| a.mac == *mac);
+                let hw = crate::bt_hardware::adapter_hardware(hci);
                 AdapterStatus {
                     id: named.map(|a| a.id.clone()),
                     mac: mac.to_string(),
@@ -1314,6 +1315,9 @@ impl Daemon {
                     present: true,
                     powered: Some(*powered),
                     source: named.map(|a| a.source.to_string()),
+                    bus: hw.as_ref().map(|h| h.bus.to_string()),
+                    product: hw.as_ref().and_then(|h| h.product.clone()),
+                    usb_id: hw.and_then(|h| h.usb_id),
                 }
             })
             .collect();
@@ -1326,6 +1330,9 @@ impl Daemon {
                     present: false,
                     powered: None,
                     source: Some(a.source.to_string()),
+                    bus: None,
+                    product: None,
+                    usb_id: None,
                 });
             }
         }
