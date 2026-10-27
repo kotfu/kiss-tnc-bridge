@@ -259,9 +259,9 @@ pub enum Command {
     // `spp` address and adapter) or by `address` and optionally `adapter`
     // (id, MAC or hciN; the default adapter otherwise).
     /// Look for Bluetooth Classic devices for `seconds` (default 10), likely
-    /// TNCs first. Radios have to be in pairing mode to be found. Meanwhile
-    /// the daemon sends this connection a `found` event for each device as
-    /// it turns up.
+    /// TNCs first. Radios have to be in pairing mode to be found, and only
+    /// devices heard during the scan are listed. Meanwhile the daemon sends
+    /// this connection a `found` event for each device as it turns up.
     #[serde(rename = "bluetooth.scan")]
     BluetoothScan {
         #[serde(default, skip_serializing_if = "Option::is_none")]

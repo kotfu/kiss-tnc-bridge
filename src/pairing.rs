@@ -48,10 +48,14 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
 }
 
 /// Look for Bluetooth Classic devices on `adapter` for `seconds`, or until
-/// `stop`. Each device goes to `found` as it turns up, and again when
+/// `stop`. Each device goes to `found` as it's heard, and again when
 /// there's news about it (its name came in). Returns them all, likely TNCs
 /// first, then the strongest signal. `tnc_for` names the TNC already
 /// defined at an address.
+///
+/// BlueZ starts a discovery by announcing every device it already knows,
+/// such as a paired radio that's switched off. Only devices heard in this
+/// scan have a signal strength, so the others are left out.
 pub async fn scan(
     adapter: &Adapter,
     seconds: u64,
@@ -66,18 +70,16 @@ pub async fn scan(
         })
         .await
         .map_err(|e| format!("can't scan on {}: {e}", adapter.name()))?;
-    // Discovery runs while the stream lives, so it stops at the end of
-    // this block, before the devices are looked at again.
-    let mut seen: Vec<Address> = Vec::new();
+    let mut heard: Vec<BtDevice> = Vec::new();
     {
         // With changes, so a name that comes in after the device shows up
-        // is reported too.
+        // is reported too. Discovery runs while the stream lives, so it
+        // stops at the end of this block.
         let events = adapter
             .discover_devices_with_changes()
             .await
             .map_err(|e| format!("can't scan on {}: {e}", adapter.name()))?;
         futures::pin_mut!(events);
-        let mut last: Vec<BtDevice> = Vec::new();
         let look = async {
             while let Some(ev) = events.next().await {
                 let AdapterEvent::DeviceAdded(addr) = ev else {
@@ -86,18 +88,20 @@ pub async fn scan(
                 let Some(d) = device(adapter, addr, &tnc_for).await else {
                     continue;
                 };
-                match last.iter_mut().find(|l| l.address == d.address) {
+                if d.rssi.is_none() {
+                    continue;
+                }
+                match heard.iter_mut().find(|h| h.address == d.address) {
                     // The signal strength changes all the time; that's
                     // not news.
-                    Some(l) if l.name == d.name && l.paired == d.paired => {}
-                    Some(l) => {
+                    Some(h) if h.name == d.name && h.paired == d.paired => *h = d,
+                    Some(h) => {
                         found(&d);
-                        *l = d;
+                        *h = d;
                     }
                     None => {
                         found(&d);
-                        seen.push(addr);
-                        last.push(d);
+                        heard.push(d);
                     }
                 }
             }
@@ -107,20 +111,13 @@ pub async fn scan(
             _ = stop.cancelled() => {}
         }
     }
-
-    let mut out = Vec::new();
-    for addr in seen {
-        if let Some(d) = device(adapter, addr, &tnc_for).await {
-            out.push(d);
-        }
-    }
-    out.sort_by_key(|d| {
+    heard.sort_by_key(|d| {
         (
             d.known_tnc.is_none(),
             std::cmp::Reverse(d.rssi.unwrap_or(i16::MIN)),
         )
     });
-    Ok(out)
+    Ok(heard)
 }
 
 /// What BlueZ knows about the device at `addr`. Phones and computers show

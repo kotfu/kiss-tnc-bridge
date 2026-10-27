@@ -1085,7 +1085,7 @@
           "type": "object"
         },
         {
-          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found. Meanwhile\nthe daemon sends this connection a `found` event for each device as\nit turns up.",
+          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found, and only\ndevices heard during the scan are listed. Meanwhile the daemon sends\nthis connection a `found` event for each device as it turns up.",
           "properties": {
             "adapter": {
               "type": [

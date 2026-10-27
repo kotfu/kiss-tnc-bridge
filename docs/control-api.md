@@ -323,7 +323,9 @@ otherwise).
 
 `bluetooth.scan` looks for `seconds` (default 10, at most 60) on
 `adapter` and returns what it found, known radios first. Radios have to be
-in pairing mode to be found.
+in pairing mode to be found. Only devices heard during the scan are
+listed, so a paired radio that's switched off isn't, though BlueZ still
+knows it.
 
 ```jsonc
 [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,
