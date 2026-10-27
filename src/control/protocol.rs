@@ -259,7 +259,9 @@ pub enum Command {
     // `spp` address and adapter) or by `address` and optionally `adapter`
     // (id, MAC or hciN; the default adapter otherwise).
     /// Look for Bluetooth Classic devices for `seconds` (default 10), likely
-    /// TNCs first. Radios have to be in pairing mode to be found.
+    /// TNCs first. Radios have to be in pairing mode to be found. Meanwhile
+    /// the daemon sends this connection a `found` event for each device as
+    /// it turns up.
     #[serde(rename = "bluetooth.scan")]
     BluetoothScan {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -267,6 +269,10 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seconds: Option<u64>,
     },
+    /// End this connection's `bluetooth.scan` request `request` now; it
+    /// answers with what it found so far.
+    #[serde(rename = "bluetooth.scan_stop")]
+    BluetoothScanStop { request: u64 },
     /// Pair with a device and trust it. The request stays open until the
     /// pairing is done; meanwhile the daemon sends this connection
     /// `pairing` events, answered with `bluetooth.pair_reply`.
@@ -338,6 +344,7 @@ impl Command {
         "serial.list",
         "tnc.models",
         "bluetooth.scan",
+        "bluetooth.scan_stop",
         "bluetooth.pair",
         "bluetooth.pair_reply",
         "bluetooth.unpair",
@@ -956,6 +963,10 @@ pub enum Event {
         #[serde(flatten)]
         step: PairingStep,
     },
+    /// A device found by this connection's `bluetooth.scan` request
+    /// `request`, or found again with news (its name came in). Sent only
+    /// to that connection.
+    Found { request: u64, device: BtDevice },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -972,7 +983,7 @@ impl Event {
             Event::State { .. } => Some(Topic::State),
             Event::Activity { .. } => Some(Topic::Activity),
             Event::Frame { .. } => Some(Topic::Frames),
-            Event::Lagged { .. } | Event::Pairing { .. } => None,
+            Event::Lagged { .. } | Event::Pairing { .. } | Event::Found { .. } => None,
         }
     }
 }
@@ -1078,6 +1089,41 @@ mod tests {
                 passkey: None
             }
         );
+    }
+
+    #[test]
+    fn scans_report_devices_as_they_are_found() {
+        let ev = EventMessage {
+            v: VERSION,
+            event: Event::Found {
+                request: 3,
+                device: BtDevice {
+                    address: "40:79:12:E4:95:9D".into(),
+                    name: Some("TH-D75".into()),
+                    rssi: Some(-52),
+                    icon: None,
+                    paired: false,
+                    known_tnc: Some("Kenwood TH-D75".into()),
+                    model: Some("th-d75".into()),
+                    tnc: None,
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap(),
+            json!({"v": 1, "event": "found", "request": 3, "device": {
+                "address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52,
+                "paired": false, "known_tnc": "Kenwood TH-D75", "model": "th-d75"}})
+        );
+        let back: EventMessage =
+            serde_json::from_value(serde_json::to_value(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+
+        let req: Request = serde_json::from_value(
+            json!({"v": 1, "id": 4, "cmd": "bluetooth.scan_stop", "request": 3}),
+        )
+        .unwrap();
+        assert_eq!(req.command, Command::BluetoothScanStop { request: 3 });
     }
 
     #[test]

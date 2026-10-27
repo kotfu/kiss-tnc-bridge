@@ -30,6 +30,7 @@ use bluer::agent::{Agent, ReqError};
 use bluer::{Adapter, AdapterEvent, Address, DiscoveryFilter, DiscoveryTransport, Session};
 use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
 
 use crate::control::protocol::{BtDevice, PairingStep};
 
@@ -46,13 +47,17 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
     crate::config::radio_by_bluetooth_name(name?).map(|r| (r.name, r.model))
 }
 
-/// Look for Bluetooth Classic devices on `adapter` for `seconds`. Likely
-/// TNCs come first, then the strongest signal. `tnc_for` names the TNC
-/// already defined at an address.
+/// Look for Bluetooth Classic devices on `adapter` for `seconds`, or until
+/// `stop`. Each device goes to `found` as it turns up, and again when
+/// there's news about it (its name came in). Returns them all, likely TNCs
+/// first, then the strongest signal. `tnc_for` names the TNC already
+/// defined at an address.
 pub async fn scan(
     adapter: &Adapter,
     seconds: u64,
+    stop: CancellationToken,
     tnc_for: impl Fn(Address) -> Option<String>,
+    mut found: impl FnMut(&BtDevice),
 ) -> Result<Vec<BtDevice>, String> {
     adapter
         .set_discovery_filter(DiscoveryFilter {
@@ -62,45 +67,52 @@ pub async fn scan(
         .await
         .map_err(|e| format!("can't scan on {}: {e}", adapter.name()))?;
     // Discovery runs while the stream lives, so it stops at the end of
-    // this block, before the devices are looked at.
+    // this block, before the devices are looked at again.
     let mut seen: Vec<Address> = Vec::new();
     {
+        // With changes, so a name that comes in after the device shows up
+        // is reported too.
         let events = adapter
-            .discover_devices()
+            .discover_devices_with_changes()
             .await
             .map_err(|e| format!("can't scan on {}: {e}", adapter.name()))?;
         futures::pin_mut!(events);
-        let _ = tokio::time::timeout(Duration::from_secs(seconds), async {
+        let mut last: Vec<BtDevice> = Vec::new();
+        let look = async {
             while let Some(ev) = events.next().await {
-                if let AdapterEvent::DeviceAdded(addr) = ev
-                    && !seen.contains(&addr)
-                {
-                    seen.push(addr);
+                let AdapterEvent::DeviceAdded(addr) = ev else {
+                    continue;
+                };
+                let Some(d) = device(adapter, addr, &tnc_for).await else {
+                    continue;
+                };
+                match last.iter_mut().find(|l| l.address == d.address) {
+                    // The signal strength changes all the time; that's
+                    // not news.
+                    Some(l) if l.name == d.name && l.paired == d.paired => {}
+                    Some(l) => {
+                        found(&d);
+                        *l = d;
+                    }
+                    None => {
+                        found(&d);
+                        seen.push(addr);
+                        last.push(d);
+                    }
                 }
             }
-        })
-        .await;
+        };
+        tokio::select! {
+            _ = tokio::time::timeout(Duration::from_secs(seconds), look) => {}
+            _ = stop.cancelled() => {}
+        }
     }
 
     let mut out = Vec::new();
     for addr in seen {
-        let Ok(dev) = adapter.device(addr) else {
-            continue;
-        };
-        // Phones and computers show up too; anything with a BR/EDR name is
-        // listed, TNCs first.
-        let name = dev.name().await.ok().flatten();
-        let known = known_tnc(name.as_deref());
-        out.push(BtDevice {
-            address: addr.to_string(),
-            rssi: dev.rssi().await.ok().flatten(),
-            icon: dev.icon().await.ok().flatten(),
-            paired: dev.is_paired().await.unwrap_or(false),
-            known_tnc: known.map(|k| k.0.to_string()),
-            model: known.map(|k| k.1.to_string()),
-            tnc: tnc_for(addr),
-            name,
-        });
+        if let Some(d) = device(adapter, addr, &tnc_for).await {
+            out.push(d);
+        }
     }
     out.sort_by_key(|d| {
         (
@@ -109,6 +121,28 @@ pub async fn scan(
         )
     });
     Ok(out)
+}
+
+/// What BlueZ knows about the device at `addr`. Phones and computers show
+/// up too; they're listed, after TNCs.
+async fn device(
+    adapter: &Adapter,
+    addr: Address,
+    tnc_for: impl Fn(Address) -> Option<String>,
+) -> Option<BtDevice> {
+    let dev = adapter.device(addr).ok()?;
+    let name = dev.name().await.ok().flatten();
+    let known = known_tnc(name.as_deref());
+    Some(BtDevice {
+        address: addr.to_string(),
+        rssi: dev.rssi().await.ok().flatten(),
+        icon: dev.icon().await.ok().flatten(),
+        paired: dev.is_paired().await.unwrap_or(false),
+        known_tnc: known.map(|k| k.0.to_string()),
+        model: known.map(|k| k.1.to_string()),
+        tnc: tnc_for(addr),
+        name,
+    })
 }
 
 /// A reply to a [`PairingStep`] that needs one.

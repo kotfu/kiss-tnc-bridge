@@ -4,6 +4,66 @@
   "messages": {
     "EventMessage": {
       "$defs": {
+        "BtDevice": {
+          "description": "A Bluetooth Classic device, as `bluetooth.scan` finds it.",
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "icon": {
+              "description": "What BlueZ makes of its class: `phone`, `audio-headset`, ….",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "known_tnc": {
+              "description": "A TNC this daemon knows: `Kenwood TH-D75`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "The `model` to use for it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "paired": {
+              "type": "boolean"
+            },
+            "rssi": {
+              "description": "Signal strength in dBm, when the scan saw it.",
+              "format": "int16",
+              "maximum": 32767,
+              "minimum": -32768,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tnc": {
+              "description": "The TNC already defined with this address.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "address",
+            "paired"
+          ],
+          "type": "object"
+        },
         "Decoded": {
           "description": "A KISS frame, decoded as far as it decodes.",
           "properties": {
@@ -333,6 +393,29 @@
           "required": [
             "event",
             "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device found by this connection's `bluetooth.scan` request\n`request`, or found again with news (its name came in). Sent only\nto that connection.",
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/BtDevice"
+            },
+            "event": {
+              "const": "found",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "request",
+            "device"
           ],
           "type": "object"
         }
@@ -1002,7 +1085,7 @@
           "type": "object"
         },
         {
-          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found.",
+          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found. Meanwhile\nthe daemon sends this connection a `found` event for each device as\nit turns up.",
           "properties": {
             "adapter": {
               "type": [
@@ -1025,6 +1108,25 @@
           },
           "required": [
             "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "End this connection's `bluetooth.scan` request `request` now; it\nanswers with what it found so far.",
+          "properties": {
+            "cmd": {
+              "const": "bluetooth.scan_stop",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "request"
           ],
           "type": "object"
         },

@@ -100,6 +100,11 @@ pub enum DaemonCmd {
 type Pairings =
     Arc<Mutex<std::collections::HashMap<(u64, u64), mpsc::Sender<crate::pairing::Reply>>>>;
 
+/// Scans running for a requester, by (connection, request id), to end
+/// early on `bluetooth.scan_stop`.
+#[cfg(target_os = "linux")]
+type Scans = Arc<Mutex<std::collections::HashMap<(u64, u64), CancellationToken>>>;
+
 /// A device for `bluetooth.pair` or `unpair`.
 #[cfg(target_os = "linux")]
 struct BtTarget {
@@ -240,6 +245,8 @@ pub async fn run(
         bt_busy: Arc::new(tokio::sync::Mutex::new(())),
         #[cfg(target_os = "linux")]
         pairings: Arc::default(),
+        #[cfg(target_os = "linux")]
+        scans: Arc::default(),
     };
     d.store = d.store_from_sources();
     // The warnings logged at startup, rebuilt from the same sources.
@@ -285,6 +292,7 @@ pub async fn run(
                 }) => match command {
                     // These run in the background and answer when done.
                     c @ (Command::BluetoothScan { .. }
+                    | Command::BluetoothScanStop { .. }
                     | Command::BluetoothPair { .. }
                     | Command::BluetoothPairReply { .. }
                     | Command::BluetoothUnpair { .. }) => d.bluetooth(c, reply, from).await,
@@ -335,6 +343,9 @@ struct Daemon {
     /// where that connection's `bluetooth.pair_reply` goes.
     #[cfg(target_os = "linux")]
     pairings: Pairings,
+    /// Scans that `bluetooth.scan_stop` can end.
+    #[cfg(target_os = "linux")]
+    scans: Scans,
 }
 
 impl Daemon {
@@ -530,6 +541,7 @@ impl Daemon {
             },
             Command::ConfigCheck { dynamic } => Ok(to_value(&self.check(dynamic).await)),
             Command::BluetoothScan { .. }
+            | Command::BluetoothScanStop { .. }
             | Command::BluetoothPair { .. }
             | Command::BluetoothPairReply { .. }
             | Command::BluetoothUnpair { .. } => Err(ApiError::new(
@@ -910,7 +922,6 @@ impl Daemon {
             })
     }
 
-    /// A TNC's id from its id or its name.
     /// `bluetooth.*` commands. Scans and pairings take a while, so they run
     /// in their own tasks and answer `reply` when done; one at a time.
     #[cfg(target_os = "linux")]
@@ -960,6 +971,27 @@ impl Daemon {
                 };
                 let _ = reply.send(res);
             }
+            Command::BluetoothScanStop { request } => {
+                let stop = self
+                    .scans
+                    .lock()
+                    .unwrap()
+                    .get(&(from.conn, request))
+                    .cloned();
+                let res = match stop {
+                    Some(stop) => {
+                        stop.cancel();
+                        Ok(json!({}))
+                    }
+                    None => Err(ApiError::new(
+                        ErrorCode::NotFound,
+                        format!(
+                            "no scan started by this connection's request {request} is running"
+                        ),
+                    )),
+                };
+                let _ = reply.send(res);
+            }
             Command::BluetoothScan { adapter, seconds } => {
                 let target = match self.bt_adapter(adapter.as_deref()).await {
                     Ok(a) => a,
@@ -978,19 +1010,45 @@ impl Daemon {
                             .map(|s| (bluer::Address(s.address.0), t.id.clone()))
                     })
                     .collect();
-                let lock = self.bt_busy.clone();
+                let (lock, scans) = (self.bt_busy.clone(), self.scans.clone());
                 let secs = seconds.unwrap_or(10).clamp(1, 60);
+                let key = (from.conn, from.request);
+                let (events, request) = (from.events, from.request);
                 tokio::spawn(async move {
                     let Ok(_held) = lock.try_lock() else {
                         let _ = reply.send(Err(busy()));
                         return;
                     };
-                    let res = pairing::scan(&target, secs, |a| {
-                        tncs.iter().find(|(x, _)| *x == a).map(|(_, id)| id.clone())
-                    })
+                    let stop = CancellationToken::new();
+                    scans.lock().unwrap().insert(key, stop.clone());
+                    // Each device goes to the requester's connection as
+                    // it's found, and only there; a requester that's gone
+                    // ends the scan.
+                    let found = |device: &protocol::BtDevice| {
+                        let msg = protocol::EventMessage {
+                            v: protocol::VERSION,
+                            event: protocol::Event::Found {
+                                request,
+                                device: device.clone(),
+                            },
+                        };
+                        if let Ok(line) = serde_json::to_string(&msg)
+                            && let Err(mpsc::error::TrySendError::Closed(_)) = events.try_send(line)
+                        {
+                            stop.cancel();
+                        }
+                    };
+                    let res = pairing::scan(
+                        &target,
+                        secs,
+                        stop.clone(),
+                        |a| tncs.iter().find(|(x, _)| *x == a).map(|(_, id)| id.clone()),
+                        found,
+                    )
                     .await
                     .map(|l| to_value(&l))
                     .map_err(failed);
+                    scans.lock().unwrap().remove(&key);
                     let _ = reply.send(res);
                 });
             }

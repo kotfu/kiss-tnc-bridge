@@ -1726,6 +1726,11 @@ the TUI.
       the TNC link up with `port.connect` and then hands it back with a new
       `port.release`, since an `on_demand` bridge with no apps wouldn't
       connect at all.
+- [x] Pick the radio while the scan runs: `bluetooth.scan` sends `found`
+      events as devices turn up, and `bluetooth.scan_stop` ends it early.
+      The wizard lists devices as they're found (looking for up to 60 s),
+      Enter takes the radio the user said it is once it shows up, and
+      `ktbctl scan` prints each device as it's found.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing

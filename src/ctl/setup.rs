@@ -37,8 +37,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::cli::BtWho;
-use super::client::{Client, CtlError, Message};
-use super::run::{Ctl, ask_line, confirm, interactive};
+use super::client::{Client, CtlError, Message, result};
+use super::run::{Ctl, ask_line, confirm, interactive, prompt, read_line};
 use crate::control::protocol::{
     AdapterStatus, BtDevice, Command, ConfigText, ErrorCode, Event, ModelEntry, ObjectKind,
     RadioEntry, SerialEntry, Status, Topic,
@@ -199,43 +199,23 @@ impl Ctl {
         };
         let adapter_value = self.adapter_value(c, adapter, s).await?;
 
+        let prefix = bt.map(|b| b.name_prefix.as_str());
         let device = loop {
             println!("\n{pairing_mode}");
             if !confirm("Ready to look for it?", true).await {
                 return Err(CtlError::Message("stopped".into()));
             }
-            println!("Looking for 10 s...");
-            let found: Vec<BtDevice> = c
-                .call_as(Command::BluetoothScan {
-                    adapter: Some(adapter_value.clone()),
-                    seconds: Some(10),
-                })
-                .await?;
-            let mut options: Vec<String> = found
-                .iter()
-                .map(|d| {
-                    let what = d.known_tnc.clone().or(d.icon.clone()).unwrap_or_default();
-                    format!(
-                        "{}  {}  {what}",
-                        d.address,
-                        d.name.as_deref().unwrap_or("(no name)")
-                    )
-                })
-                .collect();
+            let found = match pick_device(c, &adapter_value, prefix).await? {
+                Scan::Picked(d) => break d,
+                Scan::Done(found) => found,
+            };
+            let mut options: Vec<String> = found.iter().map(device_option).collect();
             options.push("Look again".into());
             if found.is_empty() {
                 println!("Nothing found.");
             }
             // The radio they said it is, if the scan saw one.
-            let likely = bt
-                .and_then(|b| {
-                    found.iter().position(|d| {
-                        d.name
-                            .as_deref()
-                            .is_some_and(|n| n.starts_with(&b.name_prefix))
-                    })
-                })
-                .unwrap_or(0);
+            let likely = likely_device(&found, prefix).unwrap_or(0);
             let pick = menu("Which is it?", &options, likely).await;
             if let Some(d) = found.get(pick) {
                 break d.clone();
@@ -725,6 +705,112 @@ async fn menu(question: &str, options: &[String], default: usize) -> usize {
             _ => println!("Pick a number from 1 to {}.", options.len()),
         }
     }
+}
+
+/// How long the wizard looks for a radio, at most. Picking it ends the
+/// scan sooner.
+const SCAN_SECS: u64 = 60;
+
+/// How a scan for the radio ended.
+enum Scan {
+    /// Picked while the scan was running.
+    Picked(BtDevice),
+    /// The scan ran out first; everything it found.
+    Done(Vec<BtDevice>),
+}
+
+/// Scan on `adapter`, listing each device as it's found (once it has a
+/// name), and let the user pick one without waiting for the scan to end.
+/// Enter picks the first device whose name starts with `prefix` (the
+/// radio they said it is), once one shows up.
+async fn pick_device(
+    c: &mut Client,
+    adapter: &str,
+    prefix: Option<&str>,
+) -> Result<Scan, CtlError> {
+    println!("Looking for up to {SCAN_SECS} s. Pick it as soon as it shows up.");
+    let id = c
+        .send(Command::BluetoothScan {
+            adapter: Some(adapter.to_string()),
+            seconds: Some(SCAN_SECS),
+        })
+        .await?;
+    let mut shown: Vec<BtDevice> = Vec::new();
+    let ask = |shown: &[BtDevice]| match likely_device(shown, prefix) {
+        Some(i) => format!("Its number [{}]: ", i + 1),
+        None => "Its number, when it shows up: ".to_string(),
+    };
+    prompt(&ask(&shown));
+    let picked = loop {
+        tokio::select! {
+            line = read_line() => {
+                let choice = match line.as_deref() {
+                    None => return Err(CtlError::Message("stopped".into())),
+                    Some("") => likely_device(&shown, prefix),
+                    Some(n) => n.parse::<usize>().ok().filter(|n| (1..=shown.len()).contains(n)).map(|n| n - 1),
+                };
+                match choice {
+                    Some(i) => break shown[i].clone(),
+                    None if line.as_deref() == Some("") => {}
+                    None if shown.is_empty() => println!("Nothing yet; still looking."),
+                    None => println!("Pick a number from 1 to {}.", shown.len()),
+                }
+                prompt(&ask(&shown));
+            }
+            msg = c.next_message() => match msg?.ok_or(CtlError::Closed)? {
+                Message::Response(res) if res.id == Some(id) => {
+                    // End the prompt's line.
+                    eprintln!();
+                    println!("Stopped looking after {SCAN_SECS} s.");
+                    let found: Vec<BtDevice> = serde_json::from_value(result(res)?)
+                        .map_err(|e| CtlError::Protocol(e.to_string()))?;
+                    return Ok(Scan::Done(found));
+                }
+                Message::Event(ev) => {
+                    if let Event::Found { request, device } = ev.event
+                        && request == id
+                        && device.name.is_some()
+                        && !shown.iter().any(|d| d.address == device.address)
+                    {
+                        // Over the prompt, which comes back below the list.
+                        eprint!("\r\x1b[2K");
+                        println!("  {}) {}", shown.len() + 1, device_option(&device));
+                        shown.push(device);
+                        prompt(&ask(&shown));
+                    }
+                }
+                Message::Response(_) => {}
+            },
+        }
+    };
+    // The scan holds the adapter until it ends, and pairing needs it.
+    c.send(Command::BluetoothScanStop { request: id }).await?;
+    loop {
+        match c.next_message().await?.ok_or(CtlError::Closed)? {
+            Message::Response(res) if res.id == Some(id) => {
+                result(res)?;
+                return Ok(Scan::Picked(picked));
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// `40:79:12:E4:95:9D  TH-D75  Kenwood TH-D75`.
+fn device_option(d: &BtDevice) -> String {
+    let what = d.known_tnc.clone().or(d.icon.clone()).unwrap_or_default();
+    format!(
+        "{}  {}  {what}",
+        d.address,
+        d.name.as_deref().unwrap_or("(no name)")
+    )
+}
+
+/// The first device whose name starts with `prefix`.
+fn likely_device(list: &[BtDevice], prefix: Option<&str>) -> Option<usize> {
+    let prefix = prefix?;
+    list.iter()
+        .position(|d| d.name.as_deref().is_some_and(|n| n.starts_with(prefix)))
 }
 
 /// Ask with a default for an empty answer.

@@ -45,8 +45,9 @@ One JSON object per line, each way. Every message carries `"v": 1`.
   answered by its id when it's done, which for a scan or a pairing can be
   a while after the requests behind it.
 - An **event** has `event` and no `id`; it arrives only on a connection
-  that subscribed to its topic, except `pairing` events, which go to the
-  connection whose `bluetooth.pair` they belong to.
+  that subscribed to its topic, except `pairing` and `found` events, which
+  go to the connection whose `bluetooth.pair` or `bluetooth.scan` they
+  belong to.
 - A request line can be up to 1 MiB.
 
 **Versioning.** Additive changes (a new command, a new optional field, a
@@ -312,7 +313,7 @@ the same table.
              {"name": "Kenwood TH-D74", "model": "th-d74", …}]}]
 ```
 
-### Bluetooth: `bluetooth.scan`, `pair`, `unpair`
+### Bluetooth: `bluetooth.scan`, `scan_stop`, `pair`, `unpair`
 
 Radios reach the bridge over Bluetooth Classic (RFCOMM), which needs them
 paired with the host; phones don't (see the README). A device is named by
@@ -329,6 +330,24 @@ in pairing mode to be found.
   "known_tnc": "Kenwood TH-D75", "model": "th-d75", "tnc": "d75"},
  {"address": "50:3B:70:E1:1C:11", "name": "jPhone", "icon": "phone", "paired": false}]
 ```
+
+While it looks, the daemon sends the requesting connection a `found` event
+with the request's id and the `device` as each one turns up, and again
+when there's news about one already sent (a device often shows up before
+its name does; changes in signal strength aren't news). A client can list
+devices as they come, and end the scan with `bluetooth.scan_stop` once it
+has the one it wants; the scan then answers with what it found so far.
+
+```jsonc
+→ {"v":1,"id":3,"cmd":"bluetooth.scan","adapter":"hci0","seconds":60}
+← {"v":1,"event":"found","request":3,"device":{"address":"40:79:12:E4:95:9D","paired":false}}
+← {"v":1,"event":"found","request":3,"device":{"address":"40:79:12:E4:95:9D","name":"TH-D75","rssi":-52,"paired":false,"known_tnc":"Kenwood TH-D75","model":"th-d75"}}
+→ {"v":1,"id":4,"cmd":"bluetooth.scan_stop","request":3}
+← {"v":1,"id":4,"ok":true,"result":{}}
+← {"v":1,"id":3,"ok":true,"result":[{"address":"40:79:12:E4:95:9D","name":"TH-D75",…}]}
+```
+
+A scan whose connection closes stops.
 
 `bluetooth.pair` pairs and trusts the device, and its request stays open
 until that's done. If BlueZ hasn't seen the device yet, it looks for it
@@ -374,6 +393,7 @@ One scan or pairing runs at a time; another gets `busy`.
 | `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, the session it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
 | — | `pairing` | A step of this connection's `bluetooth.pair` (see above) |
+| — | `found` | A device found by this connection's `bluetooth.scan` (see above) |
 
 State events are hints: after one, read `status` for the whole picture.
 Frames are decoded for display only; the daemon never acts on what's in

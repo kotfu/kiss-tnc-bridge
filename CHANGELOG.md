@@ -101,16 +101,18 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   disconnect someone are confirmed in a terminal and refused without one
   unless given `--yes`. Every command takes `--json`. Packaged alongside
   the daemon.
-- Radios can be paired through the daemon: `ktbctl scan` finds them
-  (known radios first, with their model), `ktbctl pair` pairs and trusts
-  one by TNC or address, relaying the passkey to confirm, and `ktbctl
-  unpair` forgets it. A port waiting for its radio connects a few seconds
-  after it's paired. In the control API: `bluetooth.scan`,
+- Radios can be paired through the daemon: `ktbctl scan` finds them,
+  listing each as it turns up (known radios first, with their model),
+  `ktbctl pair` pairs and trusts one by TNC or address, relaying the
+  passkey to confirm, and `ktbctl unpair` forgets it. A port waiting for
+  its radio connects a few seconds after it's paired. In the control API:
+  `bluetooth.scan` with `found` events and `bluetooth.scan_stop`,
   `bluetooth.pair` with `pairing` events and `bluetooth.pair_reply`, and
   `bluetooth.unpair`; a connection can now have several requests in
   flight.
 - `ktbctl setup`: a step-by-step wizard for a TNC (over Bluetooth, with
-  scanning and pairing, USB/serial, or a KISS TCP server on the network)
+  scanning, where the radio can be picked as soon as it shows up, and
+  pairing, USB/serial, or a KISS TCP server on the network)
   and a bridge sharing it over BLE, TCP or both, ending with a check that
   the TNC connects and is heard. Radio-specific instructions come from the
   daemon's model table, which now lists the radios it knows (served by

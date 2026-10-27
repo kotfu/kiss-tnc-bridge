@@ -74,6 +74,8 @@ pub struct Client {
     reader: BufReader<OwnedReadHalf>,
     writer: OwnedWriteHalf,
     next_id: u64,
+    /// A line partly read when a read was cancelled.
+    line: Vec<u8>,
 }
 
 impl Client {
@@ -87,6 +89,7 @@ impl Client {
             reader: BufReader::new(r),
             writer: w,
             next_id: 1,
+            line: Vec::new(),
         })
     }
 
@@ -123,6 +126,7 @@ impl Client {
     }
 
     /// The next response or event; `None` when the daemon goes away.
+    /// Cancel-safe: a message partly read is finished by the next call.
     pub async fn next_message(&mut self) -> Result<Option<Message>, CtlError> {
         let Some(msg) = self.read_line().await? else {
             return Ok(None);
@@ -165,11 +169,13 @@ impl Client {
     }
 
     async fn read_line(&mut self) -> Result<Option<Value>, CtlError> {
-        let mut line = String::new();
-        if self.reader.read_line(&mut line).await? == 0 {
+        // read_until keeps what it has read in `self.line` if it's
+        // cancelled (the setup wizard races it against the keyboard).
+        if self.reader.read_until(b'\n', &mut self.line).await? == 0 && self.line.is_empty() {
             return Ok(None);
         }
-        serde_json::from_str(&line)
+        let line = std::mem::take(&mut self.line);
+        serde_json::from_slice(&line)
             .map(Some)
             .map_err(|e| CtlError::Protocol(e.to_string()))
     }
@@ -205,5 +211,35 @@ mod tests {
         assert!(msg.contains("Is kiss-tnc-bridge running"), "{msg}");
         let msg = connect_hint(p, &io::Error::from(io::ErrorKind::PermissionDenied));
         assert!(msg.contains("kiss-tnc-bridge group"), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_read_loses_nothing() {
+        let (ours, mut daemon) = UnixStream::pair().unwrap();
+        let (r, w) = ours.into_split();
+        let mut c = Client {
+            path: PathBuf::new(),
+            reader: BufReader::new(r),
+            writer: w,
+            next_id: 1,
+            line: Vec::new(),
+        };
+        let line = r#"{"v":1,"event":"lagged","missed":3}"#;
+        let (head, tail) = line.split_at(12);
+        daemon.write_all(head.as_bytes()).await.unwrap();
+        // Half a message, then the read is given up on, as the setup
+        // wizard does when a key is pressed first.
+        let cancelled =
+            tokio::time::timeout(std::time::Duration::from_millis(50), c.next_message()).await;
+        assert!(cancelled.is_err());
+        daemon.write_all(tail.as_bytes()).await.unwrap();
+        daemon.write_all(b"\n").await.unwrap();
+        match c.next_message().await.unwrap() {
+            Some(Message::Event(ev)) => assert_eq!(
+                ev.event,
+                crate::control::protocol::Event::Lagged { missed: 3 }
+            ),
+            _ => panic!("expected the lagged event"),
+        }
     }
 }

@@ -224,33 +224,33 @@ pub fn bt_devices(list: &[BtDevice]) -> String {
     if list.is_empty() {
         return "nothing found. Is the radio in pairing mode, with Bluetooth on?\n".into();
     }
-    let mut out = String::new();
-    for d in list {
-        let what = match (&d.known_tnc, &d.model) {
-            (Some(k), Some(m)) => format!("{k} (model {m})"),
-            (Some(k), None) => k.clone(),
-            _ => d.icon.clone().unwrap_or_default(),
-        };
-        let mut extra = Vec::new();
-        if let Some(r) = d.rssi {
-            extra.push(format!("{r} dBm"));
-        }
-        if d.paired {
-            extra.push("paired".into());
-        }
-        if let Some(t) = &d.tnc {
-            extra.push(format!("tnc {t}"));
-        }
-        let _ = writeln!(
-            out,
-            "{}  {:<20} {:<32} {}",
-            d.address,
-            d.name.as_deref().unwrap_or("(no name)"),
-            what,
-            extra.join("  ")
-        );
+    list.iter().map(bt_device).collect()
+}
+
+/// One line of `scan`.
+pub fn bt_device(d: &BtDevice) -> String {
+    let what = match (&d.known_tnc, &d.model) {
+        (Some(k), Some(m)) => format!("{k} (model {m})"),
+        (Some(k), None) => k.clone(),
+        _ => d.icon.clone().unwrap_or_default(),
+    };
+    let mut extra = Vec::new();
+    if let Some(r) = d.rssi {
+        extra.push(format!("{r} dBm"));
     }
-    out
+    if d.paired {
+        extra.push("paired".into());
+    }
+    if let Some(t) = &d.tnc {
+        extra.push(format!("tnc {t}"));
+    }
+    format!(
+        "{}  {:<20} {:<32} {}\n",
+        d.address,
+        d.name.as_deref().unwrap_or("(no name)"),
+        what,
+        extra.join("  ")
+    )
 }
 
 pub fn models(list: &[ModelEntry]) -> String {

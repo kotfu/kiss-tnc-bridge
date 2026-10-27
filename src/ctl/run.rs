@@ -143,13 +143,7 @@ impl Ctl {
                          (discoverable) to be found."
                     );
                 }
-                let l: Vec<BtDevice> = c
-                    .call_as(Command::BluetoothScan {
-                        adapter,
-                        seconds: Some(seconds),
-                    })
-                    .await?;
-                self.print(&l, || render::bt_devices(&l))
+                self.scan(c, adapter, seconds).await
             }
             Cmd::Pair(who) => self.pair(c, who).await,
             Cmd::Unpair(who) => self.unpair(c, who).await,
@@ -306,6 +300,56 @@ impl Ctl {
                         )
                     }
                 })
+            }
+        }
+    }
+
+    /// `scan`: each device is shown as it's found, once it has a name;
+    /// those that never give one, at the end.
+    async fn scan(
+        &self,
+        c: &mut Client,
+        adapter: Option<String>,
+        seconds: u64,
+    ) -> Result<(), CtlError> {
+        let id = c
+            .send(Command::BluetoothScan {
+                adapter,
+                seconds: Some(seconds),
+            })
+            .await?;
+        let mut shown: Vec<String> = Vec::new();
+        loop {
+            match c.next_message().await?.ok_or(CtlError::Closed)? {
+                Message::Response(res) if res.id == Some(id) => {
+                    let v = result(res)?;
+                    let l: Vec<BtDevice> = serde_json::from_value(v.clone())
+                        .map_err(|e| CtlError::Protocol(e.to_string()))?;
+                    let rest: Vec<BtDevice> = l
+                        .iter()
+                        .filter(|d| !shown.contains(&d.address))
+                        .cloned()
+                        .collect();
+                    return self.print(&v, || {
+                        if l.is_empty() {
+                            render::bt_devices(&l)
+                        } else {
+                            rest.iter().map(render::bt_device).collect()
+                        }
+                    });
+                }
+                Message::Event(ev) => {
+                    if let Event::Found { request, device } = ev.event
+                        && request == id
+                        && device.name.is_some()
+                        && !shown.contains(&device.address)
+                        && !self.json
+                    {
+                        print!("{}", render::bt_device(&device));
+                        shown.push(device.address);
+                    }
+                }
+                Message::Response(_) => {}
             }
         }
     }
@@ -769,37 +813,78 @@ pub(super) fn interactive() -> bool {
 
 /// Ask a yes/no question on the terminal.
 pub(super) async fn confirm(question: &str, default_yes: bool) -> bool {
-    let prompt = format!("{question} [{}] ", if default_yes { "Y/n" } else { "y/N" });
-    tokio::task::spawn_blocking(move || {
-        eprint!("{prompt}");
-        let _ = std::io::stderr().flush();
-        let mut answer = String::new();
-        if std::io::stdin().read_line(&mut answer).is_err() {
-            return false;
-        }
-        match answer.trim().to_ascii_lowercase().as_str() {
+    prompt(&format!(
+        "{question} [{}] ",
+        if default_yes { "Y/n" } else { "y/N" }
+    ));
+    match read_line().await {
+        None => false,
+        Some(a) => match a.to_ascii_lowercase().as_str() {
             "" => default_yes,
             a => a == "y" || a == "yes",
-        }
-    })
-    .await
-    .unwrap_or(false)
+        },
+    }
 }
 
 /// Read a line from the terminal; `None` for an empty answer.
-pub(super) async fn ask_line(prompt: &str) -> Option<String> {
-    let prompt = prompt.to_string();
-    tokio::task::spawn_blocking(move || {
-        eprint!("{prompt}");
-        let _ = std::io::stderr().flush();
-        let mut answer = String::new();
-        std::io::stdin().read_line(&mut answer).ok()?;
-        let a = answer.trim().to_string();
-        (!a.is_empty()).then_some(a)
-    })
-    .await
-    .ok()
-    .flatten()
+pub(super) async fn ask_line(question: &str) -> Option<String> {
+    prompt(question);
+    read_line().await.filter(|a| !a.is_empty())
+}
+
+/// Show a prompt on the terminal, without a newline.
+pub(super) fn prompt(text: &str) {
+    eprint!("{text}");
+    let _ = std::io::stderr().flush();
+}
+
+/// The next line typed, trimmed; `None` at the end of input.
+///
+/// Every prompt reads through here: one thread reads stdin a line at a
+/// time, when asked. Waiting is cancel-safe, so a prompt can race the
+/// daemon's messages (the scan picker); a line that comes in after the
+/// prompt gave up waiting goes to the next prompt.
+pub(super) async fn read_line() -> Option<String> {
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, mpsc};
+
+    struct Stdin {
+        ask: std::sync::mpsc::Sender<()>,
+        lines: mpsc::UnboundedReceiver<Option<String>>,
+        asked: bool,
+    }
+    static STDIN: OnceLock<Mutex<Stdin>> = OnceLock::new();
+    let stdin = STDIN.get_or_init(|| {
+        let (ask, asks) = std::sync::mpsc::channel::<()>();
+        let (tx, lines) = mpsc::unbounded_channel();
+        // Not a blocking task: a read still waiting when ktbctl exits
+        // mustn't hold up the runtime's shutdown.
+        std::thread::spawn(move || {
+            while asks.recv().is_ok() {
+                let mut line = String::new();
+                let got = match std::io::stdin().read_line(&mut line) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => Some(line.trim().to_string()),
+                };
+                if tx.send(got).is_err() {
+                    break;
+                }
+            }
+        });
+        Mutex::new(Stdin {
+            ask,
+            lines,
+            asked: false,
+        })
+    });
+    let mut s = stdin.lock().await;
+    if !s.asked {
+        s.ask.send(()).ok()?;
+        s.asked = true;
+    }
+    let line = s.lines.recv().await.flatten();
+    s.asked = false;
+    line
 }
 
 fn run_editor(path: &std::path::Path) -> Result<(), CtlError> {
