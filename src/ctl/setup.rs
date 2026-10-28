@@ -67,7 +67,7 @@ impl Ctl {
             ));
         }
         println!("This sets up a TNC and a bridge to share it. Ctrl-C stops at any point;");
-        println!("anything made by then stays, and `ktbctl status` shows it.\n");
+        println!("anything made by then stays, and 'ktbctl status' shows it.\n");
         let s: Status = c.call_as(Command::Status).await?;
         let how = menu(
             "How will the bridge reach the TNC?",
@@ -571,7 +571,7 @@ impl Ctl {
                 self.report(&CtlError::Api(e));
                 if !confirm("Switch to it, disabling the bridges in its way?", false).await {
                     println!(
-                        "{bridge} is set up but disabled; `ktbctl switch {bridge}` turns it on later."
+                        "{bridge} is set up but disabled; 'ktbctl switch {bridge}' turns it on later."
                     );
                     return Ok(());
                 }
@@ -636,7 +636,7 @@ impl Ctl {
                     }
                 }
                 Err(why) => println!(
-                    "The TNC didn't connect: {why}. `ktbctl status` shows the bridge as it tries."
+                    "The TNC didn't connect: {why}. 'ktbctl status' shows the bridge as it tries."
                 ),
             }
         };
