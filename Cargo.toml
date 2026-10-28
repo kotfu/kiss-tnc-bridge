@@ -26,6 +26,8 @@ ipnet = "2.12.2"
 tokio-util = { version = "0.7.20", features = ["rt"] }
 # No libudev: devices are found by path, so cross builds need no C library.
 tokio-serial = { version = "5.4", default-features = false }
+# ktbctl's TUI.
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
 
 [features]
 schema = ["dep:schemars"]

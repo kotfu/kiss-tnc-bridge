@@ -24,9 +24,10 @@ use clap::{Args, Parser, Subcommand};
     name = "ktbctl",
     version,
     about = "Manage kiss-tnc-bridge through its control socket",
-    after_help = "Bridges and TNCs can be named by id or by name. Commands that would \
-                  disconnect someone ask first in a terminal, and are refused without one \
-                  unless given --yes."
+    after_help = "With no command, ktbctl opens the TUI in a terminal and shows status \
+                  otherwise. Bridges and TNCs can be named by id or by name. Commands that \
+                  would disconnect someone ask first in a terminal, and are refused without \
+                  one unless given --yes."
 )]
 pub struct Cli {
     /// The daemon's control socket [env: KTBCTL_SOCKET] [default: /run/kiss-tnc-bridge/control.sock]
@@ -128,6 +129,9 @@ pub enum Cmd {
     Check,
     /// Re-read the config and apply what changed
     Reload,
+    /// A full-screen view of the bridges, TNCs and frames (also what
+    /// ktbctl with no command opens, in a terminal)
+    Tui,
 }
 
 #[derive(Debug, Subcommand)]

@@ -70,8 +70,16 @@ impl Ctl {
 
     pub async fn run(&self, cmd: Option<Cmd>) -> Outcome {
         let res = match cmd {
-            // The TUI will live here; until then, the overview.
+            None if !self.json && interactive() && std::io::stdout().is_terminal() => {
+                super::tui::run(&self.socket).await
+            }
             None => self.status(None).await,
+            Some(Cmd::Tui) if !(interactive() && std::io::stdout().is_terminal()) => {
+                Err(CtlError::Message(
+                    "the TUI needs a terminal; 'ktbctl status' works without one".into(),
+                ))
+            }
+            Some(Cmd::Tui) => super::tui::run(&self.socket).await,
             Some(Cmd::Monitor { bridge }) => self.monitor(bridge).await,
             Some(cmd) => match Client::connect(&self.socket).await {
                 Ok(mut c) => self.dispatch(&mut c, cmd).await,
@@ -216,7 +224,7 @@ impl Ctl {
                     .await
             }
             Cmd::Setup => self.setup(c).await,
-            Cmd::Monitor { .. } => unreachable!("handled in run"),
+            Cmd::Monitor { .. } | Cmd::Tui => unreachable!("handled in run"),
         }
     }
 

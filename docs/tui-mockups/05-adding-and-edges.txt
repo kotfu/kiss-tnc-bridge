@@ -28,7 +28,7 @@ The rest are small forms in a dialog. A port, for example:
       ┌ Add a port to ktbr1 ─────────────────────────────────────┐
       │                                                          │
       │  Type    > ble-server   tcp-server   tcp-client          │
-      │            spp-client   serial-client                    │
+      │            spp-client   serial                           │
       │                                                          │
       │  Id        lan2                                          │
       │  Listen    wlan0:8002                                    │
@@ -40,7 +40,7 @@ The rest are small forms in a dialog. A port, for example:
       │       [ ⏎ Add ]     [ Esc Cancel ]                       │
       └──────────────────────────────────────────────────────────┘
 
-The fields follow the type: an spp-client or serial-client port picks
+The fields follow the type: an spp-client or serial port picks
 its TNC from a list, a ble-server its adapter.
 
 E (on anything dynamic) does the same hand-off to `ktbctl edit`, in
