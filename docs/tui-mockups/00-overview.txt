@@ -1,0 +1,68 @@
+ktbctl tui: overview and open questions
+=======================================
+
+`ktbctl tui`, or `ktbctl` with no arguments in a terminal, opens a
+full-screen view of the daemon, for watching it and for the everyday
+changes. Built with ratatui, in the ktbctl binary. It has to work over SSH
+on a headless Pi, at 80x24, in a terminal without colour.
+
+Everything it does goes through the control API, exactly as the CLI does,
+on two connections: one for requests, one subscribed to state, activity
+and frames. A state event means "re-read status"; nothing is polled.
+
+Files
+-----
+
+  01-bridges.txt          the main view: bridges, ports, apps; details
+  02-tncs.txt             TNCs and adapters; pairing and scanning
+  03-frames.txt           every frame, with a decode
+  04-confirming.txt       the consent rule, static objects, errors
+  05-adding-and-edges.txt adding things; no bridges; no daemon
+
+Keys
+----
+
+  1 2 3 / Tab        views: Bridges, TNCs, Frames (Tab: lower pane in 1)
+  ↑ ↓  PgUp PgDn     move;  → ← open and fold a bridge
+  e d s              enable, disable, switch           (a bridge)
+  c x r              connect, disconnect, release      (a TNC port)
+  k                  kick                              (an app's session)
+  p u n              pair, unpair, scan                (TNCs view)
+  a  -  E            add, remove, edit in $EDITOR
+  R                  reload the config file
+  f                  Frames, full screen
+  ?                  help: every key, for where you are
+  q  Ctrl-C          quit
+
+Only the keys that work on the selected row are shown at the bottom.
+
+Decisions
+---------
+
+1. Three views (Bridges, TNCs, Frames) rather than the plan's one screen,
+   which at 80x24 left about four lines of frames and squeezed the tree.
+
+2. Adding a bridge hands off to `ktbctl setup`, and E to `ktbctl edit`:
+   the TUI steps aside and comes back when they're done. The wizard's
+   scanning, pairing and check stay in one place. Small forms in the TUI
+   only for a port, an empty bridge, a TNC and an adapter name.
+
+3. The lower pane in Bridges shows the selected bridge's frames; Tab
+   switches it to details of the selected row and back.
+
+4. Activity lights: green RX, amber TX, lit about 0.3 s per event, per
+   port and per session; none on bridges. Filled and empty squares, so
+   they read without colour too.
+
+5. No mouse. The terminal's own selection keeps working, for copying
+   frames.
+
+6. `ktbctl` with no arguments opens the TUI in a terminal, and prints
+   `status` otherwise.
+
+Not in the TUI (yet)
+--------------------
+
+- Changing a port's settings in a form; that's E (edit).
+- Counters over time, graphs.
+- Bridge public names: shown in details, changed with the CLI.

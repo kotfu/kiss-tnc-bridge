@@ -1253,40 +1253,39 @@ Bluetooth), the wizard skips straight to step 5.
 ### `ktbctl tui`: full-screen TUI
 
 Built with `ratatui`, in the same binary as the CLI (the same relationship as
-`nmtui` and `nmcli`).
+`nmtui` and `nmcli`). `ktbctl` with no arguments opens it in a terminal, and
+prints `status` otherwise. It has to work over SSH and at 80×24, because the
+main use is a headless Pi, and in a terminal without colour. The screens are
+mocked up in `docs/tui-mockups/`.
 
-```
-┌ kiss-tnc-bridge ─ pi-zero ─────────────────────────────────────────────────┐
-│ ktbr0  TH-D75 portable                                         ● enabled   │
-│   radio   spp-client      d75 (TH-D75)       connected 2h14m   ■ rx ■ tx   │
-│   phones  ble-server      dongle "TH-D75"    1/2 sessions      ■ rx ■ tx   │
-│             └ 7C:2A:…  iPhone                                  ■ rx ■ tx   │
-│   lan     tcp-server      wlan0:8001         0/4 sessions                  │
-│ ktbr1  Graywolf at home                                        ○ disabled  │
-│ ktbr2  Shack relay                                             ○ disabled  │
-├────────────────────────────────────────────────────────────────────────────┤
-│ tncs     d75 TH-D75  spp: paired on builtin  serial: not present           │
-│ adapters builtin hci0 B8:27:EB:… on · dongle hci1 00:1A:7D:… on            │
-├────────────────────────────────────────────────────────────────────────────┤
-│ 14:22:07 rx ktbr0/radio  W1AW-9>APDR16,WIDE1-1:!4237.14N/07120.83W>        │
-│ 14:22:09 tx ktbr0/phones KD2ABC>APRS,WIDE1-1::W1AW-9   :hello{12           │
-├────────────────────────────────────────────────────────────────────────────┤
-│ ↑↓ select  e enable  d disable  s switch  p pair  a add  m monitor  q quit │
-└────────────────────────────────────────────────────────────────────────────┘
-```
-
-- A tree of bridges → ports → sessions, with state, adapter, and uptime, and
-  a strip showing TNCs (Bluetooth paired or not, serial device present or
-  not) and adapters (present, powered).
-- Activity squares per port and per session that flash on rx and tx in
-  different colors, driven by `activity` events.
-- A live frame pane at the bottom, from `frames` events.
-- Actions: enable, disable, switch, connect, disconnect, kick, pair (with the
-  pairing prompts in a dialog), and add or remove dynamic bridges, ports,
-  TNCs and adapters. Static objects are shown read-only, labeled with their
-  source file.
-- It has to work over SSH and at 80×24, because the main use is a headless
-  Pi.
+- **Three views**, switched with 1, 2, 3:
+  - **Bridges:** a tree of bridges → ports → apps' sessions, with each
+    port's type, what it talks to, and its state. The lower pane shows the
+    selected bridge's frames, and Tab switches it to details of the
+    selected row.
+  - **TNCs:** each TNC with every way it's reached (Bluetooth paired or
+    not, serial plugged in or not) and which bridge uses it, and the host's
+    adapters with what they are. Pairing, unpairing and scanning live here.
+  - **Frames:** every bridge's frames, following the newest, with pause,
+    a text filter, and a decode of the selected frame.
+- **Activity lights** per port and per session, from `activity` events:
+  green RX, amber TX, lit about 0.3 s, as filled and empty squares so they
+  read without colour.
+- **Actions:** enable, disable, switch, connect, disconnect, release, kick,
+  pair, unpair, scan, remove, reload. The bottom line shows only the keys
+  that work on the selected row; `?` lists them all. Static objects are
+  shown read-only, with their source file.
+- **The consent rule** as dialogs: changes go with `non_disruptive` first,
+  and if they'd disconnect someone the dialog says exactly what.
+- **Adding:** a bridge hands off to `ktbctl setup`, and editing to `ktbctl
+  edit`: the TUI steps aside and comes back when they're done. Small forms
+  for a port, an empty bridge, a TNC and an adapter name.
+- **Pairing** in a dialog that walks through the steps; **scanning** in a
+  dialog that fills in as devices are found.
+- **No mouse,** so the terminal's own selection still copies frames.
+- **Two connections:** one for requests, one subscribed to `state`,
+  `activity` and `frames`. A state event means re-read `status`; nothing is
+  polled. If the daemon goes away, the TUI says so and reconnects.
 
 ### `ktb-gateway` (1.x)
 
@@ -1733,6 +1732,7 @@ the TUI.
       `ktbctl scan` prints each device as it's found.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
+- [x] Mock up the TUI (`docs/tui-mockups/`) and settle its open questions.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH; it reconnects when the daemon
       restarts, as `monitor` does.

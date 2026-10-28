@@ -1,0 +1,117 @@
+ktbctl tui: the Bridges view
+============================
+
+What you see first. One screen, three parts:
+
+- the bridge tree: bridges, their ports, and the apps connected to them;
+- a lower pane, showing the selected bridge's frames, or (Tab) details of
+  the selected row;
+- one line of keys for the selected row.
+
+The selected row is in reverse video (shown here with ">").
+
+RX and TX are activity lights. Each lights up for a moment when bytes move
+(from the daemon's `activity` events), RX in green, TX in amber; "■" lit,
+"□" dark. Without colour they still read as filled and empty.
+
+Bridges: "●" running, "○" disabled. A bridge that can't be enabled yet says
+what it's missing. A bridge from the static config file shows "static" and
+its keys say what can't be done there.
+
+Bridge selected
+---------------
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│       PORT    TYPE        WHERE                   STATE                RX TX │
+│ > ● ktbr1  TH-D75                                         running · up 2h14m │
+│       radio   spp-client  TNC d75 on builtin      connected 2h14m      ■  ■  │
+│       phones  ble-server  "TH-D75" on dongle      1 of 2 apps          ■  □  │
+│         └ 40:33:E0:1B:DB:76                       since 14:01          ■  □  │
+│       lan     tcp-server  wlan0:8001              0 of 4 apps          □  □  │
+│   ● ktbr0  KISS at wolfden                       static · running · up 3d02h │
+│       tnc     tcp-client  wolfden.kotfu.net:6700  connected 3d02h      ■  □  │
+│       lan     tcp-server  eth0:8002               0 of 4 apps          □  □  │
+│   ○ ktbr2  Shack relay                                              disabled │
+│   ○ ktbr3  Mobilinkd                            disabled · needs an app port │
+├ Frames: ktbr1 ────────────────────────────────── Tab details · f full screen ┤
+│ 14:21:40 rx radio   KC1QBR-9>APDR16,WIDE1-1,WIDE2-1:=4237.88N/07106.12W$ 61 …│
+│ 14:21:52 rx radio   N1MIE-10>APNU19,WIDE2-1:!4228.50N/07131.00W#PHG5360 Mt W…│
+│ 14:21:58 tx phones  KD2ABC-7>APRS,WIDE1-1:>on the trail                      │
+│ 14:22:03 rx radio   W1AW-9>T2SP0W,WIDE1-1:`c5Ll!Ok/`"4V}_%                   │
+│ 14:22:05 rx radio   KB1ZZZ>APRS,TCPIP*,qAC,T2BOS::KD2ABC-7 :ack12            │
+│ 14:22:07 rx radio   W1XM-3>BEACON,WIDE2-1:MIT Radio Society                  │
+│ 14:22:09 tx phones  KD2ABC-7>APRS,WIDE1-1::W1AW-9   :hello{12                │
+│ 14:22:11 rx radio   W1AW-9>APDR16,WIDE1-1::KD2ABC-7 :ack12                   │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  e enable  d disable  s switch  a add  - remove  ? help  q quit      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+A port selected, with details (Tab)
+-----------------------------------
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│       PORT    TYPE        WHERE                   STATE                RX TX │
+│   ● ktbr1  TH-D75                                         running · up 2h14m │
+│ >     radio   spp-client  TNC d75 on builtin      connected 2h14m      ■  ■  │
+│       phones  ble-server  "TH-D75" on dongle      1 of 2 apps          ■  □  │
+│         └ 40:33:E0:1B:DB:76                       since 14:01          ■  □  │
+│       lan     tcp-server  wlan0:8001              0 of 4 apps          □  □  │
+│   ● ktbr0  KISS at wolfden                       static · running · up 3d02h │
+│       tnc     tcp-client  wolfden.kotfu.net:6700  connected 3d02h      ■  □  │
+│       lan     tcp-server  eth0:8002               0 of 4 apps          □  □  │
+│   ○ ktbr2  Shack relay                                              disabled │
+│   ○ ktbr3  Mobilinkd                            disabled · needs an app port │
+├ Details: ktbr1/radio ──────────────────────────────────────────── Tab frames ┤
+│ spp-client to TNC d75: Kenwood TH-D75 (model th-d75)                         │
+│ 40:79:12:E4:95:9D on builtin (hci0, built into the board) · paired           │
+│ connected since 12:08:11 (2h14m) · connect: always · 3 connects today        │
+│                                                                              │
+│ bridge ktbr1: 412 frames down · 37 up · 0 dropped                            │
+│ defined in dynamic.toml (ktbctl manages it)                                  │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  c connect  x disconnect  r release  a add  - remove  ? help  q quit │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+An app's session selected
+-------------------------
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│       PORT    TYPE        WHERE                   STATE                RX TX │
+│   ● ktbr1  TH-D75                                         running · up 2h14m │
+│       radio   spp-client  TNC d75 on builtin      connected 2h14m      ■  ■  │
+│       phones  ble-server  "TH-D75" on dongle      1 of 2 apps          ■  □  │
+│ >       └ 40:33:E0:1B:DB:76                       since 14:01          ■  □  │
+│       lan     tcp-server  wlan0:8001              0 of 4 apps          □  □  │
+│   ● ktbr0  KISS at wolfden                       static · running · up 3d02h │
+│       tnc     tcp-client  wolfden.kotfu.net:6700  connected 3d02h      ■  □  │
+│       lan     tcp-server  eth0:8002               0 of 4 apps          □  □  │
+│   ○ ktbr2  Shack relay                                              disabled │
+│   ○ ktbr3  Mobilinkd                            disabled · needs an app port │
+├ Details: ktbr1/phones/40:33:E0:1B:DB:76 ───────────────────────── Tab frames ┤
+│ BLE session on ktbr1/phones from 40:33:E0:1B:DB:76                           │
+│ connected since 14:01:33 (21m)                                               │
+│                                                                              │
+│ k disconnects it. A phone app usually reconnects on its own.                 │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  k kick  ? help  q quit                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Notes
+-----
+
+- WHERE says what the port talks to in the fewest words: the TNC and the
+  adapter for a radio, the advertised name and adapter for BLE, the listen
+  address for TCP.
+- STATE for a TNC port is the link (connected, retrying in 8 s, not
+  paired, waiting for wlan0, held up by 'ktbctl connect'); for an app port
+  it's "N of M apps", or "advertising" / "listening" with none.
+- The tree stays in config order. A stopped bridge folds to one line;
+  → / ← open and fold any bridge.
+- Frames in the lower pane are the selected bridge's; the Frames view (3)
+  shows every bridge's, with more room.
