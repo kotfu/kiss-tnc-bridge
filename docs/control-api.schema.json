@@ -4,6 +4,66 @@
   "messages": {
     "EventMessage": {
       "$defs": {
+        "BtDevice": {
+          "description": "A Bluetooth Classic device, as `bluetooth.scan` finds it.",
+          "properties": {
+            "address": {
+              "type": "string"
+            },
+            "icon": {
+              "description": "What BlueZ makes of its class: `phone`, `audio-headset`, ….",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "known_tnc": {
+              "description": "A TNC this daemon knows: `Kenwood TH-D75`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "model": {
+              "description": "The `model` to use for it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "name": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "paired": {
+              "type": "boolean"
+            },
+            "rssi": {
+              "description": "Signal strength in dBm, when the scan saw it.",
+              "format": "int16",
+              "maximum": 32767,
+              "minimum": -32768,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "tnc": {
+              "description": "The TNC already defined with this address.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "address",
+            "paired"
+          ],
+          "type": "object"
+        },
         "Decoded": {
           "description": "A KISS frame, decoded as far as it decodes.",
           "properties": {
@@ -190,6 +250,172 @@
           "required": [
             "event",
             "missed"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A step of the pairing started by this connection's `bluetooth.pair`\nrequest `request`. Sent only to that connection.",
+          "oneOf": [
+            {
+              "description": "The device isn't known yet; looking for it (it must be in pairing\nmode).",
+              "properties": {
+                "step": {
+                  "const": "searching",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Found; pairing now.",
+              "properties": {
+                "name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "step": {
+                  "const": "pairing",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Does the device show this passkey? Reply with `accept`, and confirm\non the device too.",
+              "properties": {
+                "passkey": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "confirm",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "passkey"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Reply with the device's `pin` (legacy pairing).",
+              "properties": {
+                "step": {
+                  "const": "enter_pin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Reply with the `passkey` the device shows.",
+              "properties": {
+                "step": {
+                  "const": "enter_passkey",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Enter this on the device; no reply.",
+              "properties": {
+                "pin": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "show_pin",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "pin"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "Enter this on the device; no reply.",
+              "properties": {
+                "passkey": {
+                  "type": "string"
+                },
+                "step": {
+                  "const": "show_passkey",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step",
+                "passkey"
+              ],
+              "type": "object"
+            },
+            {
+              "description": "May the device pair? Reply with `accept`.",
+              "properties": {
+                "step": {
+                  "const": "authorize",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "step"
+              ],
+              "type": "object"
+            }
+          ],
+          "properties": {
+            "event": {
+              "const": "pairing",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A device found by this connection's `bluetooth.scan` request\n`request`, or found again with news (its name came in). Sent only\nto that connection.",
+          "properties": {
+            "device": {
+              "$ref": "#/$defs/BtDevice"
+            },
+            "event": {
+              "const": "found",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "event",
+            "request",
+            "device"
           ],
           "type": "object"
         }
@@ -671,6 +897,27 @@
           "type": "object"
         },
         {
+          "description": "Let a TNC link follow its `connect` policy again after\n`port.connect` or `port.disconnect`.",
+          "properties": {
+            "bridge": {
+              "type": "string"
+            },
+            "cmd": {
+              "const": "port.release",
+              "type": "string"
+            },
+            "port": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd",
+            "bridge",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.",
           "properties": {
             "cmd": {
@@ -836,6 +1083,153 @@
             "cmd"
           ],
           "type": "object"
+        },
+        {
+          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found, and only\ndevices heard during the scan are listed. Meanwhile the daemon sends\nthis connection a `found` event for each device as it turns up.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.scan",
+              "type": "string"
+            },
+            "seconds": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "End this connection's `bluetooth.scan` request `request` now; it\nanswers with what it found so far.",
+          "properties": {
+            "cmd": {
+              "const": "bluetooth.scan_stop",
+              "type": "string"
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Pair with a device and trust it. The request stays open until the\npairing is done; meanwhile the daemon sends this connection\n`pairing` events, answered with `bluetooth.pair_reply`.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.pair",
+              "type": "string"
+            },
+            "tnc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The answer to a `pairing` event that asks for one: `accept` for a\npasskey to confirm, `pin` or `passkey` for one to enter. `request`\nis the `bluetooth.pair` request's id.",
+          "properties": {
+            "accept": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.pair_reply",
+              "type": "string"
+            },
+            "passkey": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "pin": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "cmd",
+            "request"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Forget a pairing.",
+          "properties": {
+            "adapter": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cmd": {
+              "const": "bluetooth.unpair",
+              "type": "string"
+            },
+            "tnc": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -943,6 +1337,16 @@
             {
               "const": "changed_on_disk",
               "description": "`dynamic.toml` was edited by hand since the daemon read it; reload\nfirst.",
+              "type": "string"
+            },
+            {
+              "const": "failed",
+              "description": "A Bluetooth operation (scan, pairing) was tried and failed; the\nmessage says why.",
+              "type": "string"
+            },
+            {
+              "const": "busy",
+              "description": "Another Bluetooth operation (scan, pairing) is running; try again\nwhen it's done.",
               "type": "string"
             }
           ]
@@ -1611,6 +2015,13 @@
         "AdapterStatus": {
           "description": "A Bluetooth adapter: present on this host, named by an `[[adapter]]`,\nor both.",
           "properties": {
+            "bus": {
+              "description": "What it is, while present: `board` (built into the board), `usb`,\n`pci` or `other`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "hci": {
               "description": "`hci0`, while present.",
               "type": [
@@ -1637,7 +2048,21 @@
             "present": {
               "type": "boolean"
             },
+            "product": {
+              "description": "A USB adapter's product name: `TP-Link UB500 Adapter`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "usb_id": {
+              "description": "A USB adapter's `vendor:product`: `2357:0604`.",
               "type": [
                 "string",
                 "null"
@@ -1974,6 +2399,13 @@
               },
               "type": "array"
             },
+            "radios": {
+              "description": "The radios with this TNC, and how to set each one up.",
+              "items": {
+                "$ref": "#/$defs/RadioEntry"
+              },
+              "type": "array"
+            },
             "summary": {
               "description": "What the daemon does for it.",
               "type": "string"
@@ -1982,6 +2414,92 @@
           "required": [
             "names",
             "summary"
+          ],
+          "type": "object"
+        },
+        "RadioBluetoothEntry": {
+          "properties": {
+            "name_prefix": {
+              "description": "The start of the name it announces in a scan.",
+              "type": "string"
+            },
+            "pairing": {
+              "description": "What happens while it pairs.",
+              "type": "string"
+            },
+            "pairing_mode": {
+              "description": "How to make it discoverable for pairing.",
+              "type": "string"
+            },
+            "setup": {
+              "description": "What to do on the radio before the bridge can use its TNC.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name_prefix",
+            "setup",
+            "pairing_mode",
+            "pairing"
+          ],
+          "type": "object"
+        },
+        "RadioEntry": {
+          "description": "A radio the daemon knows, as `tnc.models` lists it.",
+          "properties": {
+            "bluetooth": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RadioBluetoothEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present when it has a TNC over Bluetooth Classic."
+            },
+            "model": {
+              "description": "The `model` to write for it.",
+              "type": "string"
+            },
+            "name": {
+              "description": "`Kenwood TH-D75`.",
+              "type": "string"
+            },
+            "usb": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RadioUsbEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present when it has a TNC over USB."
+            }
+          },
+          "required": [
+            "name",
+            "model"
+          ],
+          "type": "object"
+        },
+        "RadioUsbEntry": {
+          "properties": {
+            "setup": {
+              "description": "What to do on the radio before the bridge can use its TNC.",
+              "type": "string"
+            },
+            "usb_id": {
+              "description": "`vendor:product`, as `serial.list` shows it.",
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "setup"
           ],
           "type": "object"
         }

@@ -41,8 +41,13 @@ One JSON object per line, each way. Every message carries `"v": 1`.
 - A **response** echoes the `id`, with `"ok": true` and a `result`, or
   `"ok": false` and an `error`. Commands run one at a time, in the order
   the daemon receives them, so each sees the state the last one left.
+  A client may send more requests before the answers come: each is
+  answered by its id when it's done, which for a scan or a pairing can be
+  a while after the requests behind it.
 - An **event** has `event` and no `id`; it arrives only on a connection
-  that subscribed to its topic.
+  that subscribed to its topic, except `pairing` and `found` events, which
+  go to the connection whose `bluetooth.pair` or `bluetooth.scan` they
+  belong to.
 - A request line can be up to 1 MiB.
 
 **Versioning.** Additive changes (a new command, a new optional field, a
@@ -76,6 +81,8 @@ and `data` carries detail for some codes.
 | `in_use` | A TNC or adapter something still refers to; the message lists what |
 | `revision_conflict` | `config.put` with a revision that's no longer current |
 | `changed_on_disk` | `dynamic.toml` was edited by hand since the daemon read it; `reload` first |
+| `failed` | A Bluetooth scan or pairing was tried and failed; the message says why (for a pairing, often what to do at the radio) |
+| `busy` | Another Bluetooth scan or pairing is running; one runs at a time |
 | `internal` | Something went wrong in the daemon |
 
 A **problem** (a config error or warning) is `{"source": "static:
@@ -247,11 +254,12 @@ On dynamic bridges. `port` is the port's id.
 | `port.remove` | `bridge`, `port` | Remove a port |
 | `port.connect` | `bridge`, `port` | Bring a TNC port's link up now and hold it up, whatever its `connect` policy, until `port.disconnect`. Any bridge. Returns `{}` |
 | `port.disconnect` | `bridge`, `port` | Take a TNC port's link down and hold it down until `port.connect`. App sessions stay connected. Any bridge. Returns `{}` |
+| `port.release` | `bridge`, `port` | Let a TNC link follow its `connect` policy again after `port.connect` or `port.disconnect`. Returns `{}` |
 | `session.kick` | `session` | Disconnect one session: `ktbr0/lan/192.168.4.20:51515`, `ktbr0/phones/7C:2A:…` (BLE sessions are dropped at the link layer). Acts at once. Returns `{}` |
 
 `port.add`, `port.update` and `port.remove` take `non_disruptive`;
-`port.connect`, `port.disconnect` and `session.kick` exist to disrupt, and
-act immediately.
+`port.connect`, `port.disconnect`, `port.release` and `session.kick` act
+immediately. `status` shows a held link in the port's `detail`.
 
 ### TNCs and adapters
 
@@ -288,13 +296,95 @@ their by-path names from `also`.
 
 ### `tnc.models`
 
-The TNC models this daemon knows, with the names to use for `model` and
-what the daemon does for each:
+The TNC models this daemon knows, with the names to use for `model`, what
+the daemon does for each, and the radios it knows with that TNC: how to
+recognize them (the start of their Bluetooth name, their USB id) and what to
+tell someone setting them up. `ktbctl setup`, `scan` and `serial.list` use
+the same table.
 
 ```jsonc
 [{"names": ["generic"], "summary": "the default: any TNC that's always in KISS mode; …"},
- {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …"}]
+ {"names": ["th-d74", "th-d75"], "summary": "Kenwood TH-D74/D75: switched to KISS mode at every connect, …",
+  "radios": [{"name": "Kenwood TH-D75", "model": "th-d75",
+              "bluetooth": {"name_prefix": "TH-D75", "setup": "On the radio, set Menu > …",
+                            "pairing_mode": "Menu > Bluetooth > Pairing Mode",
+                            "pairing": "The radio shows a six-digit number. …"},
+              "usb": {"usb_id": "2166:9023", "setup": "On the radio, set Menu > … to USB, …"}},
+             {"name": "Kenwood TH-D74", "model": "th-d74", …}]}]
 ```
+
+### Bluetooth: `bluetooth.scan`, `scan_stop`, `pair`, `unpair`
+
+Radios reach the bridge over Bluetooth Classic (RFCOMM), which needs them
+paired with the host; phones don't (see the README). A device is named by
+`tnc` (a TNC's id or name: its `spp` address and adapter) or by `address`
+and optionally `adapter` (id, MAC or `hciN`; the default adapter
+otherwise).
+
+`bluetooth.scan` looks for `seconds` (default 10, at most 60) on
+`adapter` and returns what it found, known radios first. Radios have to be
+in pairing mode to be found. Only devices heard during the scan are
+listed, so a paired radio that's switched off isn't, though BlueZ still
+knows it.
+
+```jsonc
+[{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,
+  "known_tnc": "Kenwood TH-D75", "model": "th-d75", "tnc": "d75"},
+ {"address": "50:3B:70:E1:1C:11", "name": "jPhone", "icon": "phone", "paired": false}]
+```
+
+While it looks, the daemon sends the requesting connection a `found` event
+with the request's id and the `device` as each one turns up, and again
+when there's news about one already sent (a device often shows up before
+its name does; changes in signal strength aren't news). A client can list
+devices as they come, and end the scan with `bluetooth.scan_stop` once it
+has the one it wants; the scan then answers with what it found so far.
+
+```jsonc
+→ {"v":1,"id":3,"cmd":"bluetooth.scan","adapter":"hci0","seconds":60}
+← {"v":1,"event":"found","request":3,"device":{"address":"40:79:12:E4:95:9D","paired":false}}
+← {"v":1,"event":"found","request":3,"device":{"address":"40:79:12:E4:95:9D","name":"TH-D75","rssi":-52,"paired":false,"known_tnc":"Kenwood TH-D75","model":"th-d75"}}
+→ {"v":1,"id":4,"cmd":"bluetooth.scan_stop","request":3}
+← {"v":1,"id":4,"ok":true,"result":{}}
+← {"v":1,"id":3,"ok":true,"result":[{"address":"40:79:12:E4:95:9D","name":"TH-D75",…}]}
+```
+
+A scan whose connection closes stops.
+
+`bluetooth.pair` pairs and trusts the device, and its request stays open
+until that's done. If BlueZ hasn't seen the device yet, it looks for it
+first (up to 30 s). Meanwhile the daemon sends the requesting connection
+`pairing` events, each with the request's id and a `step`:
+
+| `step` | Fields | Reply with `bluetooth.pair_reply` |
+|---|---|---|
+| `searching` | | — |
+| `pairing` | `name` | — |
+| `confirm` | `passkey` | `accept`: whether the device shows the same passkey. Confirm on the device too |
+| `enter_pin` | | `pin` |
+| `enter_passkey` | | `passkey` |
+| `show_pin`, `show_passkey` | `pin`, `passkey` | — (enter it on the device) |
+| `authorize` | | `accept` |
+
+```jsonc
+→ {"v":1,"id":5,"cmd":"bluetooth.pair","tnc":"d75"}
+← {"v":1,"event":"pairing","request":5,"step":"pairing","name":"TH-D75"}
+← {"v":1,"event":"pairing","request":5,"step":"confirm","passkey":"482916"}
+→ {"v":1,"id":6,"cmd":"bluetooth.pair_reply","request":5,"accept":true}
+← {"v":1,"id":6,"ok":true,"result":{}}
+← {"v":1,"id":5,"ok":true,"result":{"address":"40:79:12:E4:95:9D","adapter":"hci0 (2C:CF:67:6E:2E:BC)","paired":true}}
+```
+
+The TH-D75 uses `confirm`, and gives about 30 s to press OK on the radio.
+A pairing that isn't answered within 90 s fails. The pairing registers an
+agent on the daemon's own D-Bus connection for just this pairing, so the
+system's default agent, if it has one, isn't touched. A `spp-client` port
+waiting for its TNC to be paired connects a few seconds after the pairing.
+
+`bluetooth.unpair` forgets the pairing. It acts at once: a bridge using the
+radio loses its link (`ktbctl unpair` asks first).
+
+One scan or pairing runs at a time; another gets `busy`.
 
 ## Events
 
@@ -304,6 +394,8 @@ what the daemon does for each:
 | `activity` | `activity` | `object` (a port or session), `dir` (`rx` toward the bridge, `tx` away from it), `bytes` since the last event. At most about 10 a second per object and direction |
 | `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, the session it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
+| — | `pairing` | A step of this connection's `bluetooth.pair` (see above) |
+| — | `found` | A device found by this connection's `bluetooth.scan` (see above) |
 
 State events are hints: after one, read `status` for the whole picture.
 Frames are decoded for display only; the daemon never acts on what's in

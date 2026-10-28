@@ -706,3 +706,36 @@ async fn links_are_held_and_sessions_kicked() {
     assert!(ok(&res).is_array());
     r.shutdown.cancel();
 }
+
+#[tokio::test]
+async fn requests_on_one_connection_are_answered_by_id() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    // Several in flight at once; each answer carries its request's id.
+    for id in 1..=3 {
+        c.send_raw(&format!(r#"{{"v":1,"id":{id},"cmd":"status"}}"#))
+            .await;
+    }
+    let mut ids = Vec::new();
+    while ids.len() < 3 {
+        let msg = c.recv().await;
+        if msg.get("event").is_none() {
+            assert_eq!(msg["ok"], true, "{msg}");
+            ids.push(msg["id"].as_u64().unwrap());
+        }
+    }
+    ids.sort();
+    assert_eq!(ids, [1, 2, 3]);
+    r.shutdown.cancel();
+}
+
+#[cfg(not(target_os = "linux"))]
+#[tokio::test]
+async fn bluetooth_needs_bluez() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    let res = c.call(json!({"cmd": "bluetooth.scan"})).await;
+    assert_eq!(code(&res), "failed");
+    assert!(res["error"]["message"].as_str().unwrap().contains("BlueZ"));
+    r.shutdown.cancel();
+}

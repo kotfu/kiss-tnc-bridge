@@ -26,11 +26,14 @@ pub mod ax25;
 pub mod bluetooth;
 pub mod bluez_conf;
 pub mod bridge;
+pub mod bt_hardware;
 pub mod config;
 pub mod control;
 pub mod ctl;
 pub mod error;
 pub mod kiss;
+#[cfg(target_os = "linux")]
+pub mod pairing;
 pub mod port;
 pub mod reconcile;
 pub mod supervisor;

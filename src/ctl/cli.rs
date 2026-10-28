@@ -47,6 +47,8 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
+    /// Set up a TNC and a bridge for it, step by step
+    Setup,
     /// Bridges, ports, sessions, TNCs and adapters
     Status {
         /// Only this bridge
@@ -61,6 +63,19 @@ pub enum Cmd {
     /// Serial devices, by stable path
     #[command(subcommand)]
     Serial(SerialCmd),
+    /// Look for Bluetooth radios nearby (they must be in pairing mode)
+    Scan {
+        /// The adapter to scan on (id, MAC or hciN) [default: the default adapter]
+        #[arg(long)]
+        adapter: Option<String>,
+        /// How long to look
+        #[arg(long, default_value_t = 10)]
+        seconds: u64,
+    },
+    /// Pair with a radio over Bluetooth, and trust it
+    Pair(BtWho),
+    /// Forget a Bluetooth pairing
+    Unpair(BtWho),
     /// Bridges
     #[command(subcommand)]
     Bridge(BridgeCmd),
@@ -85,6 +100,11 @@ pub enum Cmd {
     },
     /// Take a TNC link down and keep it down (apps stay connected)
     Disconnect {
+        /// BRIDGE/PORT
+        port: String,
+    },
+    /// Let a TNC link follow its connect policy again after connect or disconnect
+    Release {
         /// BRIDGE/PORT
         port: String,
     },
@@ -157,6 +177,20 @@ pub struct TncAdd {
     /// Serial baud rate [default: 9600]
     #[arg(long, requires = "serial")]
     pub baud: Option<u32>,
+}
+
+/// A Bluetooth device: a TNC's radio, or an address.
+#[derive(Debug, Args)]
+pub struct BtWho {
+    /// A TNC with a Bluetooth address (spp-address)
+    #[arg(required_unless_present = "address", conflicts_with = "address")]
+    pub tnc: Option<String>,
+    /// A Bluetooth address, instead of a TNC
+    #[arg(long, value_name = "ADDR")]
+    pub address: Option<String>,
+    /// With --address: the adapter (id, MAC or hciN) [default: the default adapter]
+    #[arg(long, requires = "address")]
+    pub adapter: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]

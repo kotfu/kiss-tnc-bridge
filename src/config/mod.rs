@@ -45,7 +45,8 @@ pub use load::{Loaded, load};
 pub use model::{AppParams, ConnectPolicy, Role};
 pub use resolve::{
     Adapter, AdapterSel, AdapterValue, Bridge, Config, Control, Global, Listen, MODELS, Mac, Port,
-    PortKind, SerialDevice, Spp, Tnc, TncModel, resolve,
+    PortKind, RadioBluetooth, RadioInfo, RadioUsb, SerialDevice, Spp, Tnc, TncModel,
+    radio_by_bluetooth_name, radio_by_usb_id, radios, resolve,
 };
 pub use validate::{Report, validate};
 

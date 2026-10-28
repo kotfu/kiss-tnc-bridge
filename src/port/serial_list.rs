@@ -24,9 +24,6 @@ use std::path::{Path, PathBuf};
 use crate::config::Config;
 use crate::control::protocol::SerialEntry;
 
-/// USB TNCs this daemon knows: vendor, product, what it is, its `model`.
-const KNOWN: &[(u16, u16, &str, &str)] = &[(0x2166, 0x9023, "Kenwood TH-D75", "th-d75")];
-
 /// Serial devices under `root` (normally `/dev/serial`), one entry per
 /// device, preferring the by-id name.
 pub fn list(cfg: &Config) -> Vec<SerialEntry> {
@@ -56,7 +53,7 @@ fn list_under(root: &Path, sys_tty: &Path, cfg: &Config) -> Vec<SerialEntry> {
         let usb = device.file_name().and_then(|n| usb_info(&sys_tty.join(n)));
         let known = usb
             .as_ref()
-            .and_then(|u| KNOWN.iter().find(|k| (k.0, k.1) == (u.vendor, u.product)));
+            .and_then(|u| crate::config::radio_by_usb_id(u.vendor, u.product));
         let tnc = cfg
             .tncs
             .iter()
@@ -74,8 +71,8 @@ fn list_under(root: &Path, sys_tty: &Path, cfg: &Config) -> Vec<SerialEntry> {
                 .as_ref()
                 .map(|u| format!("{:04x}:{:04x}", u.vendor, u.product)),
             description: usb.and_then(|u| u.description),
-            known_tnc: known.map(|k| k.2.to_string()),
-            model: known.map(|k| k.3.to_string()),
+            known_tnc: known.map(|r| r.name.to_string()),
+            model: known.map(|r| r.model.to_string()),
             tnc,
         });
     }

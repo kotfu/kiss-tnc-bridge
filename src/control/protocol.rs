@@ -195,6 +195,10 @@ pub enum Command {
     /// `port.connect`. App sessions stay connected.
     #[serde(rename = "port.disconnect")]
     PortDisconnect { bridge: String, port: String },
+    /// Let a TNC link follow its `connect` policy again after
+    /// `port.connect` or `port.disconnect`.
+    #[serde(rename = "port.release")]
+    PortRelease { bridge: String, port: String },
     /// Disconnect one session: `ktbr0/lan/192.168.4.20:51515`.
     #[serde(rename = "session.kick")]
     SessionKick { session: String },
@@ -250,6 +254,60 @@ pub enum Command {
     /// The TNC models this daemon knows, and what each does.
     #[serde(rename = "tnc.models")]
     TncModels,
+
+    // Bluetooth Classic, for radios. A device is named by `tnc` (its
+    // `spp` address and adapter) or by `address` and optionally `adapter`
+    // (id, MAC or hciN; the default adapter otherwise).
+    /// Look for Bluetooth Classic devices for `seconds` (default 10), likely
+    /// TNCs first. Radios have to be in pairing mode to be found, and only
+    /// devices heard during the scan are listed. Meanwhile the daemon sends
+    /// this connection a `found` event for each device as it turns up.
+    #[serde(rename = "bluetooth.scan")]
+    BluetoothScan {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<u64>,
+    },
+    /// End this connection's `bluetooth.scan` request `request` now; it
+    /// answers with what it found so far.
+    #[serde(rename = "bluetooth.scan_stop")]
+    BluetoothScanStop { request: u64 },
+    /// Pair with a device and trust it. The request stays open until the
+    /// pairing is done; meanwhile the daemon sends this connection
+    /// `pairing` events, answered with `bluetooth.pair_reply`.
+    #[serde(rename = "bluetooth.pair")]
+    BluetoothPair {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tnc: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+    },
+    /// The answer to a `pairing` event that asks for one: `accept` for a
+    /// passkey to confirm, `pin` or `passkey` for one to enter. `request`
+    /// is the `bluetooth.pair` request's id.
+    #[serde(rename = "bluetooth.pair_reply")]
+    BluetoothPairReply {
+        request: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accept: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pin: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        passkey: Option<u32>,
+    },
+    /// Forget a pairing.
+    #[serde(rename = "bluetooth.unpair")]
+    BluetoothUnpair {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tnc: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        address: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        adapter: Option<String>,
+    },
 }
 
 impl Command {
@@ -275,6 +333,7 @@ impl Command {
         "port.remove",
         "port.connect",
         "port.disconnect",
+        "port.release",
         "session.kick",
         "tnc.create",
         "tnc.update",
@@ -284,6 +343,11 @@ impl Command {
         "adapter.delete",
         "serial.list",
         "tnc.models",
+        "bluetooth.scan",
+        "bluetooth.scan_stop",
+        "bluetooth.pair",
+        "bluetooth.pair_reply",
+        "bluetooth.unpair",
     ];
 }
 
@@ -424,6 +488,12 @@ pub enum ErrorCode {
     /// `dynamic.toml` was edited by hand since the daemon read it; reload
     /// first.
     ChangedOnDisk,
+    /// A Bluetooth operation (scan, pairing) was tried and failed; the
+    /// message says why.
+    Failed,
+    /// Another Bluetooth operation (scan, pairing) is running; try again
+    /// when it's done.
+    Busy,
     Internal,
 }
 
@@ -536,6 +606,124 @@ pub struct ModelEntry {
     pub names: Vec<String>,
     /// What the daemon does for it.
     pub summary: String,
+    /// The radios with this TNC, and how to set each one up.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub radios: Vec<RadioEntry>,
+}
+
+/// A radio the daemon knows, as `tnc.models` lists it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioEntry {
+    /// `Kenwood TH-D75`.
+    pub name: String,
+    /// The `model` to write for it.
+    pub model: String,
+    /// Present when it has a TNC over Bluetooth Classic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bluetooth: Option<RadioBluetoothEntry>,
+    /// Present when it has a TNC over USB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb: Option<RadioUsbEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioBluetoothEntry {
+    /// The start of the name it announces in a scan.
+    pub name_prefix: String,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: String,
+    /// How to make it discoverable for pairing.
+    pub pairing_mode: String,
+    /// What happens while it pairs.
+    pub pairing: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioUsbEntry {
+    /// `vendor:product`, as `serial.list` shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_id: Option<String>,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: String,
+}
+
+/// A Bluetooth Classic device, as `bluetooth.scan` finds it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BtDevice {
+    pub address: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Signal strength in dBm, when the scan saw it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rssi: Option<i16>,
+    /// What BlueZ makes of its class: `phone`, `audio-headset`, ….
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+    pub paired: bool,
+    /// A TNC this daemon knows: `Kenwood TH-D75`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub known_tnc: Option<String>,
+    /// The `model` to use for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// The TNC already defined with this address.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tnc: Option<String>,
+}
+
+/// The result of `bluetooth.pair` and `bluetooth.unpair`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PairResult {
+    pub address: String,
+    /// The adapter, as `hciN (MAC)`.
+    pub adapter: String,
+    pub paired: bool,
+}
+
+/// What a pairing needs from the person at the other end, or tells them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum PairingStep {
+    /// The device isn't known yet; looking for it (it must be in pairing
+    /// mode).
+    Searching,
+    /// Found; pairing now.
+    Pairing {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// Does the device show this passkey? Reply with `accept`, and confirm
+    /// on the device too.
+    Confirm { passkey: String },
+    /// Reply with the device's `pin` (legacy pairing).
+    EnterPin,
+    /// Reply with the `passkey` the device shows.
+    EnterPasskey,
+    /// Enter this on the device; no reply.
+    ShowPin { pin: String },
+    /// Enter this on the device; no reply.
+    ShowPasskey { passkey: String },
+    /// May the device pair? Reply with `accept`.
+    Authorize,
+}
+
+impl PairingStep {
+    /// Whether the daemon waits for a `bluetooth.pair_reply`.
+    pub fn needs_reply(&self) -> bool {
+        matches!(
+            self,
+            PairingStep::Confirm { .. }
+                | PairingStep::EnterPin
+                | PairingStep::EnterPasskey
+                | PairingStep::Authorize
+        )
+    }
 }
 
 /// The result of `config.check`.
@@ -579,6 +767,33 @@ pub struct AdapterStatus {
     pub powered: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
+    /// What it is, while present: `board` (built into the board), `usb`,
+    /// `pci` or `other`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
+    /// A USB adapter's product name: `TP-Link UB500 Adapter`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+    /// A USB adapter's `vendor:product`: `2357:0604`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usb_id: Option<String>,
+}
+
+impl AdapterStatus {
+    /// What it is, for people: `built into the board`, `USB: TP-Link UB500
+    /// Adapter`, `USB device 2357:0604`, `PCI card`.
+    pub fn hardware(&self) -> Option<String> {
+        match self.bus.as_deref()? {
+            "board" => Some("built into the board".into()),
+            "usb" => Some(match (&self.product, &self.usb_id) {
+                (Some(p), _) => format!("USB: {p}"),
+                (None, Some(id)) => format!("USB device {id}"),
+                (None, None) => "USB".into(),
+            }),
+            "pci" => Some("PCI card".into()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -741,6 +956,17 @@ pub enum Event {
     },
     /// This connection fell behind and missed `missed` events.
     Lagged { missed: u64 },
+    /// A step of the pairing started by this connection's `bluetooth.pair`
+    /// request `request`. Sent only to that connection.
+    Pairing {
+        request: u64,
+        #[serde(flatten)]
+        step: PairingStep,
+    },
+    /// A device found by this connection's `bluetooth.scan` request
+    /// `request`, or found again with news (its name came in). Sent only
+    /// to that connection.
+    Found { request: u64, device: BtDevice },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -757,7 +983,7 @@ impl Event {
             Event::State { .. } => Some(Topic::State),
             Event::Activity { .. } => Some(Topic::Activity),
             Event::Frame { .. } => Some(Topic::Frames),
-            Event::Lagged { .. } => None,
+            Event::Lagged { .. } | Event::Pairing { .. } | Event::Found { .. } => None,
         }
     }
 }
@@ -822,6 +1048,82 @@ mod tests {
         let r: Request = serde_json::from_str(r#"{"v":1,"id":6,"cmd":"config.check"}"#).unwrap();
         assert_eq!(r.command, Command::ConfigCheck { dynamic: None });
         assert!(serde_json::from_str::<Request>(r#"{"v":1,"id":6,"cmd":"nope"}"#).is_err());
+    }
+
+    #[test]
+    fn pairing_events_and_replies_on_the_wire() {
+        let ev = EventMessage {
+            v: VERSION,
+            event: Event::Pairing {
+                request: 7,
+                step: PairingStep::Confirm {
+                    passkey: "012345".into(),
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap(),
+            json!({"v": 1, "event": "pairing", "request": 7, "step": "confirm", "passkey": "012345"})
+        );
+        let back: EventMessage =
+            serde_json::from_value(serde_json::to_value(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+        assert!(
+            PairingStep::Confirm {
+                passkey: "1".into()
+            }
+            .needs_reply()
+        );
+        assert!(!PairingStep::Searching.needs_reply());
+
+        let req: Request = serde_json::from_value(
+            json!({"v": 1, "id": 8, "cmd": "bluetooth.pair_reply", "request": 7, "accept": true}),
+        )
+        .unwrap();
+        assert_eq!(
+            req.command,
+            Command::BluetoothPairReply {
+                request: 7,
+                accept: Some(true),
+                pin: None,
+                passkey: None
+            }
+        );
+    }
+
+    #[test]
+    fn scans_report_devices_as_they_are_found() {
+        let ev = EventMessage {
+            v: VERSION,
+            event: Event::Found {
+                request: 3,
+                device: BtDevice {
+                    address: "40:79:12:E4:95:9D".into(),
+                    name: Some("TH-D75".into()),
+                    rssi: Some(-52),
+                    icon: None,
+                    paired: false,
+                    known_tnc: Some("Kenwood TH-D75".into()),
+                    model: Some("th-d75".into()),
+                    tnc: None,
+                },
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&ev).unwrap(),
+            json!({"v": 1, "event": "found", "request": 3, "device": {
+                "address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52,
+                "paired": false, "known_tnc": "Kenwood TH-D75", "model": "th-d75"}})
+        );
+        let back: EventMessage =
+            serde_json::from_value(serde_json::to_value(&ev).unwrap()).unwrap();
+        assert_eq!(back, ev);
+
+        let req: Request = serde_json::from_value(
+            json!({"v": 1, "id": 4, "cmd": "bluetooth.scan_stop", "request": 3}),
+        )
+        .unwrap();
+        assert_eq!(req.command, Command::BluetoothScanStop { request: 3 });
     }
 
     #[test]

@@ -910,16 +910,19 @@ filter on app-to-TNC traffic:
 ### Pairing agent
 
 Phones don't pair with the bridge (see the Phase 3 notes), so the daemon
-registers no agent. Radios do: the D75 needs SSP numeric comparison
-(Phase 0), done with `bluetoothctl` until `ktbctl pair`. Plan for that:
+normally registers no agent. Radios do: the D75 needs SSP numeric
+comparison (Phase 0). As built in Phase 4:
 
-- **Pairing window:** when the control API receives `pair`, the daemon
-  registers a `KeyboardDisplay` agent whose callbacks (`request_pin_code`,
-  `display_passkey`, `request_confirmation`, …) are forwarded as events to
-  the requesting control client, calls `device.pair()`, waits up to 60 s,
-  sets the device trusted, and unregisters the agent. The Phase 2
-  `NoInputNoOutput` agent (git 662d2e2) shows the D-Bus plumbing, which
-  bluer can't do without changing the capability.
+- **Pairing window:** `bluetooth.pair` registers an agent with every
+  callback (so BlueZ sees `KeyboardDisplay`) on the daemon's own D-Bus
+  connection, only for that pairing. BlueZ gives a `Pair` call to the
+  caller's agent before any default (`agent_get(sender)` in 5.82), so the
+  agent never needs to be the default. Its callbacks become `pairing`
+  events to the requesting connection, answered with
+  `bluetooth.pair_reply`. The daemon calls `device.pair()`, waits up to
+  90 s, trusts the device, and drops the agent. bluer's own agent API does
+  this; the hand-rolled D-Bus agent of Phase 2 (git 662d2e2) existed only
+  because phones needed `NoInputNoOutput`.
 
 ---
 
@@ -1671,7 +1674,7 @@ the same branch:
   not, which keeps the controller from advertising. The port watches the
   links of phones it has served and drops one that's connected with no
   session (checked every 10 s).
-- **Open: BlueZ ends another phone's subscription.** When a phone's CCC
+- **Fixed upstream: BlueZ ends another phone's subscription.** When a phone's CCC
   state is discarded (every disconnect of an unbonded phone),
   `clear_ccc_state` calls `ccc_write_cb(NULL)`, and `match_client_att`
   matches any client for a NULL ATT, so BlueZ closes some other phone's
@@ -1681,7 +1684,10 @@ the same branch:
   this on the dev Pi (patched 5.82 bluetoothd, two phones, kicks and
   Bluetooth off), and we resent it with a `Tested-by`:
   <https://lore.kernel.org/linux-bluetooth/20261026032544.49563-1-jared@kotfu.net/T/#u>.
-  No workaround in the daemon; the README lists it under Known bugs.
+  It was merged on 2026-10-26 as
+  [f7e2cd91c266](https://git.kernel.org/pub/scm/bluetooth/bluez.git/commit/?id=f7e2cd91c2669cf50d07fe05caedf794e88f7476),
+  after 5.87. No workaround in the daemon; the README lists it under Known
+  bugs until distributions ship a release with it.
 
 ### Phase 4: `ktbctl` CLI, pairing, TUI
 
@@ -1705,14 +1711,43 @@ the TUI.
 - [x] `monitor`, with the AX.25 header decode the daemon already sends;
       it waits and resubscribes when the daemon restarts.
 - [x] `ktbctl` in the deb, rpm and tarball, and in `scripts/pi-deploy.sh`.
-- [ ] Pairing-window agent for radios (`ktbctl pair`; the daemon registers
-      no agent otherwise, since phones don't pair), `scan` with radio
-      detection, and the `setup` wizard.
+- [x] Pairing for radios: `bluetooth.scan`, `bluetooth.pair` (an agent
+      registered only for the pairing, on the daemon's own D-Bus connection,
+      which BlueZ uses for that `Pair` call; steps relayed to the requesting
+      connection as `pairing` events, answered with `bluetooth.pair_reply`)
+      and `bluetooth.unpair`; `ktbctl scan`, `pair`, `unpair`. For this a
+      connection may have several requests in flight. Tested on the Pi:
+      unpairing and re-pairing the D75, which reconnected on its own.
+- [x] The `setup` wizard: how it reaches the TNC first (Bluetooth, USB or
+      serial, or the network), then which radio for Bluetooth and USB, with
+      each radio's setup instructions in the daemon's model table (served
+      by `tnc.models`; generic wording for other radios), and one "how
+      should apps reach it" choice (BLE, TCP or both). Its check (step 7) holds
+      the TNC link up with `port.connect` and then hands it back with a new
+      `port.release`, since an `on_demand` bridge with no apps wouldn't
+      connect at all.
+- [x] Pick the radio while the scan runs: `bluetooth.scan` sends `found`
+      events as devices turn up, and `bluetooth.scan_stop` ends it early.
+      The wizard lists devices as they're found (looking for up to 60 s),
+      Enter takes the radio the user said it is once it shows up, and
+      `ktbctl scan` prints each device as it's found.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
 - [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH; it reconnects when the daemon
       restarts, as `monitor` does.
+
+- [ ] **Deferred: BLE TNCs** (a `ble-client` TNC port). Some radios'
+      built-in TNCs are reached over Bluetooth LE rather than Classic SPP
+      (the BTech UV-Pro, Mobilinkd TNC4). The daemon would be a BLE central
+      to the radio: the mirror of `ble-server`, if the radio speaks the same
+      BLE KISS service (`00000001-ba2a-…`; to be confirmed per radio, the
+      UV-Pro first). `bluetooth.scan` would then scan both transports and
+      tell them apart by what each offers, so `setup`'s one "Bluetooth"
+      choice covers both. Open questions: whether such radios need pairing,
+      and whether one adapter can be a central to the radio and a
+      peripheral to phones at once (it depends on the controller; sharing
+      over TCP only avoids it). Needs a radio to develop against.
 
 ### Phase 5: Hardening → release 1.0.0
 

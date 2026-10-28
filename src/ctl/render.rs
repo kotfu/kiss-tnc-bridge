@@ -20,8 +20,8 @@ use std::fmt::Write;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::control::protocol::{
-    BridgeStatus, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus, ProblemJson,
-    SerialEntry, Status,
+    BridgeStatus, BtDevice, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus,
+    ProblemJson, SerialEntry, Status,
 };
 use crate::reconcile::{Action, Plan};
 
@@ -174,13 +174,16 @@ pub fn adapters(s: &Status) -> String {
             (true, Some(false)) => "off",
             (true, None) => "present",
         };
-        let _ = writeln!(
-            out,
+        let mut line = format!(
             "  {:<10} {:<6} {}  {state}",
             a.id.as_deref().unwrap_or("-"),
             a.hci.as_deref().unwrap_or("-"),
             a.mac
         );
+        if let Some(hw) = a.hardware() {
+            let _ = write!(line, "  {hw}");
+        }
+        let _ = writeln!(out, "{line}");
     }
     out
 }
@@ -216,10 +219,61 @@ pub fn serial(list: &[SerialEntry]) -> String {
     out
 }
 
+/// `scan`: likely TNCs first, as the daemon sorted them.
+pub fn bt_devices(list: &[BtDevice]) -> String {
+    if list.is_empty() {
+        return "nothing found. Is the radio in pairing mode, with Bluetooth on?\n".into();
+    }
+    list.iter().map(bt_device).collect()
+}
+
+/// One line of `scan`.
+pub fn bt_device(d: &BtDevice) -> String {
+    let what = match (&d.known_tnc, &d.model) {
+        (Some(k), Some(m)) => format!("{k} (model {m})"),
+        (Some(k), None) => k.clone(),
+        _ => d.icon.clone().unwrap_or_default(),
+    };
+    let mut extra = Vec::new();
+    if let Some(r) = d.rssi {
+        extra.push(format!("{r} dBm"));
+    }
+    if d.paired {
+        extra.push("paired".into());
+    }
+    if let Some(t) = &d.tnc {
+        extra.push(format!("tnc {t}"));
+    }
+    format!(
+        "{}  {:<20} {:<32} {}\n",
+        d.address,
+        d.name.as_deref().unwrap_or("(no name)"),
+        what,
+        extra.join("  ")
+    )
+}
+
 pub fn models(list: &[ModelEntry]) -> String {
     let mut out = String::new();
     for m in list {
         let _ = writeln!(out, "{:<16} {}", m.names.join(", "), m.summary);
+        for r in &m.radios {
+            let mut how = Vec::new();
+            if r.bluetooth.is_some() {
+                how.push("Bluetooth");
+            }
+            if r.usb.is_some() {
+                how.push("USB");
+            }
+            let _ = writeln!(
+                out,
+                "{:<16}   {} (model = \"{}\"): {}",
+                "",
+                r.name,
+                r.model,
+                how.join(", ")
+            );
+        }
     }
     out
 }
@@ -407,7 +461,8 @@ mod tests {
     fn status_shows_ports_sessions_and_what_a_bridge_needs() {
         let s: Status = serde_json::from_value(serde_json::json!({
             "version": "1.0.0",
-            "adapters": [{"id": "dongle", "mac": "AC:A7:F1:29:9C:7F", "hci": "hci1", "present": true, "powered": true}],
+            "adapters": [{"id": "dongle", "mac": "AC:A7:F1:29:9C:7F", "hci": "hci1", "present": true, "powered": true,
+                          "bus": "usb", "product": "TP-Link UB500 Adapter", "usb_id": "2357:0604"}],
             "tncs": [{"id": "d75", "name": "TH-D75", "model": "th-d74/th-d75",
                       "spp": {"address": "40:79:12:E4:95:9D", "adapter": "builtin", "paired": true},
                       "in_use_by": "ktbr0", "source": "dynamic", "editable": true}],
@@ -445,9 +500,27 @@ mod tests {
         assert!(out.contains("needs: no TNC port, no app port"), "{out}");
         assert!(out.contains("from the TNC 18, to it 2"), "{out}");
         assert!(out.contains("used by ktbr0"), "{out}");
+        assert!(out.contains("powered  USB: TP-Link UB500 Adapter"), "{out}");
         let one = status(&s, Some("Spare"), now).unwrap();
         assert!(one.contains("ktbr1") && !one.contains("ktbr0"), "{one}");
         assert!(status(&s, Some("nope"), now).is_err());
+    }
+
+    #[test]
+    fn scans_show_what_each_device_is() {
+        let l: Vec<BtDevice> = serde_json::from_value(serde_json::json!([
+            {"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": true,
+             "known_tnc": "Kenwood TH-D75", "model": "th-d75", "tnc": "d75"},
+            {"address": "50:3B:70:E1:1C:11", "name": "jPhone", "icon": "phone", "paired": false}
+        ]))
+        .unwrap();
+        let out = bt_devices(&l);
+        let mut lines = out.lines();
+        let d75 = lines.next().unwrap();
+        assert!(d75.contains("Kenwood TH-D75 (model th-d75)"), "{d75}");
+        assert!(d75.contains("-52 dBm  paired  tnc d75"), "{d75}");
+        assert!(lines.next().unwrap().contains("phone"));
+        assert!(bt_devices(&[]).contains("pairing mode"));
     }
 
     #[test]

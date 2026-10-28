@@ -29,12 +29,14 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::{Map, Value, json};
 
-use super::cli::{AdapterCmd, BridgeCmd, Cli, Cmd, PortAdd, PortCmd, SerialCmd, TncAdd, TncCmd};
-use super::client::{Client, CtlError, DEFAULT_SOCKET};
+use super::cli::{
+    AdapterCmd, BridgeCmd, BtWho, Cli, Cmd, PortAdd, PortCmd, SerialCmd, TncAdd, TncCmd,
+};
+use super::client::{Client, CtlError, DEFAULT_SOCKET, Message, result};
 use super::render;
 use crate::control::protocol::{
-    ChangeResult, CheckResult, Command, ConfigText, ErrorCode, ModelEntry, ObjectKind, PlanResult,
-    ProblemJson, SerialEntry, Status, Topic,
+    BtDevice, ChangeResult, CheckResult, Command, ConfigText, ErrorCode, Event, ModelEntry,
+    ObjectKind, PairResult, PairingStep, PlanResult, ProblemJson, SerialEntry, Status, Topic,
 };
 
 /// How a run ended, for the exit status.
@@ -45,10 +47,10 @@ pub enum Outcome {
 }
 
 pub struct Ctl {
-    socket: PathBuf,
-    json: bool,
-    yes: bool,
-    non_disruptive: bool,
+    pub(super) socket: PathBuf,
+    pub(super) json: bool,
+    pub(super) yes: bool,
+    pub(super) non_disruptive: bool,
 }
 
 impl Ctl {
@@ -134,6 +136,17 @@ impl Ctl {
                 let l: Vec<SerialEntry> = c.call_as(Command::SerialList).await?;
                 self.print(&l, || render::serial(&l))
             }
+            Cmd::Scan { adapter, seconds } => {
+                if !self.json {
+                    eprintln!(
+                        "Looking for {seconds} s. Radios have to be in pairing mode \
+                         (discoverable) to be found."
+                    );
+                }
+                self.scan(c, adapter, seconds).await
+            }
+            Cmd::Pair(who) => self.pair(c, who).await,
+            Cmd::Unpair(who) => self.unpair(c, who).await,
             Cmd::Bridge(b) => self.bridge(c, b).await,
             Cmd::Enable { bridge, reset } => {
                 self.change(c, |nd| Command::BridgeEnable {
@@ -183,6 +196,10 @@ impl Ctl {
                 let (bridge, port) = split_port(&port)?;
                 self.act(c, Command::PortDisconnect { bridge, port }).await
             }
+            Cmd::Release { port } => {
+                let (bridge, port) = split_port(&port)?;
+                self.act(c, Command::PortRelease { bridge, port }).await
+            }
             Cmd::Kick { session } => self.act(c, Command::SessionKick { session }).await,
             Cmd::Edit { what } => self.edit(c, &what).await,
             Cmd::Check => {
@@ -198,6 +215,7 @@ impl Ctl {
                 self.change(c, |nd| Command::Reload { non_disruptive: nd })
                     .await
             }
+            Cmd::Setup => self.setup(c).await,
             Cmd::Monitor { .. } => unreachable!("handled in run"),
         }
     }
@@ -286,6 +304,232 @@ impl Ctl {
         }
     }
 
+    /// `scan`: each device is shown as it's found, once it has a name;
+    /// those that never give one, at the end.
+    async fn scan(
+        &self,
+        c: &mut Client,
+        adapter: Option<String>,
+        seconds: u64,
+    ) -> Result<(), CtlError> {
+        let id = c
+            .send(Command::BluetoothScan {
+                adapter,
+                seconds: Some(seconds),
+            })
+            .await?;
+        let mut shown: Vec<String> = Vec::new();
+        loop {
+            match c.next_message().await?.ok_or(CtlError::Closed)? {
+                Message::Response(res) if res.id == Some(id) => {
+                    let v = result(res)?;
+                    let l: Vec<BtDevice> = serde_json::from_value(v.clone())
+                        .map_err(|e| CtlError::Protocol(e.to_string()))?;
+                    let rest: Vec<BtDevice> = l
+                        .iter()
+                        .filter(|d| !shown.contains(&d.address))
+                        .cloned()
+                        .collect();
+                    return self.print(&v, || {
+                        if l.is_empty() {
+                            render::bt_devices(&l)
+                        } else {
+                            rest.iter().map(render::bt_device).collect()
+                        }
+                    });
+                }
+                Message::Event(ev) => {
+                    if let Event::Found { request, device } = ev.event
+                        && request == id
+                        && device.name.is_some()
+                        && !shown.contains(&device.address)
+                        && !self.json
+                    {
+                        print!("{}", render::bt_device(&device));
+                        shown.push(device.address);
+                    }
+                }
+                Message::Response(_) => {}
+            }
+        }
+    }
+
+    /// `pair`: the request stays open while the daemon pairs, sending the
+    /// steps that need someone at the radio; each is answered here.
+    pub(super) async fn pair(&self, c: &mut Client, who: BtWho) -> Result<(), CtlError> {
+        if !self.json {
+            eprintln!("Put the radio in pairing mode (discoverable) if it isn't.");
+        }
+        let id = c
+            .send(Command::BluetoothPair {
+                tnc: who.tnc,
+                address: who.address,
+                adapter: who.adapter,
+            })
+            .await?;
+        loop {
+            match c.next_message().await?.ok_or(CtlError::Closed)? {
+                Message::Response(res) if res.id == Some(id) => {
+                    let v = result(res)?;
+                    let r: PairResult = serde_json::from_value(v.clone())
+                        .map_err(|e| CtlError::Protocol(e.to_string()))?;
+                    return self.print(&v, || {
+                        format!("paired with {} on {}, and trusted\n", r.address, r.adapter)
+                    });
+                }
+                // The acknowledgement of a reply sent below.
+                Message::Response(res) => {
+                    if let Err(e) = result(res) {
+                        self.report(&e);
+                    }
+                }
+                Message::Event(ev) => {
+                    if let Event::Pairing { request, step } = ev.event
+                        && request == id
+                        && let Some(reply) = self.pairing_step(&step).await
+                    {
+                        c.send(Command::BluetoothPairReply {
+                            request: id,
+                            accept: reply.0,
+                            pin: reply.1,
+                            passkey: reply.2,
+                        })
+                        .await?;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Tell the user about a pairing step, and get the reply it needs:
+    /// (accept, pin, passkey).
+    async fn pairing_step(
+        &self,
+        step: &PairingStep,
+    ) -> Option<(Option<bool>, Option<String>, Option<u32>)> {
+        let say = |s: String| {
+            if !self.json {
+                eprintln!("{s}");
+            }
+        };
+        match step {
+            PairingStep::Searching => {
+                say("Looking for it...".into());
+                None
+            }
+            PairingStep::Pairing { name } => {
+                say(format!(
+                    "Pairing with {}...",
+                    name.as_deref().unwrap_or("it")
+                ));
+                None
+            }
+            PairingStep::ShowPin { pin } => {
+                say(format!("Enter {pin} on the device."));
+                None
+            }
+            PairingStep::ShowPasskey { passkey } => {
+                say(format!("Enter {passkey} on the device."));
+                None
+            }
+            PairingStep::Confirm { passkey } => {
+                let ok = if interactive() {
+                    confirm(&format!("The radio should show {passkey}. Does it?"), true).await
+                } else if self.yes {
+                    say(format!("Accepting passkey {passkey} (--yes)."));
+                    true
+                } else {
+                    say(format!(
+                        "The radio shows a passkey ({passkey}) to confirm; run this in a terminal, or with --yes."
+                    ));
+                    false
+                };
+                if ok {
+                    say("Now confirm it on the radio too.".into());
+                }
+                Some((Some(ok), None, None))
+            }
+            PairingStep::Authorize => {
+                let ok = if interactive() {
+                    confirm("Allow the device to pair?", true).await
+                } else {
+                    self.yes
+                };
+                Some((Some(ok), None, None))
+            }
+            PairingStep::EnterPin => {
+                let pin = if interactive() {
+                    ask_line("The device's PIN: ").await
+                } else {
+                    None
+                };
+                Some((None, pin, None))
+            }
+            PairingStep::EnterPasskey => {
+                let passkey = if interactive() {
+                    ask_line("The passkey the device shows: ")
+                        .await
+                        .and_then(|s| s.parse().ok())
+                } else {
+                    None
+                };
+                Some((None, None, passkey))
+            }
+        }
+    }
+
+    /// `unpair`: if a bridge is using the radio, that's disruptive, so the
+    /// consent rule applies.
+    async fn unpair(&self, c: &mut Client, who: BtWho) -> Result<(), CtlError> {
+        if let Some(t) = &who.tnc {
+            let s: Status = c.call_as(Command::Status).await?;
+            let id = s
+                .tncs
+                .iter()
+                .find(|x| x.id == *t || x.name == *t)
+                .map(|x| x.id.clone())
+                .unwrap_or_else(|| t.clone());
+            let up: Vec<String> = s
+                .bridges
+                .iter()
+                .flat_map(|b| b.ports.iter().map(move |p| (b, p)))
+                .filter(|(_, p)| {
+                    p.state == "connected"
+                        && p.settings.get("tnc").and_then(|v| v.as_str()) == Some(id.as_str())
+                })
+                .map(|(b, p)| format!("{}/{}", b.id, p.id))
+                .collect();
+            if !up.is_empty() {
+                let would = format!("drop the link on {}", render::join_and(&up));
+                if self.non_disruptive {
+                    return Err(CtlError::Message(format!(
+                        "refused: unpairing would {would}; nothing was changed"
+                    )));
+                }
+                if !self.yes {
+                    if !interactive() {
+                        return Err(CtlError::Message(format!(
+                            "unpairing would {would}; nothing was changed. Run it again with --yes to go ahead"
+                        )));
+                    }
+                    if !confirm(&format!("Unpairing would {would}. Go ahead?"), false).await {
+                        return Err(CtlError::Message("nothing was changed".into()));
+                    }
+                }
+            }
+        }
+        let v = c
+            .call(Command::BluetoothUnpair {
+                tnc: who.tnc,
+                address: who.address,
+                adapter: who.adapter,
+            })
+            .await?;
+        let r: PairResult =
+            serde_json::from_value(v.clone()).map_err(|e| CtlError::Protocol(e.to_string()))?;
+        self.print(&v, || format!("unpaired {} on {}\n", r.address, r.adapter))
+    }
+
     async fn status(&self, bridge: Option<String>) -> Result<(), CtlError> {
         let mut c = Client::connect(&self.socket).await?;
         self.status_with(&mut c, bridge).await
@@ -304,7 +548,32 @@ impl Ctl {
 
     /// A command that changes config, under the consent rule.
     async fn change(&self, c: &mut Client, make: impl Fn(bool) -> Command) -> Result<(), CtlError> {
-        let v = match c.call(make(!self.yes)).await {
+        let v = self.change_value(c, make).await?;
+        if self.json {
+            return self.print(&v, String::new);
+        }
+        let r: ChangeResult =
+            serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))?;
+        print!("{}", render::change(r.id.as_deref(), &r.plan));
+        Ok(())
+    }
+
+    /// [`change`](Self::change), returning what it did instead of printing it.
+    pub(super) async fn change_result(
+        &self,
+        c: &mut Client,
+        make: impl Fn(bool) -> Command,
+    ) -> Result<ChangeResult, CtlError> {
+        let v = self.change_value(c, make).await?;
+        serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))
+    }
+
+    async fn change_value(
+        &self,
+        c: &mut Client,
+        make: impl Fn(bool) -> Command,
+    ) -> Result<Value, CtlError> {
+        Ok(match c.call(make(!self.yes)).await {
             Err(CtlError::Api(e)) if e.code == ErrorCode::ReloadWouldDisrupt => {
                 let would = e
                     .data
@@ -328,14 +597,7 @@ impl Ctl {
                 c.call(make(false)).await?
             }
             other => other?,
-        };
-        if self.json {
-            return self.print(&v, String::new);
-        }
-        let r: ChangeResult =
-            serde_json::from_value(v).map_err(|e| CtlError::Protocol(e.to_string()))?;
-        print!("{}", render::change(r.id.as_deref(), &r.plan));
-        Ok(())
+        })
     }
 
     /// A command that acts at once, with no plan: connect, disconnect, kick.
@@ -521,7 +783,7 @@ impl Ctl {
         Ok(())
     }
 
-    fn report(&self, e: &CtlError) {
+    pub(super) fn report(&self, e: &CtlError) {
         match e {
             CtlError::Reported => {}
             CtlError::Api(api) if self.json => {
@@ -545,27 +807,84 @@ impl Ctl {
     }
 }
 
-fn interactive() -> bool {
+pub(super) fn interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
 }
 
 /// Ask a yes/no question on the terminal.
-async fn confirm(question: &str, default_yes: bool) -> bool {
-    let prompt = format!("{question} [{}] ", if default_yes { "Y/n" } else { "y/N" });
-    tokio::task::spawn_blocking(move || {
-        eprint!("{prompt}");
-        let _ = std::io::stderr().flush();
-        let mut answer = String::new();
-        if std::io::stdin().read_line(&mut answer).is_err() {
-            return false;
-        }
-        match answer.trim().to_ascii_lowercase().as_str() {
+pub(super) async fn confirm(question: &str, default_yes: bool) -> bool {
+    prompt(&format!(
+        "{question} [{}] ",
+        if default_yes { "Y/n" } else { "y/N" }
+    ));
+    match read_line().await {
+        None => false,
+        Some(a) => match a.to_ascii_lowercase().as_str() {
             "" => default_yes,
             a => a == "y" || a == "yes",
-        }
-    })
-    .await
-    .unwrap_or(false)
+        },
+    }
+}
+
+/// Read a line from the terminal; `None` for an empty answer.
+pub(super) async fn ask_line(question: &str) -> Option<String> {
+    prompt(question);
+    read_line().await.filter(|a| !a.is_empty())
+}
+
+/// Show a prompt on the terminal, without a newline.
+pub(super) fn prompt(text: &str) {
+    eprint!("{text}");
+    let _ = std::io::stderr().flush();
+}
+
+/// The next line typed, trimmed; `None` at the end of input.
+///
+/// Every prompt reads through here: one thread reads stdin a line at a
+/// time, when asked. Waiting is cancel-safe, so a prompt can race the
+/// daemon's messages (the scan picker); a line that comes in after the
+/// prompt gave up waiting goes to the next prompt.
+pub(super) async fn read_line() -> Option<String> {
+    use std::sync::OnceLock;
+    use tokio::sync::{Mutex, mpsc};
+
+    struct Stdin {
+        ask: std::sync::mpsc::Sender<()>,
+        lines: mpsc::UnboundedReceiver<Option<String>>,
+        asked: bool,
+    }
+    static STDIN: OnceLock<Mutex<Stdin>> = OnceLock::new();
+    let stdin = STDIN.get_or_init(|| {
+        let (ask, asks) = std::sync::mpsc::channel::<()>();
+        let (tx, lines) = mpsc::unbounded_channel();
+        // Not a blocking task: a read still waiting when ktbctl exits
+        // mustn't hold up the runtime's shutdown.
+        std::thread::spawn(move || {
+            while asks.recv().is_ok() {
+                let mut line = String::new();
+                let got = match std::io::stdin().read_line(&mut line) {
+                    Ok(0) | Err(_) => None,
+                    Ok(_) => Some(line.trim().to_string()),
+                };
+                if tx.send(got).is_err() {
+                    break;
+                }
+            }
+        });
+        Mutex::new(Stdin {
+            ask,
+            lines,
+            asked: false,
+        })
+    });
+    let mut s = stdin.lock().await;
+    if !s.asked {
+        s.ask.send(()).ok()?;
+        s.asked = true;
+    }
+    let line = s.lines.recv().await.flatten();
+    s.asked = false;
+    line
 }
 
 fn run_editor(path: &std::path::Path) -> Result<(), CtlError> {

@@ -306,10 +306,11 @@ pub enum BridgeCmd {
     Connector(Box<dyn TncConnector>),
     /// Drop one app session.
     Kick(SessionId),
-    /// Hold the TNC link up (`true`) or down (`false`) whatever the
-    /// `connect` policy and sessions say, until told otherwise (`port.connect`
-    /// and `port.disconnect`).
-    Hold(bool),
+    /// Hold the TNC link up (`Some(true)`) or down (`Some(false)`) whatever
+    /// the `connect` policy and sessions say, until told otherwise
+    /// (`port.connect` and `port.disconnect`); `None` lets the policy decide
+    /// again (`port.release`).
+    Hold(Option<bool>),
     Snapshot(oneshot::Sender<Snapshot>),
 }
 
@@ -829,16 +830,26 @@ impl Run {
                     self.start_connect();
                 }
             }
-            BridgeCmd::Hold(up) => {
-                tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC link held {}", if up { "up" } else { "down" });
-                self.held = Some(up);
+            BridgeCmd::Hold(hold) => {
+                let what = match hold {
+                    Some(true) => "held up",
+                    Some(false) => "held down",
+                    None => "back to its connect policy",
+                };
+                tracing::info!(bridge = %self.id, port = %self.settings.port_id, "TNC link {what}");
+                self.held = hold;
                 self.idle_timer = None;
-                if up {
+                if self.wants_link() {
                     if matches!(self.link, TncLink::Idle) {
                         self.start_connect();
                     }
-                } else {
+                } else if hold.is_some() || self.settings.idle_timeout.is_zero() {
                     self.close();
+                } else {
+                    // Released with nobody using it: as when the last app
+                    // leaves.
+                    self.idle_timer =
+                        Some(Box::pin(tokio::time::sleep(self.settings.idle_timeout)));
                 }
             }
             BridgeCmd::Kick(id) => match self.sessions.get(&id) {
@@ -1818,7 +1829,11 @@ mod tests {
     async fn held_links_ignore_policy_and_sessions() {
         let mut h = start(ConnectPolicy::OnDemand, Duration::ZERO, AppParams::Pass);
         // Held up: connects with nobody there.
-        h.handle.cmd_tx.send(BridgeCmd::Hold(true)).await.unwrap();
+        h.handle
+            .cmd_tx
+            .send(BridgeCmd::Hold(Some(true)))
+            .await
+            .unwrap();
         let mut tnc = h.tnc().await;
         h.wait_state(|s| *s == TncState::Connected).await;
         let (a, _rx) = h.open("lan", "A").await;
@@ -1826,7 +1841,11 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(2)).await;
         assert_eq!(*h.handle.state.borrow(), TncState::Connected);
         // Held down: goes down, and a session and its frames don't bring it back.
-        h.handle.cmd_tx.send(BridgeCmd::Hold(false)).await.unwrap();
+        h.handle
+            .cmd_tx
+            .send(BridgeCmd::Hold(Some(false)))
+            .await
+            .unwrap();
         h.wait_state(|s| *s == TncState::Idle).await;
         assert!(matches!(tnc.read_frame().await, Err(Error::LinkClosed)));
         let (a, _rx) = h.open("lan", "B").await;
@@ -1835,6 +1854,11 @@ mod tests {
         assert_eq!(*h.handle.state.borrow(), TncState::Idle);
         assert_eq!(h.connects.load(Ordering::Relaxed), 1);
         assert_eq!(h.handle.snapshot().await.unwrap().held, Some(false));
+        // Released: on demand, with session B there, it connects again.
+        h.handle.cmd_tx.send(BridgeCmd::Hold(None)).await.unwrap();
+        let _tnc = h.tnc().await;
+        h.wait_state(|s| *s == TncState::Connected).await;
+        assert_eq!(h.handle.snapshot().await.unwrap().held, None);
         h.handle.shutdown.cancel();
         h.task.await.unwrap();
     }

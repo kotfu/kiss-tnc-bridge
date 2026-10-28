@@ -26,6 +26,7 @@ use std::collections::HashSet;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -37,13 +38,17 @@ use super::events::Hub;
 use super::protocol::{
     ApiError, Command, ErrorCode, Event, EventMessage, Request, Response, Topic, VERSION,
 };
-use crate::supervisor::DaemonCmd;
+use crate::supervisor::{DaemonCmd, Requester};
 
 pub const SOCKET_NAME: &str = "control.sock";
 /// The longest request line accepted.
 const MAX_LINE: usize = 1 << 20;
 /// Lines queued for a connection's writer.
 const OUTBOX: usize = 256;
+
+/// Connection numbers, to tell connections apart (request ids are only
+/// unique within one).
+static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
 /// Bind the socket at `path` (replacing a stale one), give it to `group`,
 /// and serve until `shutdown`. Binding errors are returned; the daemon runs
@@ -135,6 +140,7 @@ async fn connection(
     hub: Arc<Hub>,
     shutdown: CancellationToken,
 ) {
+    let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
     let (rd, mut wr) = stream.into_split();
     let (out_tx, mut out_rx) = mpsc::channel::<String>(OUTBOX);
     let done = shutdown.child_token();
@@ -196,16 +202,37 @@ async fn connection(
                     Response::ok(req.id, json!({ "topics": all }))
                 }
                 command => {
+                    // Handed to the daemon in the order they arrive, then
+                    // answered by id as each finishes, so a long request
+                    // (a pairing waiting on someone) doesn't hold up the
+                    // ones after it.
                     let (tx, rx) = oneshot::channel();
-                    let sent = daemon.send(DaemonCmd::Control { command, reply: tx }).await;
-                    match (sent, rx.await) {
-                        (Ok(()), Ok(Ok(result))) => Response::ok(req.id, result),
-                        (Ok(()), Ok(Err(e))) => Response::err(Some(req.id), e),
-                        _ => Response::err(
-                            Some(req.id),
-                            ApiError::new(ErrorCode::Internal, "the daemon is shutting down"),
-                        ),
-                    }
+                    let from = Requester {
+                        conn,
+                        request: req.id,
+                        events: out_tx.clone(),
+                    };
+                    let sent = daemon
+                        .send(DaemonCmd::Control {
+                            command,
+                            reply: tx,
+                            from,
+                        })
+                        .await
+                        .is_ok();
+                    let out = out_tx.clone();
+                    tokio::spawn(async move {
+                        let response = match (sent, rx.await) {
+                            (true, Ok(Ok(result))) => Response::ok(req.id, result),
+                            (true, Ok(Err(e))) => Response::err(Some(req.id), e),
+                            _ => Response::err(
+                                Some(req.id),
+                                ApiError::new(ErrorCode::Internal, "the daemon is shutting down"),
+                            ),
+                        };
+                        let _ = send(&out, &response).await;
+                    });
+                    continue;
                 }
             },
         };

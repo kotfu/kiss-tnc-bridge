@@ -20,3 +20,4 @@ pub mod cli;
 pub mod client;
 pub mod render;
 pub mod run;
+mod setup;

@@ -90,7 +90,40 @@ pub enum DaemonCmd {
     Control {
         command: Command,
         reply: oneshot::Sender<Result<Value, ApiError>>,
+        from: Requester,
     },
+}
+
+/// Pairings waiting on their requester's replies, by (connection,
+/// request id).
+#[cfg(target_os = "linux")]
+type Pairings =
+    Arc<Mutex<std::collections::HashMap<(u64, u64), mpsc::Sender<crate::pairing::Reply>>>>;
+
+/// Scans running for a requester, by (connection, request id), to end
+/// early on `bluetooth.scan_stop`.
+#[cfg(target_os = "linux")]
+type Scans = Arc<Mutex<std::collections::HashMap<(u64, u64), CancellationToken>>>;
+
+/// A device for `bluetooth.pair` or `unpair`.
+#[cfg(target_os = "linux")]
+struct BtTarget {
+    address: bluer::Address,
+    adapter: bluer::Adapter,
+    /// The TNC it was named by, if any.
+    tnc: Option<String>,
+}
+
+/// Who sent a control command, for commands that talk back to it while
+/// they run (pairing).
+#[derive(Debug, Clone)]
+pub struct Requester {
+    /// Unique per connection.
+    pub conn: u64,
+    /// The request's id, unique within its connection.
+    pub request: u64,
+    /// The connection's outbox, for events meant only for it.
+    pub events: mpsc::Sender<String>,
 }
 
 /// A port's state as `status` reports it.
@@ -208,6 +241,12 @@ pub async fn run(
         known_warnings: Default::default(),
         hub,
         store: DynamicStore::from_text(Path::new(""), None).expect("empty"),
+        #[cfg(target_os = "linux")]
+        bt_busy: Arc::new(tokio::sync::Mutex::new(())),
+        #[cfg(target_os = "linux")]
+        pairings: Arc::default(),
+        #[cfg(target_os = "linux")]
+        scans: Arc::default(),
     };
     d.store = d.store_from_sources();
     // The warnings logged at startup, rebuilt from the same sources.
@@ -223,7 +262,7 @@ pub async fn run(
         return Err(e);
     }
     if d.bridges.is_empty() {
-        tracing::warn!("no bridge is running; check `kiss-tnc-bridge -t`");
+        tracing::warn!("no bridge is running; check 'kiss-tnc-bridge -t'");
     }
     tracing::info!(bridges = d.bridges.len(), "daemon ready");
 
@@ -246,9 +285,21 @@ pub async fn run(
                         _ => {}
                     }
                 }
-                Some(DaemonCmd::Control { command, reply }) => {
-                    let _ = reply.send(d.control(command).await);
-                }
+                Some(DaemonCmd::Control {
+                    command,
+                    reply,
+                    from,
+                }) => match command {
+                    // These run in the background and answer when done.
+                    c @ (Command::BluetoothScan { .. }
+                    | Command::BluetoothScanStop { .. }
+                    | Command::BluetoothPair { .. }
+                    | Command::BluetoothPairReply { .. }
+                    | Command::BluetoothUnpair { .. }) => d.bluetooth(c, reply, from).await,
+                    c => {
+                        let _ = reply.send(d.control(c).await);
+                    }
+                },
                 None => shutdown.cancelled().await,
             },
         }
@@ -285,6 +336,16 @@ struct Daemon {
     hub: Arc<Hub>,
     /// `dynamic.toml`, as the config in effect was built from.
     store: DynamicStore,
+    /// Held by the one Bluetooth scan or pairing allowed at a time.
+    #[cfg(target_os = "linux")]
+    bt_busy: Arc<tokio::sync::Mutex<()>>,
+    /// Pairings waiting on their requester, by (connection, request id):
+    /// where that connection's `bluetooth.pair_reply` goes.
+    #[cfg(target_os = "linux")]
+    pairings: Pairings,
+    /// Scans that `bluetooth.scan_stop` can end.
+    #[cfg(target_os = "linux")]
+    scans: Scans,
 }
 
 impl Daemon {
@@ -479,6 +540,14 @@ impl Daemon {
                 }
             },
             Command::ConfigCheck { dynamic } => Ok(to_value(&self.check(dynamic).await)),
+            Command::BluetoothScan { .. }
+            | Command::BluetoothScanStop { .. }
+            | Command::BluetoothPair { .. }
+            | Command::BluetoothPairReply { .. }
+            | Command::BluetoothUnpair { .. } => Err(ApiError::new(
+                ErrorCode::Internal,
+                "Bluetooth commands are run by Daemon::bluetooth",
+            )),
             Command::Subscribe { .. } => Err(ApiError::new(
                 ErrorCode::BadRequest,
                 "subscribe is handled by the connection",
@@ -619,8 +688,11 @@ impl Daemon {
                 })
                 .await
             }
-            Command::PortConnect { bridge, port } => self.hold(&bridge, &port, true).await,
-            Command::PortDisconnect { bridge, port } => self.hold(&bridge, &port, false).await,
+            Command::PortConnect { bridge, port } => self.hold(&bridge, &port, Some(true)).await,
+            Command::PortDisconnect { bridge, port } => {
+                self.hold(&bridge, &port, Some(false)).await
+            }
+            Command::PortRelease { bridge, port } => self.hold(&bridge, &port, None).await,
             Command::SessionKick { session } => self.kick(&session).await,
             Command::TncCreate {
                 definition,
@@ -688,6 +760,7 @@ impl Daemon {
                     .map(|m| protocol::ModelEntry {
                         names: m.names.iter().map(|n| n.to_string()).collect(),
                         summary: m.summary.to_string(),
+                        radios: m.radios.iter().map(radio_entry).collect(),
                     })
                     .collect::<Vec<_>>(),
             )),
@@ -849,7 +922,324 @@ impl Daemon {
             })
     }
 
-    /// A TNC's id from its id or its name.
+    /// `bluetooth.*` commands. Scans and pairings take a while, so they run
+    /// in their own tasks and answer `reply` when done; one at a time.
+    #[cfg(target_os = "linux")]
+    async fn bluetooth(
+        &mut self,
+        command: Command,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+        from: Requester,
+    ) {
+        use crate::pairing;
+        let failed = |e: String| ApiError::new(ErrorCode::Failed, e);
+        let busy = || {
+            ApiError::new(
+                ErrorCode::Busy,
+                "another Bluetooth scan or pairing is running; try again when it's done",
+            )
+        };
+        match command {
+            Command::BluetoothPairReply {
+                request,
+                accept,
+                pin,
+                passkey,
+            } => {
+                let tx = self
+                    .pairings
+                    .lock()
+                    .unwrap()
+                    .get(&(from.conn, request))
+                    .cloned();
+                let res = match tx {
+                    Some(tx) => tx
+                        .send(pairing::Reply {
+                            accept,
+                            pin,
+                            passkey,
+                        })
+                        .await
+                        .map(|()| json!({}))
+                        .map_err(|_| ApiError::new(ErrorCode::NotFound, "that pairing is over")),
+                    None => Err(ApiError::new(
+                        ErrorCode::NotFound,
+                        format!(
+                            "no pairing started by this connection's request {request} is waiting for a reply"
+                        ),
+                    )),
+                };
+                let _ = reply.send(res);
+            }
+            Command::BluetoothScanStop { request } => {
+                let stop = self
+                    .scans
+                    .lock()
+                    .unwrap()
+                    .get(&(from.conn, request))
+                    .cloned();
+                let res = match stop {
+                    Some(stop) => {
+                        stop.cancel();
+                        Ok(json!({}))
+                    }
+                    None => Err(ApiError::new(
+                        ErrorCode::NotFound,
+                        format!(
+                            "no scan started by this connection's request {request} is running"
+                        ),
+                    )),
+                };
+                let _ = reply.send(res);
+            }
+            Command::BluetoothScan { adapter, seconds } => {
+                let target = match self.bt_adapter(adapter.as_deref()).await {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
+                let tncs: Vec<(bluer::Address, String)> = self
+                    .cfg
+                    .tncs
+                    .iter()
+                    .filter_map(|t| {
+                        t.spp
+                            .as_ref()
+                            .map(|s| (bluer::Address(s.address.0), t.id.clone()))
+                    })
+                    .collect();
+                let (lock, scans) = (self.bt_busy.clone(), self.scans.clone());
+                let secs = seconds.unwrap_or(10).clamp(1, 60);
+                let key = (from.conn, from.request);
+                let (events, request) = (from.events, from.request);
+                tokio::spawn(async move {
+                    let Ok(_held) = lock.try_lock() else {
+                        let _ = reply.send(Err(busy()));
+                        return;
+                    };
+                    let stop = CancellationToken::new();
+                    scans.lock().unwrap().insert(key, stop.clone());
+                    // Each device goes to the requester's connection as
+                    // it's found, and only there; a requester that's gone
+                    // ends the scan.
+                    let found = |device: &protocol::BtDevice| {
+                        let msg = protocol::EventMessage {
+                            v: protocol::VERSION,
+                            event: protocol::Event::Found {
+                                request,
+                                device: device.clone(),
+                            },
+                        };
+                        if let Ok(line) = serde_json::to_string(&msg)
+                            && let Err(mpsc::error::TrySendError::Closed(_)) = events.try_send(line)
+                        {
+                            stop.cancel();
+                        }
+                    };
+                    let res = pairing::scan(
+                        &target,
+                        secs,
+                        stop.clone(),
+                        |a| tncs.iter().find(|(x, _)| *x == a).map(|(_, id)| id.clone()),
+                        found,
+                    )
+                    .await
+                    .map(|l| to_value(&l))
+                    .map_err(failed);
+                    scans.lock().unwrap().remove(&key);
+                    let _ = reply.send(res);
+                });
+            }
+            Command::BluetoothPair {
+                tnc,
+                address,
+                adapter,
+            } => {
+                let target = match self.bt_target(tnc, address, adapter).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
+                let session = match self.bt.session().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = reply.send(Err(failed(e.to_string())));
+                        return;
+                    }
+                };
+                let (step_tx, mut step_rx) = mpsc::channel::<protocol::PairingStep>(8);
+                let (reply_tx, reply_rx) = mpsc::channel(4);
+                let key = (from.conn, from.request);
+                // Each step goes to the requester's connection, and only
+                // there.
+                let (events, request) = (from.events.clone(), from.request);
+                tokio::spawn(async move {
+                    while let Some(step) = step_rx.recv().await {
+                        let msg = protocol::EventMessage {
+                            v: protocol::VERSION,
+                            event: protocol::Event::Pairing { request, step },
+                        };
+                        let Ok(line) = serde_json::to_string(&msg) else {
+                            continue;
+                        };
+                        if events.send(line).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+                let (lock, pairings, hub) = (
+                    self.bt_busy.clone(),
+                    self.pairings.clone(),
+                    self.hub.clone(),
+                );
+                tokio::spawn(async move {
+                    let Ok(_held) = lock.try_lock() else {
+                        let _ = reply.send(Err(busy()));
+                        return;
+                    };
+                    pairings.lock().unwrap().insert(key, reply_tx);
+                    let prompter = Arc::new(pairing::Prompter {
+                        steps: step_tx,
+                        replies: tokio::sync::Mutex::new(reply_rx),
+                    });
+                    let res =
+                        pairing::pair(&session, &target.adapter, target.address, prompter).await;
+                    pairings.lock().unwrap().remove(&key);
+                    if res.is_ok()
+                        && let Some(t) = &target.tnc
+                    {
+                        hub.state("tnc", t.clone(), "paired");
+                    }
+                    let adapter = crate::bluetooth::describe(&target.adapter).await;
+                    let _ = reply.send(
+                        res.map(|()| {
+                            to_value(&protocol::PairResult {
+                                address: target.address.to_string(),
+                                adapter,
+                                paired: true,
+                            })
+                        })
+                        .map_err(failed),
+                    );
+                });
+            }
+            Command::BluetoothUnpair {
+                tnc,
+                address,
+                adapter,
+            } => {
+                let res = match self.bt_target(tnc, address, adapter).await {
+                    Ok(t) => match pairing::unpair(&t.adapter, t.address).await {
+                        Ok(()) => Ok(to_value(&protocol::PairResult {
+                            address: t.address.to_string(),
+                            adapter: crate::bluetooth::describe(&t.adapter).await,
+                            paired: false,
+                        })),
+                        Err(e) => Err(failed(e)),
+                    },
+                    Err(e) => Err(e),
+                };
+                let _ = reply.send(res);
+            }
+            _ => {
+                let _ = reply.send(self.control(command).await);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    async fn bluetooth(
+        &mut self,
+        _command: Command,
+        reply: oneshot::Sender<Result<Value, ApiError>>,
+        _from: Requester,
+    ) {
+        let _ = reply.send(Err(ApiError::new(
+            ErrorCode::Failed,
+            "Bluetooth needs Linux with BlueZ",
+        )));
+    }
+
+    /// The adapter an API request names (id, MAC or hciN), or the default
+    /// one.
+    #[cfg(target_os = "linux")]
+    async fn bt_adapter(&mut self, value: Option<&str>) -> Result<bluer::Adapter, ApiError> {
+        let sel = match value {
+            None => AdapterSel::Default,
+            Some(v) => self.cfg.adapter_sel(v).ok_or_else(|| {
+                ApiError::new(ErrorCode::NotFound, format!("there's no adapter {v:?}"))
+            })?,
+        };
+        let session = self
+            .bt
+            .session()
+            .await
+            .map_err(|e| ApiError::new(ErrorCode::Failed, e.to_string()))?;
+        match crate::bluetooth::find_adapter(&session, &sel).await {
+            Ok(Some(a)) => Ok(a),
+            Ok(None) => Err(ApiError::new(
+                ErrorCode::NotFound,
+                format!("{} isn't present", self.cfg.describe_adapter(&sel)),
+            )),
+            Err(e) => Err(ApiError::new(ErrorCode::Failed, e.to_string())),
+        }
+    }
+
+    /// The device a `bluetooth.pair` or `unpair` names: a TNC's `spp`
+    /// address and adapter, or an address and adapter.
+    #[cfg(target_os = "linux")]
+    async fn bt_target(
+        &mut self,
+        tnc: Option<String>,
+        address: Option<String>,
+        adapter: Option<String>,
+    ) -> Result<BtTarget, ApiError> {
+        let bad = |m: String| ApiError::new(ErrorCode::BadRequest, m);
+        if let Some(t) = tnc {
+            let id = self.tnc_id(&t)?;
+            let spp = self
+                .cfg
+                .tnc(&id)
+                .and_then(|t| t.spp.clone())
+                .ok_or_else(|| {
+                    bad(format!(
+                        "tnc {id} has no Bluetooth address (an spp section) to pair with"
+                    ))
+                })?;
+            let session = self
+                .bt
+                .session()
+                .await
+                .map_err(|e| ApiError::new(ErrorCode::Failed, e.to_string()))?;
+            let adapter = match crate::bluetooth::find_adapter(&session, &spp.adapter).await {
+                Ok(Some(a)) => a,
+                Ok(None) => {
+                    return Err(ApiError::new(
+                        ErrorCode::NotFound,
+                        format!("{} isn't present", self.cfg.describe_adapter(&spp.adapter)),
+                    ));
+                }
+                Err(e) => return Err(ApiError::new(ErrorCode::Failed, e.to_string())),
+            };
+            return Ok(BtTarget {
+                address: bluer::Address(spp.address.0),
+                adapter,
+                tnc: Some(id),
+            });
+        }
+        let address = address.ok_or_else(|| bad("name a tnc, or an address".into()))?;
+        let mac: Mac = address.parse().map_err(bad)?;
+        Ok(BtTarget {
+            address: bluer::Address(mac.0),
+            adapter: self.bt_adapter(adapter.as_deref()).await?,
+            tnc: None,
+        })
+    }
+
     fn tnc_id(&self, id_or_name: &str) -> Result<String, ApiError> {
         self.cfg
             .tncs
@@ -865,7 +1255,12 @@ impl Daemon {
             })
     }
 
-    async fn hold(&mut self, bridge: &str, port: &str, up: bool) -> Result<Value, ApiError> {
+    async fn hold(
+        &mut self,
+        bridge: &str,
+        port: &str,
+        up: Option<bool>,
+    ) -> Result<Value, ApiError> {
         let bridge = self.bridge_id(bridge)?;
         match self.port(&bridge, port) {
             Some(RunningPort::Tnc) => {
@@ -875,7 +1270,7 @@ impl Daemon {
             Some(_) => Err(ApiError::new(
                 ErrorCode::BadRequest,
                 format!(
-                    "{bridge}/{port} isn't a TNC port; connect and disconnect apply to TNC ports"
+                    "{bridge}/{port} isn't a TNC port; connect, disconnect and release apply to TNC ports"
                 ),
             )),
             None => Err(ApiError::new(
@@ -970,6 +1365,7 @@ impl Daemon {
             .iter()
             .map(|(hci, mac, powered)| {
                 let named = cfg.adapters.iter().find(|a| a.mac == *mac);
+                let hw = crate::bt_hardware::adapter_hardware(hci);
                 AdapterStatus {
                     id: named.map(|a| a.id.clone()),
                     mac: mac.to_string(),
@@ -977,6 +1373,9 @@ impl Daemon {
                     present: true,
                     powered: Some(*powered),
                     source: named.map(|a| a.source.to_string()),
+                    bus: hw.as_ref().map(|h| h.bus.to_string()),
+                    product: hw.as_ref().and_then(|h| h.product.clone()),
+                    usb_id: hw.and_then(|h| h.usb_id),
                 }
             })
             .collect();
@@ -989,6 +1388,9 @@ impl Daemon {
                     present: false,
                     powered: None,
                     source: Some(a.source.to_string()),
+                    bus: None,
+                    product: None,
+                    usb_id: None,
                 });
             }
         }
@@ -1044,7 +1446,7 @@ impl Daemon {
                     .collect();
                 let (state, since) = match (rb.and_then(|rb| rb.ports.get(&p.id)), &snap) {
                     (Some(RunningPort::Tnc), Some(snap)) => (
-                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc)),
+                        PortState::new(snap.tnc.name(), tnc_detail(&snap.tnc, snap.held)),
                         Some(rfc3339(snap.tnc_since)),
                     ),
                     (Some(RunningPort::Tcp { state, .. }), _) => (tcp_state(&state.borrow()), None),
@@ -1604,14 +2006,43 @@ fn to_value<T: serde::Serialize>(v: &T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
 }
 
-fn tnc_detail(s: &TncState) -> Option<String> {
-    match s {
+/// What `status` says about a TNC link beyond its state: why it's waiting,
+/// and whether `port.connect` or `port.disconnect` is holding it.
+fn tnc_detail(s: &TncState, held: Option<bool>) -> Option<String> {
+    let why = match s {
         TncState::Backoff { attempt, retry_in } => Some(format!(
             "attempt {attempt}, retry in {}s",
             retry_in.as_secs()
         )),
         TncState::Unpaired(why) | TncState::WaitingForDevice(why) => Some(why.clone()),
         _ => None,
+    };
+    let held = held.map(|up| {
+        format!(
+            "held {} (release lets its connect policy decide)",
+            if up { "up" } else { "down" }
+        )
+    });
+    match (why, held) {
+        (Some(w), Some(h)) => Some(format!("{w}; {h}")),
+        (w, h) => w.or(h),
+    }
+}
+
+fn radio_entry(r: &config::RadioInfo) -> protocol::RadioEntry {
+    protocol::RadioEntry {
+        name: r.name.to_string(),
+        model: r.model.to_string(),
+        bluetooth: r.bluetooth.as_ref().map(|b| protocol::RadioBluetoothEntry {
+            name_prefix: b.name_prefix.to_string(),
+            setup: b.setup.to_string(),
+            pairing_mode: b.pairing_mode.to_string(),
+            pairing: b.pairing.to_string(),
+        }),
+        usb: r.usb.as_ref().map(|u| protocol::RadioUsbEntry {
+            usb_id: u.id.map(|(v, p)| format!("{v:04x}:{p:04x}")),
+            setup: u.setup.to_string(),
+        }),
     }
 }
 
