@@ -262,7 +262,7 @@ pub async fn run(
         return Err(e);
     }
     if d.bridges.is_empty() {
-        tracing::warn!("no bridge is running; check `kiss-tnc-bridge -t`");
+        tracing::warn!("no bridge is running; check 'kiss-tnc-bridge -t'");
     }
     tracing::info!(bridges = d.bridges.len(), "daemon ready");
 

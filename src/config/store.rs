@@ -89,7 +89,7 @@ impl fmt::Display for StoreError {
         match self {
             StoreError::ChangedOnDisk(p) => write!(
                 f,
-                "{} changed on disk since the daemon read it; run `ktbctl reload` to use the edit",
+                "{} changed on disk since the daemon read it; run 'ktbctl reload' to use the edit",
                 p.display()
             ),
             StoreError::Invalid(m) => f.write_str(m),
