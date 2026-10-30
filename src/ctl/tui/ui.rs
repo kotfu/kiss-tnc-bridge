@@ -25,7 +25,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
 
-use super::app::{App, FrameRow, Link, Lower, Row, TncRow, View};
+use super::app::{App, Dialog, FrameRow, Link, Lower, Row, TncRow, View};
 use crate::control::protocol::{
     AdapterStatus, BridgeStatus, Dir, PortStatus, SessionStatus, Status, TncStatus,
 };
@@ -58,6 +58,9 @@ pub fn draw(f: &mut Frame, app: &App, now: Instant, wall: SystemTime) {
     }
     if app.help {
         help(f, app);
+    }
+    if let Some(d) = &app.dialog {
+        dialog(f, d);
     }
 }
 
@@ -143,6 +146,7 @@ fn message(f: &mut Frame, app: &App, inner: Rect) {
     let Some((text, error)) = &app.message else {
         return;
     };
+
     let at = Rect {
         y: inner.y + inner.height.saturating_sub(1),
         height: 1,
@@ -298,11 +302,18 @@ fn bridges(f: &mut Frame, app: &App, s: &Status, now: Instant, wall: SystemTime)
     f.render_widget(Paragraph::new(lines).block(block), lower);
     message(f, app, inner_lower);
 
-    keys(
-        f,
-        k,
-        "↑↓ move  ←→ fold  Tab details  2 TNCs  3 frames  ? help  q quit",
-    );
+    let hint = match row {
+        Some(Row::Bridge(_)) => {
+            "↑↓ move  e enable  d disable  s switch  - remove  R reload  ? help  q quit"
+        }
+        Some(Row::Port(b, p)) if s.bridges[b].ports[p].role != "app" => {
+            "↑↓ move  c connect  x disconnect  r release  - remove  ? help  q quit"
+        }
+        Some(Row::Port(..)) => "↑↓ move  - remove  R reload  Tab details  ? help  q quit",
+        Some(Row::Session(..)) => "↑↓ move  k kick  Tab details  ? help  q quit",
+        None => "R reload  2 TNCs  3 frames  ? help  q quit",
+    };
+    keys(f, k, hint);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -675,7 +686,11 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), lower);
     message(f, app, inner_lower);
-    keys(f, k, "↑↓ move  1 bridges  3 frames  ? help  q quit");
+    keys(
+        f,
+        k,
+        "↑↓ move  - remove  R reload  1 bridges  3 frames  ? help  q quit",
+    );
 }
 
 fn tnc_lines(t: &TncStatus, w: usize) -> Vec<Line<'static>> {
@@ -963,8 +978,16 @@ fn help(f: &mut Frame, app: &App) {
             ("→ ←", "open and fold a bridge"),
             ("Tab", "frames or details below"),
             ("f", "frames, full screen"),
+            ("e d s", "enable, disable, switch to a bridge"),
+            ("c x r", "connect, disconnect, release a TNC"),
+            ("k", "kick an app's session"),
+            ("-", "remove a bridge or port"),
+            ("R", "reload the config file"),
         ]),
-        View::Tncs => {}
+        View::Tncs => lines.extend([
+            ("-", "remove a TNC, or an adapter's id"),
+            ("R", "reload the config file"),
+        ]),
         View::Frames => lines.extend([
             ("space", "pause"),
             ("/", "filter by text; Esc clears it"),
@@ -998,6 +1021,64 @@ fn help(f: &mut Frame, app: &App) {
                 .title(Line::from(" Esc close ").right_aligned()),
         ),
         box_area,
+    );
+}
+
+// ── Dialogs ─────────────────────────────────────────────────────────────
+
+/// A question with yes and no, or a notice to close, in the middle of the
+/// screen.
+fn dialog(f: &mut Frame, d: &Dialog) {
+    let area = f.area();
+    let width = 60.min(area.width);
+    let text_w = width.saturating_sub(6) as usize;
+    let mut text = vec![Line::raw("")];
+    for l in &d.lines {
+        // A bullet's text wraps under its text, not under the bullet.
+        let lead: String = l.chars().take_while(|c| *c == ' ' || *c == '•').collect();
+        let under = " ".repeat(lead.chars().count());
+        let body = &l[lead.len()..];
+        let w = text_w.saturating_sub(under.len()).max(10);
+        for (i, part) in wrap(body, w).into_iter().enumerate() {
+            let first = if i == 0 {
+                lead.as_str()
+            } else {
+                under.as_str()
+            };
+            text.push(Line::raw(format!("  {first}{part}")));
+        }
+    }
+    text.push(Line::raw(""));
+    let footer = match &d.yes {
+        Some((yes, _)) => {
+            text.push(Line::from(vec![
+                Span::raw("        "),
+                Span::styled(
+                    format!("[ y  {yes} ]"),
+                    Style::new().add_modifier(Modifier::BOLD),
+                ),
+                Span::raw("     [ n  Cancel ]"),
+            ]));
+            text.push(Line::raw(""));
+            " Esc cancel "
+        }
+        None => " ⏎ close ",
+    };
+    let h = (text.len() as u16 + 2).min(area.height);
+    let at = Rect {
+        x: area.x + area.width.saturating_sub(width) / 2,
+        y: area.y + area.height.saturating_sub(h) / 2,
+        width,
+        height: h,
+    };
+    f.render_widget(Clear, at);
+    f.render_widget(
+        Paragraph::new(text).block(
+            Block::bordered()
+                .title(Line::from(format!(" {} ", d.title)))
+                .title_bottom(Line::from(footer).right_aligned()),
+        ),
+        at,
     );
 }
 
@@ -1186,6 +1267,47 @@ mod tests {
             "{all}"
         );
         assert!(has(&s, "rx ktbr1/radio  W1AW-9>APDR16"), "{all}");
+    }
+
+    #[test]
+    fn dialogs_and_keys_for_the_row() {
+        let mut app = app();
+        let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
+        let s = screen(&app);
+        assert!(has(&s, "e enable  d disable  s switch"), "{}", s.join("\n"));
+        app.key(k(KeyCode::Down));
+        let s = screen(&app);
+        assert!(
+            has(&s, "c connect  x disconnect  r release"),
+            "{}",
+            s.join("\n")
+        );
+        app.dialog = Some(Dialog {
+            title: "Disable ktbr1 (TH-D75)?".into(),
+            lines: vec![
+                "This would:".into(),
+                "  • disconnect session ktbr1/phones/40:33:E0:1B:DB:76, and a long tail that wraps"
+                    .into(),
+            ],
+            yes: None,
+        });
+        let s = screen(&app);
+        let all = s.join("\n");
+        assert!(has(&s, "┌ Disable ktbr1 (TH-D75)? "), "{all}");
+        assert!(has(&s, "  • disconnect session"), "{all}");
+        // The wrapped part lines up under the bullet's text.
+        let i = s.iter().position(|l| l.contains("• disconnect")).unwrap();
+        let col = |l: &str, c: char| l.chars().position(|x| x == c);
+        let text_at = col(&s[i], 'd');
+        let next = &s[i + 1];
+        let next_at = next
+            .chars()
+            .enumerate()
+            .skip(12)
+            .find(|(_, c)| *c != ' ')
+            .map(|(i, _)| i);
+        assert_eq!(text_at, next_at, "{all}");
+        assert!(has(&s, "⏎ close"), "{all}");
     }
 
     #[test]

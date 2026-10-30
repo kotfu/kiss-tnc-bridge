@@ -19,10 +19,15 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+use serde_json::Value;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::super::client::CtlError;
 use crate::ax25::Decoded;
-use crate::control::protocol::{BridgeStatus, Dir, Event, PortStatus, SessionStatus, Status};
+use crate::control::protocol::{
+    BridgeStatus, Command, Dir, ErrorCode, Event, PortStatus, SessionStatus, Status,
+};
 
 /// Frames kept for the Frames view.
 pub const FRAMES_KEPT: usize = 1000;
@@ -30,6 +35,8 @@ pub const FRAMES_KEPT: usize = 1000;
 pub const LIGHT: Duration = Duration::from_millis(300);
 /// Rows PgUp and PgDn move.
 const PAGE: usize = 10;
+/// Errors longer than this get a box rather than the message line.
+const ERROR_LINE: usize = 72;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum View {
@@ -55,10 +62,50 @@ pub enum Link {
 }
 
 /// What a key asks of the loop that runs the TUI.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     None,
     Quit,
+    /// Send this to the daemon.
+    Request(Box<Req>),
+}
+
+fn request(req: Req) -> Action {
+    Action::Request(Box::new(req))
+}
+
+/// A request for the daemon, and what to do with its answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Req {
+    pub command: Command,
+    pub then: Then,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Then {
+    /// Say this when it works.
+    Done(String),
+    /// A change sent with `non_disruptive`. If the daemon says it would
+    /// disconnect someone, ask, and on yes send `redo` (the same change
+    /// without it).
+    Consent {
+        title: String,
+        yes: String,
+        redo: Command,
+        done: String,
+        /// For an enable: the bridge to offer to switch to if another
+        /// bridge is in its way.
+        switch: Option<String>,
+    },
+}
+
+/// A question or a notice over the screen.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Dialog {
+    pub title: String,
+    pub lines: Vec<String>,
+    /// The yes button's words and what it does; none for a notice.
+    pub yes: Option<(String, Req)>,
 }
 
 /// A frame from a `frame` event.
@@ -146,6 +193,7 @@ pub struct App {
     /// One line above the keys until the next key: (text, is an error).
     pub message: Option<(String, bool)>,
     pub help: bool,
+    pub dialog: Option<Dialog>,
 }
 
 impl App {
@@ -167,6 +215,7 @@ impl App {
             lights: HashMap::new(),
             message: None,
             help: false,
+            dialog: None,
         }
     }
 
@@ -429,8 +478,8 @@ impl App {
             return;
         }
         match k.code {
-            KeyCode::Up | KeyCode::Char('k') => self.move_frames(-1),
-            KeyCode::Down | KeyCode::Char('j') => self.move_frames(1),
+            KeyCode::Up => self.move_frames(-1),
+            KeyCode::Down => self.move_frames(1),
             KeyCode::PageUp => self.move_frames(-(PAGE as isize)),
             KeyCode::PageDown => self.move_frames(PAGE as isize),
             KeyCode::Home | KeyCode::Char('g') => self.move_frames(isize::MIN),
@@ -459,6 +508,21 @@ impl App {
         if k.modifiers.contains(KeyModifiers::CONTROL) && k.code == KeyCode::Char('c') {
             return Action::Quit;
         }
+        if let Some(d) = &self.dialog {
+            return match (k.code, &d.yes) {
+                (KeyCode::Char('y') | KeyCode::Enter, Some((_, req))) => {
+                    let req = req.clone();
+                    self.dialog = None;
+                    request(req)
+                }
+                (KeyCode::Char('n') | KeyCode::Esc, Some(_))
+                | (KeyCode::Enter | KeyCode::Esc, None) => {
+                    self.dialog = None;
+                    Action::None
+                }
+                _ => Action::None,
+            };
+        }
         if self.help {
             if matches!(
                 k.code,
@@ -482,10 +546,18 @@ impl App {
                 self.back = self.view;
                 self.view = View::Frames;
             }
+            KeyCode::Char('R') if self.view != View::Frames => {
+                return request(consent(
+                    |nd| Command::Reload { non_disruptive: nd },
+                    "Reload the config?",
+                    "Reload",
+                    "config reloaded",
+                ));
+            }
             _ => match self.view {
                 View::Bridges => match k.code {
-                    KeyCode::Up | KeyCode::Char('k') => self.move_bridges(-1),
-                    KeyCode::Down | KeyCode::Char('j') => self.move_bridges(1),
+                    KeyCode::Up => self.move_bridges(-1),
+                    KeyCode::Down => self.move_bridges(1),
                     KeyCode::PageUp => self.move_bridges(-(PAGE as isize)),
                     KeyCode::PageDown => self.move_bridges(PAGE as isize),
                     KeyCode::Home => self.move_bridges(isize::MIN),
@@ -498,19 +570,365 @@ impl App {
                             Lower::Details => Lower::Frames,
                         }
                     }
-                    _ => {}
+                    _ => return self.bridges_action(k.code),
                 },
                 View::Tncs => match k.code {
-                    KeyCode::Up | KeyCode::Char('k') => self.move_tncs(-1),
-                    KeyCode::Down | KeyCode::Char('j') => self.move_tncs(1),
+                    KeyCode::Up => self.move_tncs(-1),
+                    KeyCode::Down => self.move_tncs(1),
                     KeyCode::Home => self.move_tncs(isize::MIN),
                     KeyCode::End => self.move_tncs(isize::MAX),
+                    KeyCode::Char('-') | KeyCode::Delete => return self.remove_tnc_row(),
                     _ => {}
                 },
                 View::Frames => self.frames_key(k),
             },
         }
         Action::None
+    }
+
+    /// The keys that act on the selected row of the Bridges view.
+    fn bridges_action(&mut self, code: KeyCode) -> Action {
+        let Some(row) = self.selected_row() else {
+            return Action::None;
+        };
+        let Some(s) = &self.status else {
+            return Action::None;
+        };
+        match row {
+            Row::Bridge(bi) => {
+                let b = &s.bridges[bi];
+                let (id, label) = (b.id.clone(), format!("{} ({})", b.id, b.name));
+                match code {
+                    KeyCode::Char('e') if b.enabled => self.say(format!("{id} is already enabled")),
+                    KeyCode::Char('e') => {
+                        let id2 = id.clone();
+                        let mut req = consent(
+                            move |nd| Command::BridgeEnable {
+                                bridge: id2.clone(),
+                                reset: false,
+                                non_disruptive: nd,
+                            },
+                            &format!("Enable {label}?"),
+                            "Enable it",
+                            &format!("{id} enabled"),
+                        );
+                        if let Then::Consent { switch, .. } = &mut req.then {
+                            *switch = Some(id);
+                        }
+                        request(req)
+                    }
+                    KeyCode::Char('d') if !b.enabled => {
+                        self.say(format!("{id} is already disabled"))
+                    }
+                    KeyCode::Char('d') => request(consent(
+                        move |nd| Command::BridgeDisable {
+                            bridge: id.clone(),
+                            non_disruptive: nd,
+                        },
+                        &format!("Disable {label}?"),
+                        "Disable it",
+                        &format!("{} disabled", b.id),
+                    )),
+                    KeyCode::Char('s') if b.enabled => self.say(format!("{id} is already enabled")),
+                    KeyCode::Char('s') => request(switch_to(&id, &label)),
+                    KeyCode::Char('-') | KeyCode::Delete if !b.editable => {
+                        self.dialog = Some(static_notice(
+                            &id,
+                            &b.source,
+                            "only enabling and disabling it works",
+                        ));
+                        Action::None
+                    }
+                    KeyCode::Char('-') | KeyCode::Delete => {
+                        let id2 = id.clone();
+                        self.dialog = Some(Dialog {
+                            title: format!("Remove bridge {label}?"),
+                            lines: vec!["It's removed from dynamic.toml, with its ports.".into()],
+                            yes: Some((
+                                "Remove it".into(),
+                                consent(
+                                    move |nd| Command::BridgeDelete {
+                                        bridge: id2.clone(),
+                                        non_disruptive: nd,
+                                    },
+                                    &format!("Remove bridge {label}?"),
+                                    "Remove it",
+                                    &format!("{id} removed"),
+                                ),
+                            )),
+                        });
+                        Action::None
+                    }
+                    _ => Action::None,
+                }
+            }
+            Row::Port(bi, pi) => {
+                let b = &s.bridges[bi];
+                let p = &b.ports[pi];
+                let (bridge, port) = (b.id.clone(), p.id.clone());
+                let object = format!("{bridge}/{port}");
+                let tnc = p.role != "app";
+                let act = |command, done: String| {
+                    request(Req {
+                        command,
+                        then: Then::Done(done),
+                    })
+                };
+                match code {
+                    KeyCode::Char('c') if tnc => act(
+                        Command::PortConnect { bridge, port },
+                        format!("{object}: connecting, and staying up until x or r"),
+                    ),
+                    KeyCode::Char('x') if tnc => act(
+                        Command::PortDisconnect { bridge, port },
+                        format!("{object}: disconnected, and staying down until c or r"),
+                    ),
+                    KeyCode::Char('r') if tnc => act(
+                        Command::PortRelease { bridge, port },
+                        format!("{object}: released to its connect policy"),
+                    ),
+                    KeyCode::Char('-') | KeyCode::Delete if !b.editable => {
+                        self.dialog = Some(static_notice(
+                            &bridge,
+                            &b.source,
+                            "only enabling and disabling it works",
+                        ));
+                        Action::None
+                    }
+                    KeyCode::Char('-') | KeyCode::Delete => {
+                        let (b2, p2) = (bridge.clone(), port.clone());
+                        let title = format!("Remove port {port} from {bridge}?");
+                        self.dialog = Some(Dialog {
+                            title: title.clone(),
+                            lines: vec!["It's removed from dynamic.toml.".into()],
+                            yes: Some((
+                                "Remove it".into(),
+                                consent(
+                                    move |nd| Command::PortRemove {
+                                        bridge: b2.clone(),
+                                        port: p2.clone(),
+                                        non_disruptive: nd,
+                                    },
+                                    &title,
+                                    "Remove it",
+                                    &format!("{object} removed"),
+                                ),
+                            )),
+                        });
+                        Action::None
+                    }
+                    _ => Action::None,
+                }
+            }
+            Row::Session(bi, pi, si) => {
+                let sess = &s.bridges[bi].ports[pi].sessions[si];
+                match code {
+                    KeyCode::Char('k') => request(Req {
+                        command: Command::SessionKick {
+                            session: sess.id.clone(),
+                        },
+                        then: Then::Done(format!("kicked {}", sess.id)),
+                    }),
+                    _ => Action::None,
+                }
+            }
+        }
+    }
+
+    /// `-` in the TNCs view.
+    fn remove_tnc_row(&mut self) -> Action {
+        let rows = self.tnc_rows();
+        let (Some(i), Some(s)) = (self.tnc_selected_index(&rows), &self.status) else {
+            return Action::None;
+        };
+        match rows[i].0 {
+            TncRow::Tnc(t) => {
+                let t = &s.tncs[t];
+                if !t.editable {
+                    self.dialog = Some(static_notice(&t.id, &t.source, "it can't be changed"));
+                    return Action::None;
+                }
+                let id = t.id.clone();
+                let mut lines = vec!["It's removed from dynamic.toml.".to_string()];
+                if let Some(b) = &t.in_use_by {
+                    lines.push(format!(
+                        "Bridge {b} uses it, so it can't go until {b} doesn't."
+                    ));
+                }
+                let title = format!("Remove TNC {} ({})?", t.id, t.name);
+                self.dialog = Some(Dialog {
+                    title: title.clone(),
+                    lines,
+                    yes: Some((
+                        "Remove it".into(),
+                        consent(
+                            move |nd| Command::TncDelete {
+                                tnc: id.clone(),
+                                non_disruptive: nd,
+                            },
+                            &title,
+                            "Remove it",
+                            &format!("TNC {} removed", t.id),
+                        ),
+                    )),
+                });
+            }
+            TncRow::Adapter(a) => {
+                let a = &s.adapters[a];
+                let Some(id) = a.id.clone() else {
+                    return self.say(format!("{} has no id to remove", a.mac));
+                };
+                if a.source.as_deref().is_some_and(|src| src != "dynamic") {
+                    let src = a.source.clone().unwrap_or_default();
+                    self.dialog = Some(static_notice(&id, &src, "it can't be changed"));
+                    return Action::None;
+                }
+                let title = format!("Remove the adapter id {id}?");
+                let id2 = id.clone();
+                self.dialog = Some(Dialog {
+                    title: title.clone(),
+                    lines: vec![format!(
+                        "{} stays; the config just stops calling it {id}.",
+                        a.mac
+                    )],
+                    yes: Some((
+                        "Remove it".into(),
+                        consent(
+                            move |nd| Command::AdapterDelete {
+                                adapter: id2.clone(),
+                                non_disruptive: nd,
+                            },
+                            &title,
+                            "Remove it",
+                            &format!("adapter id {id} removed"),
+                        ),
+                    )),
+                });
+            }
+        }
+        Action::None
+    }
+
+    /// An error: on the message line, or in a box if it won't fit there.
+    pub fn error(&mut self, text: String) {
+        if text.chars().count() <= ERROR_LINE {
+            self.message = Some((text, true));
+        } else {
+            self.dialog = Some(Dialog {
+                title: "That didn't work".into(),
+                lines: vec![text],
+                yes: None,
+            });
+        }
+    }
+
+    fn say(&mut self, text: String) -> Action {
+        self.message = Some((text, false));
+        Action::None
+    }
+
+    /// What the daemon answered to a request sent with `then`.
+    pub fn on_answer(&mut self, then: Then, res: Result<Value, CtlError>) {
+        match (then, res) {
+            (Then::Done(text), Ok(_)) | (Then::Consent { done: text, .. }, Ok(_)) => {
+                self.message = Some((text, false));
+            }
+            (
+                Then::Consent {
+                    title,
+                    yes,
+                    redo,
+                    done,
+                    ..
+                },
+                Err(CtlError::Api(e)),
+            ) if e.code == ErrorCode::ReloadWouldDisrupt => {
+                let would: Vec<String> = e
+                    .data
+                    .as_ref()
+                    .and_then(|d| d.get("disruptions"))
+                    .and_then(|d| serde_json::from_value(d.clone()).ok())
+                    .unwrap_or_else(|| vec![e.message.clone()]);
+                let mut lines = vec!["This would:".to_string()];
+                lines.extend(would.into_iter().map(|w| format!("  • {w}")));
+                self.dialog = Some(Dialog {
+                    title,
+                    lines,
+                    yes: Some((
+                        yes,
+                        Req {
+                            command: redo,
+                            then: Then::Done(done),
+                        },
+                    )),
+                });
+            }
+            (
+                Then::Consent {
+                    switch: Some(bridge),
+                    ..
+                },
+                Err(CtlError::Api(e)),
+            ) if e.code == ErrorCode::ConfigInvalid && e.message.contains("conflicts with") => {
+                let label = self
+                    .status
+                    .as_ref()
+                    .and_then(|s| s.bridges.iter().find(|b| b.id == bridge))
+                    .map(|b| format!("{} ({})", b.id, b.name))
+                    .unwrap_or_else(|| bridge.clone());
+                self.dialog = Some(Dialog {
+                    title: format!("Switch to {label}?"),
+                    lines: vec![
+                        e.message.clone(),
+                        String::new(),
+                        "Switching enables it and disables the bridges in its way.".into(),
+                    ],
+                    yes: Some(("Switch".into(), switch_to(&bridge, &label))),
+                });
+            }
+            (_, Err(e)) => self.error(e.to_string()),
+        }
+    }
+}
+
+/// A change to send with `non_disruptive`, asking before it disconnects
+/// anyone.
+fn consent(make: impl Fn(bool) -> Command, title: &str, yes: &str, done: &str) -> Req {
+    Req {
+        command: make(true),
+        then: Then::Consent {
+            title: title.into(),
+            yes: yes.into(),
+            redo: make(false),
+            done: done.into(),
+            switch: None,
+        },
+    }
+}
+
+fn switch_to(bridge: &str, label: &str) -> Req {
+    let id = bridge.to_string();
+    consent(
+        move |nd| Command::BridgeSwitch {
+            bridge: id.clone(),
+            non_disruptive: nd,
+        },
+        &format!("Switch to {label}?"),
+        "Switch",
+        &format!("switched to {bridge}"),
+    )
+}
+
+/// Why a static object can't be changed here.
+fn static_notice(id: &str, source: &str, what_works: &str) -> Dialog {
+    let path = source.strip_prefix("static: ").unwrap_or(source);
+    Dialog {
+        title: format!("{id} is in the config file"),
+        lines: vec![
+            format!("{id} comes from {path}, so {what_works} from here."),
+            "To change it, edit that file, then press R to reload.".into(),
+        ],
+        yes: None,
     }
 }
 
@@ -759,5 +1177,164 @@ pub(crate) mod tests {
             state: "opened".into(),
         };
         assert!(app.on_event(state, t));
+    }
+
+    fn select(app: &mut App, id: &str) {
+        app.selected = Some(id.into());
+    }
+
+    #[test]
+    fn disabling_asks_before_disconnecting_anyone() {
+        let mut app = App::new("pi".into());
+        app.set_status(status());
+        select(&mut app, "ktbr1");
+        let Action::Request(req) = app.key(key(KeyCode::Char('d'))) else {
+            panic!("d sends a request");
+        };
+        assert_eq!(
+            req.command,
+            Command::BridgeDisable {
+                bridge: "ktbr1".into(),
+                non_disruptive: true
+            }
+        );
+        // The daemon says it would disrupt: the dialog lists how.
+        let refused = crate::control::protocol::ApiError::new(
+            ErrorCode::ReloadWouldDisrupt,
+            "this would disrupt",
+        )
+        .data(json!({"disruptions": ["disconnect session ktbr1/phones/40:33:E0:1B:DB:76"]}));
+        app.on_answer(req.then, Err(CtlError::Api(refused)));
+        let d = app.dialog.clone().expect("a dialog");
+        assert_eq!(d.title, "Disable ktbr1 (TH-D75)?");
+        assert_eq!(
+            d.lines,
+            [
+                "This would:",
+                "  • disconnect session ktbr1/phones/40:33:E0:1B:DB:76"
+            ]
+        );
+        // n changes nothing; y sends it again without non_disruptive.
+        let mut no = App::new("pi".into());
+        no.dialog = Some(d);
+        assert_eq!(no.key(key(KeyCode::Char('n'))), Action::None);
+        assert!(no.dialog.is_none());
+        let Action::Request(again) = app.key(key(KeyCode::Char('y'))) else {
+            panic!("y sends it again");
+        };
+        assert_eq!(
+            again.command,
+            Command::BridgeDisable {
+                bridge: "ktbr1".into(),
+                non_disruptive: false
+            }
+        );
+        app.on_answer(again.then, Ok(json!({})));
+        assert_eq!(app.message, Some(("ktbr1 disabled".into(), false)));
+    }
+
+    #[test]
+    fn enabling_offers_to_switch_when_a_bridge_is_in_the_way() {
+        let mut app = App::new("pi".into());
+        app.set_status(status());
+        select(&mut app, "ktbr2");
+        assert_eq!(app.key(key(KeyCode::Char('d'))), Action::None);
+        assert_eq!(
+            app.message,
+            Some(("ktbr2 is already disabled".into(), false))
+        );
+        let Action::Request(req) = app.key(key(KeyCode::Char('e'))) else {
+            panic!("e sends a request");
+        };
+        let conflict = crate::control::protocol::ApiError::new(
+            ErrorCode::ConfigInvalid,
+            "bridge ktbr2: TNC d75 conflicts with bridge ktbr1",
+        );
+        app.on_answer(req.then, Err(CtlError::Api(conflict)));
+        assert_eq!(
+            app.dialog.as_ref().map(|d| d.title.as_str()),
+            Some("Switch to ktbr2 (Shack relay)?")
+        );
+        let Action::Request(switch) = app.key(key(KeyCode::Enter)) else {
+            panic!("Enter switches");
+        };
+        assert_eq!(
+            switch.command,
+            Command::BridgeSwitch {
+                bridge: "ktbr2".into(),
+                non_disruptive: true
+            }
+        );
+        // Any other failure is said on the message line.
+        app.on_answer(
+            switch.then,
+            Err(CtlError::Api(crate::control::protocol::ApiError::new(
+                ErrorCode::ConfigInvalid,
+                "bridge ktbr2 has no app port",
+            ))),
+        );
+        assert_eq!(
+            app.message,
+            Some(("bridge ktbr2 has no app port".into(), true))
+        );
+    }
+
+    #[test]
+    fn ports_sessions_and_static_bridges() {
+        let mut app = App::new("pi".into());
+        app.set_status(status());
+        // TNC keys do nothing on an app port.
+        select(&mut app, "ktbr1/lan");
+        assert_eq!(app.key(key(KeyCode::Char('c'))), Action::None);
+        select(&mut app, "ktbr1/radio");
+        let Action::Request(r) = app.key(key(KeyCode::Char('x'))) else {
+            panic!("x disconnects");
+        };
+        assert_eq!(
+            r.command,
+            Command::PortDisconnect {
+                bridge: "ktbr1".into(),
+                port: "radio".into()
+            }
+        );
+        select(&mut app, "ktbr1/phones/40:33:E0:1B:DB:76");
+        let Action::Request(r) = app.key(key(KeyCode::Char('k'))) else {
+            panic!("k kicks");
+        };
+        assert_eq!(
+            r.command,
+            Command::SessionKick {
+                session: "ktbr1/phones/40:33:E0:1B:DB:76".into()
+            }
+        );
+        // Removing asks first, even when nobody would notice.
+        select(&mut app, "ktbr1/lan");
+        assert_eq!(app.key(key(KeyCode::Char('-'))), Action::None);
+        let Action::Request(r) = app.key(key(KeyCode::Char('y'))) else {
+            panic!("y removes");
+        };
+        assert_eq!(
+            r.command,
+            Command::PortRemove {
+                bridge: "ktbr1".into(),
+                port: "lan".into(),
+                non_disruptive: true
+            }
+        );
+        // A static bridge says why it can't be removed.
+        let mut s = status();
+        s.bridges[0].editable = false;
+        s.bridges[0].source = "static: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml".into();
+        app.set_status(s);
+        select(&mut app, "ktbr1");
+        app.key(key(KeyCode::Char('-')));
+        let d = app.dialog.clone().expect("a notice");
+        assert_eq!(d.title, "ktbr1 is in the config file");
+        assert!(d.yes.is_none());
+        assert!(d.lines[0].contains("/etc/kiss-tnc-bridge/kiss-tnc-bridge.toml"));
+        assert_eq!(app.key(key(KeyCode::Char('y'))), Action::None);
+        assert!(app.dialog.is_some());
+        app.key(key(KeyCode::Enter));
+        assert!(app.dialog.is_none());
     }
 }

@@ -23,6 +23,7 @@
 mod app;
 mod ui;
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -30,7 +31,7 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind};
 use tokio::sync::mpsc;
 
-use self::app::{Action, App, Link};
+use self::app::{Action, App, Link, Req, Then};
 use super::client::{Client, CtlError, Message, result};
 use crate::control::protocol::{Command, Status, Topic};
 
@@ -86,6 +87,8 @@ struct Conn {
     status_pending: Option<u64>,
     /// State changed again while it was waiting.
     status_stale: bool,
+    /// Requests from keys waiting for their answers, by id.
+    pending: HashMap<u64, Then>,
 }
 
 impl Conn {
@@ -100,6 +103,7 @@ impl Conn {
             events,
             status_pending: None,
             status_stale: false,
+            pending: HashMap::new(),
         };
         c.refresh().await?;
         Ok(c)
@@ -171,6 +175,15 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
             Woke::Input(Some(Input::Key(k))) => match app.key(k) {
                 Action::Quit => return Ok(()),
                 Action::None => Ok(()),
+                Action::Request(req) => match (*req, conn.as_mut()) {
+                    (Req { command, then }, Some(c)) => c.requests.send(command).await.map(|id| {
+                        c.pending.insert(id, then);
+                    }),
+                    (_, None) => {
+                        app.error("not connected to the daemon".into());
+                        Ok(())
+                    }
+                },
             },
             Woke::Input(Some(Input::Resize)) | Woke::Tick => Ok(()),
             Woke::Request(m) => match (m, conn.as_mut()) {
@@ -182,12 +195,23 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
                     });
                     match s {
                         Ok(s) => app.set_status(s),
-                        Err(e) => app.message = Some((e.to_string(), true)),
+                        Err(e) => app.error(e.to_string()),
                     }
                     if std::mem::take(&mut c.status_stale) {
                         c.refresh().await
                     } else {
                         Ok(())
+                    }
+                }
+                (Ok(Some(Message::Response(r))), Some(c)) => {
+                    match r.id.and_then(|id| c.pending.remove(&id)) {
+                        // Not every change sends a state event (removing
+                        // a disabled bridge stops nothing), so look again.
+                        Some(then) => {
+                            app.on_answer(then, result(r));
+                            c.refresh().await
+                        }
+                        None => Ok(()),
                     }
                 }
                 (Ok(Some(_)), _) => Ok(()),
