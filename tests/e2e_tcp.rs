@@ -99,6 +99,19 @@ async fn client(addr: SocketAddr) -> KissConnection<TcpStream> {
     KissConnection::new(TcpStream::connect(addr).await.unwrap())
 }
 
+/// Wait until the bridge has `n` sessions. A client's connect returns once
+/// the kernel accepts it, before the bridge has registered the session, and
+/// a frame broadcast before then doesn't reach it.
+async fn sessions(h: &BridgeHandle, n: usize) {
+    timeout(T, async {
+        while h.counters.sessions() != n {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("the bridge has {} sessions, not {n}", h.counters.sessions()));
+}
+
 async fn read(c: &mut KissConnection<TcpStream>) -> Vec<u8> {
     timeout(T, c.read_frame()).await.expect("no frame").unwrap()
 }
@@ -111,6 +124,7 @@ async fn broadcast_uplink_and_filtering() {
     let mut a = client(s.server_addr).await;
     let mut tnc = accept_tnc(&s.tnc_listener).await;
     let mut b = client(s.server_addr).await;
+    sessions(&s.handle, 2).await;
     let mut state = s.handle.state.clone();
     timeout(T, async {
         while *state.borrow() != TncState::Connected {
