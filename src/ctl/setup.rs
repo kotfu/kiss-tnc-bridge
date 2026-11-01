@@ -30,6 +30,10 @@
 //!    bridge is in the way).
 //! 7. Connect, and wait for the first frame or 30 s of silence.
 //!
+//! With `--address` (the TUI's scan box hands a device over this way),
+//! it's over Bluetooth and the device is found already: it starts at
+//! step 2, and skips the scan.
+//!
 //! Every step goes through the control API; nothing here reads config.
 
 use std::time::Duration;
@@ -37,7 +41,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::signal::unix::{SignalKind, signal};
 
-use super::cli::BtWho;
+use super::cli::{BtWho, SetupArgs};
 use super::client::{Client, CtlError, Message, result};
 use super::run::{Ctl, ask_line, confirm, interactive, prompt, read_line};
 use crate::control::protocol::{
@@ -60,7 +64,7 @@ enum TncSide {
 }
 
 impl Ctl {
-    pub(super) async fn setup(&self, c: &mut Client) -> Result<(), CtlError> {
+    pub(super) async fn setup(&self, c: &mut Client, args: SetupArgs) -> Result<(), CtlError> {
         if !interactive() {
             return Err(CtlError::Message(
                 "setup asks questions; run it in a terminal".into(),
@@ -69,6 +73,25 @@ impl Ctl {
         println!("This sets up a TNC and a bridge to share it. Ctrl-C stops at any point;");
         println!("anything made by then stays, and 'ktbctl status' shows it.\n");
         let s: Status = c.call_as(Command::Status).await?;
+        // A device a scan found already: it's over Bluetooth, and there's
+        // nothing to look for.
+        if let Some(address) = args.address.clone() {
+            let device = BtDevice {
+                address,
+                name: args.name.clone(),
+                rssi: None,
+                icon: None,
+                paired: args.paired,
+                known_tnc: None,
+                model: args.model.clone(),
+                tnc: None,
+            };
+            let radio = self.radio_for(c, device.model.as_deref()).await?;
+            let tnc = self
+                .setup_picked(c, &s, radio.as_ref(), device, args.adapter.as_deref())
+                .await?;
+            return self.setup_bridge(c, TncSide::Tnc(tnc)).await;
+        }
         let how = menu(
             "How will the bridge reach the TNC?",
             &[
@@ -114,6 +137,72 @@ impl Ctl {
         options.push("Another radio or TNC".into());
         let pick = menu("Which radio is it?", &options, 0).await;
         Ok(radios.get(pick).cloned())
+    }
+
+    /// The radio a scan said a device is, or ask.
+    async fn radio_for(
+        &self,
+        c: &mut Client,
+        model: Option<&str>,
+    ) -> Result<Option<RadioEntry>, CtlError> {
+        if let Some(m) = model {
+            let models: Vec<ModelEntry> = c.call_as(Command::TncModels).await?;
+            if let Some(r) = models
+                .into_iter()
+                .flat_map(|e| e.radios)
+                .find(|r| r.model == m && r.bluetooth.is_some())
+            {
+                println!("It's a {}.", r.name);
+                return Ok(Some(r));
+            }
+        }
+        self.pick_radio(c, Link::Bluetooth).await
+    }
+
+    /// Step 4 over Bluetooth for a device a scan found already. Returns
+    /// the TNC's id.
+    async fn setup_picked(
+        &self,
+        c: &mut Client,
+        s: &Status,
+        radio: Option<&RadioEntry>,
+        mut device: BtDevice,
+        adapter: Option<&str>,
+    ) -> Result<String, CtlError> {
+        let bt = radio.and_then(|r| r.bluetooth.as_ref());
+        device.tnc = s
+            .tncs
+            .iter()
+            .find(|t| {
+                t.spp
+                    .as_ref()
+                    .is_some_and(|spp| spp.address.eq_ignore_ascii_case(&device.address))
+            })
+            .map(|t| t.id.clone());
+        if device.tnc.is_none() {
+            println!(
+                "\n{}",
+                bt.map(|b| b.setup.clone()).unwrap_or_else(|| {
+                    "Turn on its Bluetooth, and its KISS TNC if it has a switch for it; its manual says how."
+                        .into()
+                })
+            );
+        }
+        let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
+        let adapter = match adapter {
+            Some(want) => *present
+                .iter()
+                .find(|a| {
+                    a.mac.eq_ignore_ascii_case(want)
+                        || a.hci.as_deref() == Some(want)
+                        || a.id.as_deref() == Some(want)
+                })
+                .ok_or_else(|| CtlError::Message(format!("adapter {want} isn't present")))?,
+            None => pick_adapter(&present).await?,
+        };
+        let adapter_value = self.adapter_value(c, adapter, s).await?;
+        self.finish_bluetooth(c, s, radio, device, adapter_value)
+            .await
     }
 
     /// Steps 2 and 4 over Bluetooth. Returns the TNC's id.
@@ -180,24 +269,7 @@ impl Ctl {
             })
         );
         let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
-        let adapter = match present.as_slice() {
-            [] => {
-                return Err(CtlError::Message(
-                    "no Bluetooth adapter is present on this host".into(),
-                ));
-            }
-            [one] => *one,
-            many => {
-                let options: Vec<String> = many.iter().map(|a| describe_adapter(a)).collect();
-                many[menu(
-                    "Which of this computer's adapters should talk to the radio? \
-                     (The one it's paired on, or will be.)",
-                    &options,
-                    0,
-                )
-                .await]
-            }
-        };
+        let adapter = pick_adapter(&present).await?;
         let adapter_value = self.adapter_value(c, adapter, s).await?;
 
         let prefix = bt.map(|b| b.name_prefix.as_str());
@@ -222,6 +294,21 @@ impl Ctl {
                 break d.clone();
             }
         };
+        self.finish_bluetooth(c, s, radio, device, adapter_value)
+            .await
+    }
+
+    /// The rest of step 4 over Bluetooth, the device found: pair it, and
+    /// make its TNC unless it has one. Returns the TNC's id.
+    async fn finish_bluetooth(
+        &self,
+        c: &mut Client,
+        s: &Status,
+        radio: Option<&RadioEntry>,
+        device: BtDevice,
+        adapter_value: String,
+    ) -> Result<String, CtlError> {
+        let bt = radio.and_then(|r| r.bluetooth.as_ref());
         if let Some(t) = &device.tnc {
             println!("That's TNC {t}, already set up.");
         }
@@ -841,6 +928,26 @@ async fn ask_default(question: &str, default: &str) -> String {
     ask_line(&format!("{question} [{default}]: "))
         .await
         .unwrap_or_else(|| default.to_string())
+}
+
+/// The adapter to talk to the radio: the one present, or ask.
+async fn pick_adapter<'a>(present: &[&'a AdapterStatus]) -> Result<&'a AdapterStatus, CtlError> {
+    match present {
+        [] => Err(CtlError::Message(
+            "no Bluetooth adapter is present on this host".into(),
+        )),
+        [one] => Ok(one),
+        many => {
+            let options: Vec<String> = many.iter().map(|a| describe_adapter(a)).collect();
+            Ok(many[menu(
+                "Which of this computer's adapters should talk to the radio? \
+                 (The one it's paired on, or will be.)",
+                &options,
+                0,
+            )
+            .await])
+        }
+    }
 }
 
 /// `hci1  AC:A7:F1:29:9C:7F  USB: TP-Link UB500 Adapter  (id dongle)`.

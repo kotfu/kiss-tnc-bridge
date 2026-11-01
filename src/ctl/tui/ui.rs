@@ -1206,9 +1206,9 @@ fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
     }
     let keys_text = match (sc.over, sc.target.is_some()) {
         (true, true) => " n look again   Esc close",
-        (true, false) => " ⏎ pair it   n scan again   Esc close",
+        (true, false) => " ⏎ pair it   a set it up   n scan again   Esc close",
         (false, true) => " Esc stop",
-        (false, false) => " ⏎ pair it   Esc stop",
+        (false, false) => " ⏎ pair it   a set it up as a new TNC   Esc stop",
     };
     f.render_widget(
         Paragraph::new(vec![Line::raw(""), Line::raw(keys_text)]),
@@ -1716,7 +1716,10 @@ mod tests {
         );
         assert!(has(&s, "-52 dBm"), "{all}");
         assert!(has(&s, "50:3B:70:E1:1C:11  -            phone"), "{all}");
-        assert!(has(&s, "⏎ pair it   Esc stop"), "{all}");
+        assert!(
+            has(&s, "⏎ pair it   a set it up as a new TNC   Esc stop"),
+            "{all}"
+        );
 
         // p: looking for one TNC's radio, which hasn't turned up.
         let sc = app.scan.as_mut().unwrap();

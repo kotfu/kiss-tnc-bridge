@@ -1403,6 +1403,32 @@ impl App {
                 self.scan = None;
                 a
             }
+            // Hand it to setup, as a new TNC. Closing the connection on
+            // the way out stops the scan, and lets go of the adapter.
+            KeyCode::Char('a') if s.target.is_none() => {
+                let Some(d) = at.map(|i| s.devices[i].clone()) else {
+                    return Action::None;
+                };
+                let mut args = vec!["setup".to_string(), "--address".into(), d.address];
+                if let Some(a) = &s.adapter {
+                    args.extend(["--adapter".into(), a.clone()]);
+                }
+                if let Some(n) = d.name {
+                    args.extend(["--name".into(), n]);
+                }
+                if let Some(m) = d.model {
+                    args.extend(["--model".into(), m]);
+                }
+                if d.paired {
+                    args.push("--paired".into());
+                }
+                self.scan = None;
+                self.new_since = self
+                    .status
+                    .as_ref()
+                    .map(|s| s.bridges.iter().map(|b| b.id.clone()).collect());
+                Action::Run(args)
+            }
             KeyCode::Char('n') if s.over => {
                 let scan = s.again();
                 let req = scan.command();
@@ -2433,8 +2459,41 @@ pub(crate) mod tests {
             "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode"
         );
 
-        // Esc stops a scan and closes it.
+        // a hands the selected device to setup, as a new TNC.
         app.pairing = None;
+        let Action::Request(req) = app.key(key(KeyCode::Char('n'))) else {
+            panic!("n scans");
+        };
+        app.sent(10, &req.then);
+        let mut d75 = device("40:79:12:E4:95:9D", "TH-D75", Some("Kenwood TH-D75"));
+        d75.paired = true;
+        app.on_own_event(Event::Found {
+            request: 10,
+            device: d75,
+        });
+        assert_eq!(
+            app.key(key(KeyCode::Char('a'))),
+            Action::Run(
+                [
+                    "setup",
+                    "--address",
+                    "40:79:12:E4:95:9D",
+                    "--adapter",
+                    "2C:CF:67:6E:2E:BC",
+                    "--name",
+                    "TH-D75",
+                    "--model",
+                    "th-d75",
+                    "--paired"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
+        assert!(app.scan.is_none());
+        assert!(app.new_since.is_some());
+
+        // Esc stops a scan and closes it.
         let Action::Request(req) = app.key(key(KeyCode::Char('n'))) else {
             panic!("n scans");
         };

@@ -306,6 +306,27 @@ fn setup_needs_a_terminal() {
     let out = ktbctl(&d.socket, &["setup"]);
     assert!(!out.ok);
     assert!(out.stderr.contains("terminal"), "{}", out.stderr);
+    // Starting from a device takes the same flags the TUI passes.
+    let out = ktbctl(
+        &d.socket,
+        &[
+            "setup",
+            "--address",
+            "40:79:12:E4:95:9D",
+            "--adapter",
+            "hci0",
+            "--name",
+            "TH-D75",
+            "--model",
+            "th-d75",
+            "--paired",
+        ],
+    );
+    assert!(out.stderr.contains("terminal"), "{}", out.stderr);
+    // The adapter goes with an address.
+    let out = ktbctl(&d.socket, &["setup", "--adapter", "hci0"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("--address"), "{}", out.stderr);
 }
 
 #[test]

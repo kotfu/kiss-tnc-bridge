@@ -49,7 +49,7 @@ pub struct Cli {
 #[derive(Debug, Subcommand)]
 pub enum Cmd {
     /// Set up a TNC and a bridge for it, step by step
-    Setup,
+    Setup(SetupArgs),
     /// Bridges, ports, sessions, TNCs and adapters
     Status {
         /// Only this bridge
@@ -181,6 +181,27 @@ pub struct TncAdd {
     /// Serial baud rate [default: 9600]
     #[arg(long, requires = "serial")]
     pub baud: Option<u32>,
+}
+
+/// `setup`, optionally from a Bluetooth device a scan already found.
+#[derive(Debug, Clone, Default, Args)]
+pub struct SetupArgs {
+    /// Start from this Bluetooth device, as 'ktbctl scan' shows it,
+    /// instead of asking how the TNC is reached and scanning
+    #[arg(long, value_name = "ADDR")]
+    pub address: Option<String>,
+    /// With --address: the adapter (id, MAC or hciN) [default: ask, if there are several]
+    #[arg(long, requires = "address")]
+    pub adapter: Option<String>,
+    /// What the scan knew of it: its name,
+    #[arg(long, requires = "address", hide = true)]
+    pub name: Option<String>,
+    /// its model,
+    #[arg(long, requires = "address", hide = true)]
+    pub model: Option<String>,
+    /// and whether it's paired on that adapter.
+    #[arg(long, requires = "address", hide = true)]
+    pub paired: bool,
 }
 
 /// A Bluetooth device: a TNC's radio, or an address.

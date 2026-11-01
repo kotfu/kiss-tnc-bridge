@@ -116,7 +116,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   and a bridge sharing it over BLE, TCP or both, ending with a check that
   the TNC connects and is heard. Radio-specific instructions come from the
   daemon's model table, which now lists the radios it knows (served by
-  `tnc.models`).
+  `tnc.models`). `setup --address MAC [--adapter X]` starts from a device
+  a scan already found, skipping the scan.
 - `port.release` (`ktbctl release BRIDGE/PORT`) hands a TNC link held by
   `connect` or `disconnect` back to its connect policy; `status` shows a
   held link.
@@ -127,7 +128,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   decode. Enabling, disabling, switching, connecting and kicking from a
   key, asking first before anyone is disconnected. `a` adds a port, an
   empty bridge, a TNC or a name for an adapter in a small form, or hands
-  off to `ktbctl setup`; `E` hands off to `ktbctl edit` for the selected
+  off to `ktbctl setup` (from the scan box, with the device picked
+  there); `E` hands off to `ktbctl edit` for the selected
   bridge, TNC or adapter, and `C` for all of `dynamic.toml`. It reconnects
   when the daemon restarts.
 
