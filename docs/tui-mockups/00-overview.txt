@@ -29,6 +29,7 @@ Keys
   k                  kick                              (an app's session)
   p u n              pair, unpair, scan                (TNCs view)
   a  -  E            add, remove, edit in $EDITOR
+  C                  edit all of dynamic.toml in $EDITOR
   R                  reload the config file
   f                  Frames, full screen
   ?                  help: every key, for where you are

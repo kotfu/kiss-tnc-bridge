@@ -43,7 +43,9 @@ its TNC from a list, a ble-server its adapter. ↑↓ move between fields,
 ←→ change a choice, and the id follows the type until it's typed in.
 
 E (on anything dynamic) does the same hand-off to `ktbctl edit`, in
-$EDITOR, for everything a form doesn't cover.
+$EDITOR, for everything a form doesn't cover. C opens all of
+dynamic.toml the same way, whatever is selected; the static config files
+are edited directly, then reloaded with R.
 
 No bridges yet
 --------------

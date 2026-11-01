@@ -1006,7 +1006,8 @@ fn help(f: &mut Frame, app: &App) {
             ("k", "kick an app's session"),
             ("a", "add a bridge, port, TNC or adapter name"),
             ("-", "remove a bridge or port"),
-            ("E", "edit in $EDITOR (ktbctl edit)"),
+            ("E", "edit this in $EDITOR (ktbctl edit)"),
+            ("C", "edit all of dynamic.toml in $EDITOR"),
             ("R", "reload the config file"),
         ]),
         View::Tncs => lines.extend([
@@ -1014,7 +1015,8 @@ fn help(f: &mut Frame, app: &App) {
             ("n", "scan for Bluetooth devices"),
             ("a", "add a bridge, TNC or adapter name"),
             ("-", "remove a TNC, or an adapter's id"),
-            ("E", "edit in $EDITOR (ktbctl edit)"),
+            ("E", "edit this in $EDITOR (ktbctl edit)"),
+            ("C", "edit all of dynamic.toml in $EDITOR"),
             ("R", "reload the config file"),
         ]),
         View::Frames => lines.extend([

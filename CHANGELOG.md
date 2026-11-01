@@ -127,7 +127,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   decode. Enabling, disabling, switching, connecting and kicking from a
   key, asking first before anyone is disconnected. `a` adds a port, an
   empty bridge, a TNC or a name for an adapter in a small form, or hands
-  off to `ktbctl setup`; `E` hands off to `ktbctl edit`. It reconnects
+  off to `ktbctl setup`; `E` hands off to `ktbctl edit` for the selected
+  bridge, TNC or adapter, and `C` for all of `dynamic.toml`. It reconnects
   when the daemon restarts.
 
 ### Fixed

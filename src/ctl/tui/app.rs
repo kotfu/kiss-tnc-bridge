@@ -749,6 +749,10 @@ impl App {
             KeyCode::Char('3') | KeyCode::Char('f') => self.view = View::Frames,
             KeyCode::Char('a') if self.view != View::Frames => return self.add_menu(),
             KeyCode::Char('E') if self.view != View::Frames => return self.edit(),
+            // All of dynamic.toml, whatever's selected.
+            KeyCode::Char('C') if self.view != View::Frames => {
+                return Action::Run(vec!["edit".into()]);
+            }
             KeyCode::Char('R') if self.view != View::Frames => {
                 return request(consent(
                     |nd| Command::Reload { non_disruptive: nd },

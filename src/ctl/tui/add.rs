@@ -800,6 +800,11 @@ mod tests {
             app.key(key(KeyCode::Char('E'))),
             Action::Run(vec!["edit".into(), "tnc".into(), "d75".into()])
         );
+        // C is all of it, whatever's selected.
+        assert_eq!(
+            app.key(key(KeyCode::Char('C'))),
+            Action::Run(vec!["edit".into()])
+        );
         // A static bridge says why not.
         let mut s = status();
         s.bridges[0].editable = false;
