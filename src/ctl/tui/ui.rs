@@ -913,7 +913,7 @@ fn frames(f: &mut Frame, app: &App) {
         keys(
             f,
             k,
-            "↑↓ move  space pause  / filter  b this bridge  h hex  Esc back  q quit",
+            "↑↓ move  space pause  / filter  b this bridge  h hex  1 2 views  q quit",
         );
     }
 }
@@ -1012,10 +1012,9 @@ fn help(f: &mut Frame, app: &App) {
             ("b", "all bridges, or the selected one"),
             ("h", "the whole frame in hex"),
             ("End", "follow the newest again"),
-            ("Esc", "back"),
         ]),
     }
-    lines.extend([("?", "this help"), ("q  Ctrl-C", "quit")]);
+    lines.extend([("?", "this help"), ("q  Esc  Ctrl-C", "quit")]);
     let area = f.area();
     let h = (lines.len() as u16 + 4).min(area.height);
     let box_area = Rect {
@@ -1124,11 +1123,16 @@ fn indented(text: &str, indent: &str, w: usize) -> Vec<String> {
 fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
     let area = f.area();
     let rows = sc.devices.len().max(1) as u16;
-    let at = centered(area, 70, rows + 6);
+    let hint: Vec<String> = sc.hint.iter().flat_map(|h| indented(h, " ", 66)).collect();
+    let errors = sc
+        .error
+        .as_ref()
+        .map_or(0, |e| indented(e, "   ", 66).len()) as u16;
+    let at = centered(area, 70, rows + errors + hint.len() as u16 + 5);
     let right = if sc.over {
         "done".to_string()
     } else if sc.then_pair.is_some() {
-        "stopping".to_string()
+        "found it".to_string()
     } else {
         let gone = now.saturating_duration_since(sc.started).as_secs();
         format!("{} s left", SCAN_SECS.saturating_sub(gone))
@@ -1140,22 +1144,32 @@ fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
     f.render_widget(Clear, at);
     f.render_widget(block, at);
     let [top, list, bottom] = Layout::vertical([
-        Constraint::Length(2),
+        Constraint::Length(hint.len() as u16 + 1),
         Constraint::Fill(1),
         Constraint::Length(2),
     ])
     .areas(inner);
     f.render_widget(
-        Paragraph::new(" Radios have to be in pairing mode to be found."),
+        Paragraph::new(hint.into_iter().map(Line::raw).collect::<Vec<_>>()),
         top,
     );
     let w = list.width as usize;
-    if let Some(e) = &sc.error {
-        let lines: Vec<Line> = indented(&format!("✗ {e}"), " ", w)
+    let error: Vec<ListItem> = match &sc.error {
+        Some(e) => wrap(e, w.saturating_sub(4))
             .into_iter()
-            .map(|l| Line::styled(l, Style::new().fg(Color::Red)))
-            .collect();
-        f.render_widget(Paragraph::new(lines), list);
+            .enumerate()
+            .map(|(i, l)| {
+                let lead = if i == 0 { "✗ " } else { "  " };
+                ListItem::new(Line::styled(
+                    format!(" {lead}{l}"),
+                    Style::new().fg(Color::Red),
+                ))
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+    if sc.devices.is_empty() && !error.is_empty() {
+        f.render_widget(List::new(error), list);
     } else if sc.devices.is_empty() {
         let text = if sc.over {
             " Nothing found. Is the radio in pairing mode, with Bluetooth on?"
@@ -1168,6 +1182,7 @@ fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
             .devices
             .iter()
             .map(|d| ListItem::new(device_line(d, w)))
+            .chain(error)
             .collect();
         let mut state = ListState::default().with_selected(sc.selected_index());
         f.render_stateful_widget(
@@ -1176,10 +1191,11 @@ fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
             &mut state,
         );
     }
-    let keys_text = if sc.over {
-        " ⏎ pair it   n scan again   Esc close"
-    } else {
-        " ⏎ pair it   Esc stop"
+    let keys_text = match (sc.over, sc.target.is_some()) {
+        (true, true) => " n look again   Esc close",
+        (true, false) => " ⏎ pair it   n scan again   Esc close",
+        (false, true) => " Esc stop",
+        (false, false) => " ⏎ pair it   Esc stop",
     };
     f.render_widget(
         Paragraph::new(vec![Line::raw(""), Line::raw(keys_text)]),
@@ -1567,6 +1583,8 @@ mod tests {
         };
         app.scan = Some(Scan {
             title: "Scan on builtin (hci0)".into(),
+            hint: vec!["Radios have to be in pairing mode to be found.".into()],
+            target: None,
             adapter: None,
             request: Some(1),
             started: Instant::now(),
@@ -1596,6 +1614,34 @@ mod tests {
         assert!(has(&s, "-52 dBm"), "{all}");
         assert!(has(&s, "50:3B:70:E1:1C:11  -            phone"), "{all}");
         assert!(has(&s, "⏎ pair it   Esc stop"), "{all}");
+
+        // p: looking for one TNC's radio, which hasn't turned up.
+        let sc = app.scan.as_mut().unwrap();
+        sc.title = "Pair d75 (TH-D75): looking on builtin (hci0)".into();
+        sc.hint = vec![
+            "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode".into(),
+            "Pairing starts when 40:79:12:E4:95:9D turns up.".into(),
+        ];
+        sc.target = app.status.as_ref().map(|s| s.tncs[0].clone());
+        sc.devices.remove(0);
+        sc.over = true;
+        sc.error = Some(
+            "40:79:12:E4:95:9D didn't turn up in 60 s. Is the radio on, nearby, and in pairing mode?"
+                .into(),
+        );
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(
+            has(&s, "Pairing starts when 40:79:12:E4:95:9D turns up."),
+            "{all}"
+        );
+        assert!(has(&s, "50:3B:70:E1:1C:11"), "{all}");
+        assert!(
+            has(&s, "✗ 40:79:12:E4:95:9D didn't turn up in 60 s."),
+            "{all}"
+        );
+        assert!(has(&s, "n look again   Esc close"), "{all}");
 
         app.scan = None;
         app.pairing = Some(Pairing {

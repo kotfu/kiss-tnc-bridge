@@ -32,7 +32,7 @@ Keys
   R                  reload the config file
   f                  Frames, full screen
   ?                  help: every key, for where you are
-  q  Ctrl-C          quit
+  q  Esc  Ctrl-C     quit
 
 Only the keys that work on the selected row are shown at the bottom.
 

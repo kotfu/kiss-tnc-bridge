@@ -26,7 +26,7 @@ the bottom, with the selected frame decoded below.
 │ KISS c0 00 82 a0 88 a4 62 6c 60 ae 62 82 ae 40 40 72 ae 92 88 8a 62 40 63 …  │
 │                                                                              │
 ├──────────────────────────────────────────────────────────────────────────────┤
-│ ↑↓ move  space pause  / filter  b this bridge  h hex  Esc back  q quit       │
+│ ↑↓ move  space pause  / filter  b this bridge  h hex  1 2 views  q quit      │
 └──────────────────────────────────────────────────────────────────────────────┘
 
 Notes

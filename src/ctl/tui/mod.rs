@@ -188,8 +188,8 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
                 // A pairing's steps and a scan's finds come to the
                 // connection that asked.
                 Ok(Some(Message::Event(ev))) => {
-                    app.on_event(ev.event, Instant::now());
-                    Ok(())
+                    let a = app.on_own_event(ev.event);
+                    act(a, &mut app, &mut conn).await.map(|_| ())
                 }
                 Ok(None) => Err(CtlError::Closed),
                 Err(e) => Err(e),

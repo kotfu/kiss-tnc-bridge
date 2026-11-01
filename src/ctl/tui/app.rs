@@ -156,6 +156,10 @@ pub struct Pairing {
 pub struct Scan {
     /// `Scan on builtin (hci0)`.
     pub title: String,
+    /// What to tell the person at the radio, above the list.
+    pub hint: Vec<String>,
+    /// Pairing a TNC: look for its radio, and pair as soon as it turns up.
+    pub target: Option<TncStatus>,
     /// What `bluetooth.scan` was given; none for the default adapter.
     pub adapter: Option<String>,
     /// The `bluetooth.scan` request, once sent; stopping it names it.
@@ -176,6 +180,8 @@ impl Scan {
     fn new(title: String, adapter: Option<String>) -> Scan {
         Scan {
             title,
+            hint: vec!["Radios have to be in pairing mode to be found.".into()],
+            target: None,
             adapter,
             request: None,
             started: Instant::now(),
@@ -184,6 +190,15 @@ impl Scan {
             over: false,
             error: None,
             then_pair: None,
+        }
+    }
+
+    /// The same scan, from the start.
+    fn again(&self) -> Scan {
+        Scan {
+            hint: self.hint.clone(),
+            target: self.target.clone(),
+            ..Scan::new(self.title.clone(), self.adapter.clone())
         }
     }
 
@@ -272,8 +287,6 @@ pub struct FramesView {
 
 pub struct App {
     pub view: View,
-    /// Where Esc in the Frames view goes back to.
-    pub back: View,
     pub link: Link,
     pub host: String,
     pub status: Option<Status>,
@@ -306,7 +319,6 @@ impl App {
     pub fn new(host: String) -> App {
         App {
             view: View::Bridges,
-            back: View::Bridges,
             link: Link::Connecting,
             host,
             status: None,
@@ -367,15 +379,21 @@ impl App {
                 }
                 false
             }
+            // These come on the requests connection: `on_own_event`.
+            Event::Pairing { .. } | Event::Found { .. } | Event::Lagged { .. } => false,
+        }
+    }
+
+    /// An event sent only to the connection that asked for it: a pairing's
+    /// steps and a scan's finds. It may send something back.
+    pub fn on_own_event(&mut self, ev: Event) -> Action {
+        match ev {
             Event::Pairing { request, step } => {
                 self.pairing_step(request, step);
-                false
+                Action::None
             }
-            Event::Found { request, device } => {
-                self.found(request, device);
-                false
-            }
-            Event::Lagged { .. } => false,
+            Event::Found { request, device } => self.found(request, device),
+            _ => Action::None,
         }
     }
 
@@ -648,7 +666,6 @@ impl App {
             }
             KeyCode::Char('b') => self.fv.this_bridge = !self.fv.this_bridge,
             KeyCode::Char('h') => self.fv.hex = !self.fv.hex,
-            KeyCode::Esc => self.view = self.back,
             _ => {}
         }
     }
@@ -696,14 +713,12 @@ impl App {
             return Action::None;
         }
         match k.code {
-            KeyCode::Char('q') => return Action::Quit,
+            // Esc that isn't closing something quits, as q does.
+            KeyCode::Char('q') | KeyCode::Esc => return Action::Quit,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('1') => self.view = View::Bridges,
             KeyCode::Char('2') => self.view = View::Tncs,
-            KeyCode::Char('3') | KeyCode::Char('f') if self.view != View::Frames => {
-                self.back = self.view;
-                self.view = View::Frames;
-            }
+            KeyCode::Char('3') | KeyCode::Char('f') => self.view = View::Frames,
             KeyCode::Char('R') if self.view != View::Frames => {
                 return request(consent(
                     |nd| Command::Reload { non_disruptive: nd },
@@ -995,6 +1010,27 @@ impl App {
         if spp.paired == Some(true) {
             return self.say(format!("{} is already paired; u unpairs it", t.id));
         }
+        // Look for it in the open, as setup does, and pair when it turns up.
+        let (adapter, on) = match self.scan_target() {
+            Ok(x) => x,
+            Err(why) => return self.say(why),
+        };
+        let mut scan = Scan::new(
+            format!("Pair {} ({}): looking on {on}", t.id, t.name),
+            adapter,
+        );
+        scan.hint = vec![
+            self.pairing_mode(&t.model),
+            format!("Pairing starts when {} turns up.", spp.address),
+        ];
+        scan.target = Some(t);
+        let req = scan.command();
+        self.scan = Some(scan);
+        request(req)
+    }
+
+    /// Pair TNC `t`, its radio found.
+    fn pair_found_tnc(&mut self, t: TncStatus) -> Action {
         self.start_pairing(
             format!("Pair {} ({})", t.id, t.name),
             Some(&t.model),
@@ -1007,6 +1043,20 @@ impl App {
         )
     }
 
+    /// How to put a radio of `model` in pairing mode.
+    fn pairing_mode(&self, model: &str) -> String {
+        let how = self
+            .models
+            .iter()
+            .flat_map(|e| &e.radios)
+            .find(|r| r.model == model)
+            .and_then(|r| r.bluetooth.as_ref());
+        match how {
+            Some(b) => format!("Put the radio in pairing mode: {}", b.pairing_mode),
+            None => "Put the radio in pairing mode (discoverable) if it isn't.".into(),
+        }
+    }
+
     fn start_pairing(
         &mut self,
         title: String,
@@ -1014,15 +1064,8 @@ impl App {
         bridge: Option<String>,
         command: Command,
     ) -> Action {
-        let how = model.and_then(|m| {
-            self.models
-                .iter()
-                .flat_map(|e| &e.radios)
-                .find(|r| r.model == m)
-                .and_then(|r| r.bluetooth.as_ref())
-        });
-        let first = match how {
-            Some(b) => format!("Put the radio in pairing mode: {}", b.pairing_mode),
+        let first = match model {
+            Some(m) => self.pairing_mode(m),
             None => "Put the radio in pairing mode (discoverable) if it isn't.".into(),
         };
         self.pairing = Some(Pairing {
@@ -1255,18 +1298,33 @@ impl App {
         }
     }
 
-    fn found(&mut self, request: u64, device: BtDevice) {
+    fn found(&mut self, request: u64, device: BtDevice) -> Action {
         let Some(s) = &mut self.scan else {
-            return;
+            return Action::None;
         };
         if s.request != Some(request) {
-            return;
+            return Action::None;
+        }
+        let wanted = s
+            .target
+            .as_ref()
+            .and_then(|t| t.spp.as_ref())
+            .is_some_and(|spp| spp.address.eq_ignore_ascii_case(&device.address));
+        if wanted {
+            s.selected = Some(device.address.clone());
         }
         match s.devices.iter_mut().find(|d| d.address == device.address) {
-            Some(d) => *d = device,
-            None => s.devices.push(device),
+            Some(d) => *d = device.clone(),
+            None => s.devices.push(device.clone()),
         }
         s.devices.sort_by_key(|d| d.known_tnc.is_none());
+        if wanted && !s.over && s.then_pair.is_none() {
+            // The scan holds the adapter: stop it, and pair when it's
+            // answered.
+            s.then_pair = Some(device);
+            return stop_scan(s);
+        }
+        Action::None
     }
 
     fn scan_key(&mut self, k: KeyEvent) -> Action {
@@ -1274,13 +1332,7 @@ impl App {
             return Action::None;
         };
         let at = s.selected_index();
-        let stop = |s: &Scan| match s.request {
-            Some(id) => request(Req {
-                command: Command::BluetoothScanStop { request: id },
-                then: Then::Ack,
-            }),
-            None => Action::None,
-        };
+        let stop = stop_scan;
         match k.code {
             KeyCode::Up | KeyCode::Down => {
                 if let Some(at) = at {
@@ -1293,6 +1345,8 @@ impl App {
                 }
                 Action::None
             }
+            // Looking for a TNC's radio, pairing starts on its own.
+            KeyCode::Enter if s.target.is_some() => Action::None,
             KeyCode::Enter => {
                 let Some(d) = at.map(|i| s.devices[i].clone()) else {
                     return Action::None;
@@ -1316,7 +1370,7 @@ impl App {
                 a
             }
             KeyCode::Char('n') if s.over => {
-                let scan = Scan::new(s.title.clone(), s.adapter.clone());
+                let scan = s.again();
                 let req = scan.command();
                 *s = scan;
                 request(req)
@@ -1484,14 +1538,38 @@ impl App {
                 s.error = Some(e.to_string());
             }
         }
-        match s.then_pair.take() {
-            Some(d) => {
+        match (s.then_pair.take(), s.target.clone()) {
+            (Some(_), Some(t)) => {
+                self.scan = None;
+                self.pair_found_tnc(t)
+            }
+            (Some(d), None) => {
                 let adapter = s.adapter.clone();
                 self.scan = None;
                 self.pair_device(d, adapter)
             }
-            None => Action::None,
+            (None, Some(t)) => {
+                if s.error.is_none() {
+                    let addr = t.spp.map(|spp| spp.address).unwrap_or_default();
+                    s.error = Some(format!(
+                        "{addr} didn't turn up in {SCAN_SECS} s. Is the radio on, nearby, and in pairing mode?"
+                    ));
+                }
+                Action::None
+            }
+            (None, None) => Action::None,
         }
+    }
+}
+
+/// Stop scan `s`, if it's been sent.
+fn stop_scan(s: &Scan) -> Action {
+    match s.request {
+        Some(id) => request(Req {
+            command: Command::BluetoothScanStop { request: id },
+            then: Then::Ack,
+        }),
+        None => Action::None,
     }
 }
 
@@ -1994,64 +2072,130 @@ pub(crate) mod tests {
         }
     }
 
-    #[test]
-    fn pairing_walks_through_the_steps() {
+    /// An app with d75 unpaired, in the TNCs view.
+    fn unpaired() -> App {
         let mut app = App::new("pi".into());
         let mut s = status();
         s.tncs[0].spp.as_mut().unwrap().paired = Some(false);
         app.set_status(s);
-        app.on_answer(
-            Then::Models,
-            Ok(serde_json::to_value(d75_models()).unwrap()),
-        );
         app.view = View::Tncs;
-        let Action::Request(req) = app.key(key(KeyCode::Char('p'))) else {
-            panic!("p pairs");
+        app
+    }
+
+    /// Press p, and find the radio: the request that pairs it, sent as `id`.
+    fn pair_d75(app: &mut App, id: u64) -> Req {
+        let Action::Request(look) = app.key(key(KeyCode::Char('p'))) else {
+            panic!("p looks for the radio");
         };
         assert_eq!(
-            req.command,
+            look.command,
+            Command::BluetoothScan {
+                adapter: Some("2C:CF:67:6E:2E:BC".into()),
+                seconds: Some(SCAN_SECS)
+            }
+        );
+        app.sent(id - 1, &look.then);
+        let found = |device| Event::Found {
+            request: id - 1,
+            device,
+        };
+        // Something else turns up first: it's listed, and that's all.
+        assert_eq!(
+            app.on_own_event(found(device("50:3B:70:E1:1C:11", "jPhone", None))),
+            Action::None
+        );
+        // ⏎ doesn't pick another device: it's looking for d75's radio.
+        assert_eq!(app.key(key(KeyCode::Enter)), Action::None);
+        let Action::Request(stop) = app.on_own_event(found(device(
+            "40:79:12:E4:95:9D",
+            "TH-D75",
+            Some("Kenwood TH-D75"),
+        ))) else {
+            panic!("finding it stops the scan");
+        };
+        assert_eq!(stop.command, Command::BluetoothScanStop { request: id - 1 });
+        let Action::Request(pair) = app.on_answer(Then::Scan, Ok(json!([]))) else {
+            panic!("the scan's end starts the pairing");
+        };
+        assert_eq!(
+            pair.command,
             Command::BluetoothPair {
                 tnc: Some("d75".into()),
                 address: None,
                 adapter: None
             }
         );
-        app.sent(7, &req.then);
+        assert!(app.scan.is_none());
+        app.sent(id, &pair.then);
+        *pair
+    }
+
+    #[test]
+    fn p_waits_for_the_radio_to_turn_up() {
+        let mut app = unpaired();
+        app.on_answer(
+            Then::Models,
+            Ok(serde_json::to_value(d75_models()).unwrap()),
+        );
+        app.key(key(KeyCode::Char('p')));
+        let sc = app.scan.clone().expect("a scan");
+        assert_eq!(sc.title, "Pair d75 (TH-D75): looking on builtin (hci0)");
+        assert_eq!(
+            sc.hint,
+            [
+                "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode",
+                "Pairing starts when 40:79:12:E4:95:9D turns up."
+            ]
+        );
+        app.sent(4, &Then::Scan);
+        // Time runs out: it says so, and n looks again.
+        assert_eq!(app.on_answer(Then::Scan, Ok(json!([]))), Action::None);
+        let sc = app.scan.clone().unwrap();
+        assert!(sc.over);
+        assert!(
+            sc.error
+                .unwrap()
+                .starts_with("40:79:12:E4:95:9D didn't turn up")
+        );
+        let Action::Request(again) = app.key(key(KeyCode::Char('n'))) else {
+            panic!("n looks again");
+        };
+        assert!(matches!(again.command, Command::BluetoothScan { .. }));
+        assert!(app.scan.as_ref().unwrap().target.is_some());
+    }
+
+    #[test]
+    fn pairing_walks_through_the_steps() {
+        let mut app = unpaired();
+        app.on_answer(
+            Then::Models,
+            Ok(serde_json::to_value(d75_models()).unwrap()),
+        );
+        let req = pair_d75(&mut app, 7);
         let step = |step| Event::Pairing { request: 7, step };
-        app.on_event(step(PairingStep::Searching), Instant::now());
-        app.on_event(
-            step(PairingStep::Pairing {
-                name: Some("TH-D75".into()),
-            }),
-            Instant::now(),
-        );
+        app.on_own_event(step(PairingStep::Pairing {
+            name: Some("TH-D75".into()),
+        }));
         // Another connection's pairing isn't this one's.
-        app.on_event(
-            Event::Pairing {
-                request: 8,
-                step: PairingStep::Searching,
-            },
-            Instant::now(),
-        );
+        app.on_own_event(Event::Pairing {
+            request: 8,
+            step: PairingStep::Searching,
+        });
         let p = app.pairing.clone().unwrap();
         assert_eq!(p.title, "Pair d75 (TH-D75)");
         assert_eq!(
             p.steps,
             [
                 "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode",
-                "Looking for it...",
                 "Pairing with TH-D75..."
             ]
         );
         // Esc while it works puts the box away; a question brings it back.
         assert_eq!(app.key(key(KeyCode::Esc)), Action::None);
         assert!(app.pairing.as_ref().unwrap().hidden);
-        app.on_event(
-            step(PairingStep::Confirm {
-                passkey: "774523".into(),
-            }),
-            Instant::now(),
-        );
+        app.on_own_event(step(PairingStep::Confirm {
+            passkey: "774523".into(),
+        }));
         assert!(!app.pairing.as_ref().unwrap().hidden);
         // Keys answer the box, not the view behind it.
         assert_eq!(app.key(key(KeyCode::Char('u'))), Action::None);
@@ -2093,27 +2237,17 @@ pub(crate) mod tests {
 
     #[test]
     fn a_passkey_is_typed_and_a_lost_daemon_ends_the_pairing() {
-        let mut app = App::new("pi".into());
-        let mut s = status();
-        s.tncs[0].spp.as_mut().unwrap().paired = Some(false);
-        app.set_status(s);
-        app.view = View::Tncs;
-        let Action::Request(req) = app.key(key(KeyCode::Char('p'))) else {
-            panic!("p pairs");
-        };
-        app.sent(3, &req.then);
+        let mut app = unpaired();
+        pair_d75(&mut app, 3);
         // Without the models, it says what it can.
         assert_eq!(
             app.pairing.as_ref().unwrap().steps[0],
             "Put the radio in pairing mode (discoverable) if it isn't."
         );
-        app.on_event(
-            Event::Pairing {
-                request: 3,
-                step: PairingStep::EnterPasskey,
-            },
-            Instant::now(),
-        );
+        app.on_own_event(Event::Pairing {
+            request: 3,
+            step: PairingStep::EnterPasskey,
+        });
         for c in ['1', 'x', '2', '3'] {
             app.key(key(KeyCode::Char(c)));
         }
@@ -2162,18 +2296,12 @@ pub(crate) mod tests {
         assert_eq!(app.scan.as_ref().unwrap().title, "Scan on builtin (hci0)");
         app.sent(9, &req.then);
         let found = |device| Event::Found { request: 9, device };
-        app.on_event(
-            found(device("50:3B:70:E1:1C:11", "jPhone", None)),
-            Instant::now(),
-        );
-        app.on_event(
-            found(device(
-                "40:79:12:E4:95:9D",
-                "TH-D75",
-                Some("Kenwood TH-D75"),
-            )),
-            Instant::now(),
-        );
+        app.on_own_event(found(device("50:3B:70:E1:1C:11", "jPhone", None)));
+        app.on_own_event(found(device(
+            "40:79:12:E4:95:9D",
+            "TH-D75",
+            Some("Kenwood TH-D75"),
+        )));
         // Likely TNCs first, and the first is selected.
         let sc = app.scan.clone().unwrap();
         assert_eq!(sc.devices[0].address, "40:79:12:E4:95:9D");
@@ -2251,5 +2379,25 @@ pub(crate) mod tests {
         );
         app.on_answer(r.then, Ok(json!({})));
         assert_eq!(app.message, Some(("d75 unpaired".into(), false)));
+    }
+    #[test]
+    fn esc_quits_once_nothing_is_open() {
+        let mut app = App::new("pi".into());
+        app.set_status(status());
+        // It closes the help first, then quits, in every view.
+        app.key(key(KeyCode::Char('?')));
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::None);
+        assert!(!app.help);
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::Quit);
+        app.view = View::Frames;
+        // In the Frames view, Esc ends typing a filter before it quits.
+        app.key(key(KeyCode::Char('/')));
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::None);
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::Quit);
+        app.view = View::Tncs;
+        app.key(key(KeyCode::Char('u')));
+        assert!(app.dialog.is_some());
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::None);
+        assert_eq!(app.key(key(KeyCode::Esc)), Action::Quit);
     }
 }
