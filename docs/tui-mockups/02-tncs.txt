@@ -1,0 +1,83 @@
+ktbctl tui: the TNCs view (2)
+=============================
+
+The radios and other TNCs the bridges use, with how each is reached, and
+this host's Bluetooth adapters. Pairing lives here.
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── 1 Bridges  [2 TNCs]  3 Frames ┐
+│ TNCs                                                                         │
+│ > d75      TH-D75 · Kenwood TH-D75 (th-d75)                    used by ktbr1 │
+│            Bluetooth  40:79:12:E4:95:9D on builtin       paired              │
+│            USB        /dev/serial/by-id/usb-JVC_KENWOOD…  not plugged in     │
+│   mobi     Mobilinkd TNC4 (kiss)                                  not in use │
+│            Bluetooth  34:81:F4:0C:22:91 on dongle        not paired          │
+│                                                                              │
+│ Adapters                                                                     │
+│   builtin  hci0  2C:CF:67:6E:2E:BC  built into the board                 on  │
+│   dongle   hci1  AC:A7:F1:29:9C:7F  USB: TP-Link UB500 Adapter           on  │
+│   -        -     00:1A:7D:DA:71:13  named in config.toml         not present │
+│                                                                              │
+│                                                                              │
+├ Details: d75 ────────────────────────────────────────────────────────────────┤
+│ TNC d75, defined in dynamic.toml (ktbctl manages it)                         │
+│ Bridge ktbr1 uses it over Bluetooth (port radio).                            │
+│ Unpairing would drop ktbr1's link to it.                                     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  p pair  u unpair  n scan  a add  - remove  E edit  ? help  q quit   │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Notes
+-----
+
+- Each TNC lists every way it can be reached (Bluetooth, USB/serial), and
+  for each whether it's usable now: paired or not, plugged in or not.
+- Adapters show what they are (built in, USB product), as `setup` does, so
+  two adapters on a Pi can be told apart. One named in config but not
+  present is listed so you can see why a bridge is waiting.
+- n scans (on the selected TNC's adapter, or ask which). The list fills in
+  as devices are found, as in `setup`. ⏎ pairs the selected device; a sets
+  it up as a new TNC by handing off to the setup wizard (see 05).
+
+Pairing (p) opens a dialog that walks through the steps
+--------------------------------------------------------
+
+      ┌ Pair d75 (TH-D75) ───────────────────────────────────────┐
+      │                                                          │
+      │  Put the radio in pairing mode:                          │
+      │  Menu > Bluetooth > Pairing Mode                         │
+      │                                                          │
+      │  Pairing with TH-D75...                                  │
+      │                                                          │
+      │  The radio should show   7 7 4 5 2 3                     │
+      │  Does it?                                                │
+      │                                                          │
+      │       [ y  Yes, it matches ]     [ n  No ]               │
+      │                                                          │
+      └──────────────────────────────────────────── Esc cancel ──┘
+
+and when it's done:
+
+      ┌ Pair d75 (TH-D75) ───────────────────────────────────────┐
+      │                                                          │
+      │  Now press OK on the radio. It gives you about 30 s.     │
+      │                                                          │
+      │  ✓ Paired and trusted on builtin (hci0).                 │
+      │    ktbr1 connects to it in a few seconds.                │
+      │                                                          │
+      └─────────────────────────────────────────────── ⏎ close ──┘
+
+Scanning (n)
+------------
+
+  ┌ Scan on builtin (hci0) ─────────────────────────────── 23 s left ─┐
+  │ Radios have to be in pairing mode to be found.                    │
+  │                                                                   │
+  │ > 40:79:12:E4:95:9D  TH-D75     Kenwood TH-D75         -52 dBm    │
+  │   34:81:F4:0C:22:91  TNC4       -                      -71 dBm    │
+  │   50:3B:70:E1:1C:11  jPhone     phone                  -64 dBm    │
+  │                                                                   │
+  │ ⏎ pair it   a set it up as a new TNC   Esc stop                   │
+  └───────────────────────────────────────────────────────────────────┘

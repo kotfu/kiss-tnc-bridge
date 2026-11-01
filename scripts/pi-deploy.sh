@@ -16,6 +16,14 @@
 #   PI_DIR=ktb-dev                # remote directory, relative to home
 #   PI_SERVICE=kiss-tnc-bridge    # systemd service to stop while testing
 #   PI_CONFIG=path/to/test.conf   # optional local config to copy and use
+#   PI_DOCKER_CONTEXT=ice         # optional: build on this Docker context
+#
+# PI_DOCKER_CONTEXT builds on another machine's Docker engine. cross copies
+# the project there and the binaries back. Make the context and, once, a
+# build volume so builds stay incremental:
+#
+#   docker context create ice --docker host=ssh://user@host
+#   CROSS_REMOTE=1 DOCKER_CONTEXT=ice cross-util volumes create
 #
 # Usage:
 #   scripts/pi-deploy.sh [--release] [--no-build] [--copy-only] [-- ARGS...]
@@ -40,6 +48,7 @@ PI_TARGET="aarch64-unknown-linux-gnu"
 PI_DIR="ktb-dev"
 PI_SERVICE="kiss-tnc-bridge"
 PI_CONFIG=""
+PI_DOCKER_CONTEXT=""
 
 if [[ -f "$local_settings" ]]; then
     # shellcheck source=/dev/null
@@ -61,7 +70,7 @@ while [[ $# -gt 0 ]]; do
         --release) profile="release" ;;
         --no-build) build=false ;;
         --copy-only) run=false ;;
-        -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         --) shift; bin_args=("$@"); break ;;
         *) die "unknown option '$1' (try --help)" ;;
     esac
@@ -75,15 +84,51 @@ remote="${PI_USER:+$PI_USER@}$PI_HOST"
 
 # ── Build ────────────────────────────────────────────────────────────────
 
-binary="$repo_root/target/$PI_TARGET/$profile/kiss-tnc-bridge"
+out_dir="$repo_root/target/$PI_TARGET/$profile"
+binary="$out_dir/kiss-tnc-bridge"
+
+# The name of cross's build volume for the current toolchain:
+# cross-<toolchain>-<hash>-<rustc commit>.
+build_volume() {
+    local toolchain manifest commit
+    toolchain="$(cd "$repo_root" && rustup show active-toolchain | cut -d' ' -f1)"
+    toolchain="${toolchain%-*-*-*}-x86_64-unknown-linux-gnu"
+    manifest="$(rustup show home)/toolchains/$toolchain/lib/rustlib/multirust-channel-manifest.toml"
+    [[ -f "$manifest" ]] || die "no $toolchain toolchain; add it with: rustup toolchain add $toolchain --force-non-host"
+    commit="$(sed -n '/^\[pkg.rustc\]/,/^version/ s/^version = "[^ ]* (\([0-9a-f]*\) .*/\1/p' "$manifest")"
+    docker volume ls -q --filter "name=^cross-$toolchain-" | grep -- "-$commit\$" || true
+}
 
 if $build; then
     command -v cross >/dev/null || die "cross not found; install it with: cargo install cross"
-    docker info >/dev/null 2>&1 || die "the Docker engine isn't running (cross builds in a container)"
+    if [[ -n "$PI_DOCKER_CONTEXT" ]]; then
+        export DOCKER_CONTEXT="$PI_DOCKER_CONTEXT" CROSS_REMOTE=1
+        # cross would copy the whole target directory back, gigabytes;
+        # the two binaries are fetched from the build volume instead.
+        export CROSS_REMOTE_SKIP_BUILD_ARTIFACTS=1
+        docker info >/dev/null 2>&1 \
+            || die "can't reach the Docker engine for context '$PI_DOCKER_CONTEXT'; is Docker running there?"
+        volume="$(build_volume)"
+        if [[ -z "$volume" ]]; then
+            echo "pi-deploy: making a build volume on '$PI_DOCKER_CONTEXT' for this toolchain"
+            (cd "$repo_root" && cross-util volumes create)
+            volume="$(build_volume)"
+            [[ -n "$volume" ]] || die "cross-util didn't make a build volume"
+        fi
+    else
+        docker info >/dev/null 2>&1 || die "the Docker engine isn't running (cross builds in a container)"
+    fi
     cargo_profile=()
     [[ "$profile" == "release" ]] && cargo_profile=(--release)
-    echo "pi-deploy: building $PI_TARGET ($profile)"
+    echo "pi-deploy: building $PI_TARGET ($profile)${PI_DOCKER_CONTEXT:+ on $PI_DOCKER_CONTEXT}"
     (cd "$repo_root" && cross build --target "$PI_TARGET" ${cargo_profile[@]+"${cargo_profile[@]}"})
+    if [[ -n "$PI_DOCKER_CONTEXT" ]]; then
+        echo "pi-deploy: fetching the binaries from $PI_DOCKER_CONTEXT"
+        mkdir -p "$out_dir"
+        docker run --rm -v "$volume:/cross:ro" ubuntu:20.04 \
+            tar -C "/cross$out_dir" -cf - kiss-tnc-bridge ktbctl | tar -C "$out_dir" -xf - \
+            || die "couldn't fetch the binaries from $PI_DOCKER_CONTEXT"
+    fi
 fi
 [[ -x "$binary" ]] || die "no build at $binary; run without --no-build"
 

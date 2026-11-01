@@ -1,0 +1,45 @@
+ktbctl tui: the Frames view (3)
+===============================
+
+`ktbctl monitor` with room: every bridge's frames as they pass, newest at
+the bottom, with the selected frame decoded below.
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── 1 Bridges  2 TNCs  [3 Frames] ┐
+│ All bridges · newest at the bottom · 1,204 since 12:08                       │
+│                                                                              │
+│ 14:21:40 rx ktbr1/radio  KC1QBR-9>APDR16,WIDE1-1,WIDE2-1:=4237.88N/07106.12W…│
+│ 14:21:44 rx ktbr0/tnc    WB1GOF-10>APMI06,WIDE2-2:@142144z4232.15N/07110.33W…│
+│ 14:21:52 rx ktbr1/radio  N1MIE-10>APNU19,WIDE2-1:!4228.50N/07131.00W#PHG5360…│
+│ 14:21:58 tx ktbr1/phones KD2ABC-7>APRS,WIDE1-1:>on the trail                 │
+│ 14:22:01 rx ktbr0/tnc    K1RFI>APN391,WIDE2-1:!4223.33N/07110.18W#K1RFI-Nash…│
+│ 14:22:03 rx ktbr1/radio  W1AW-9>T2SP0W,WIDE1-1:`c5Ll!Ok/`"4V}_%              │
+│ 14:22:05 rx ktbr1/radio  KB1ZZZ>APRS,TCPIP*,qAC,T2BOS::KD2ABC-7 :ack12       │
+│ 14:22:07 rx ktbr1/radio  W1XM-3>BEACON,WIDE2-1:MIT Radio Society             │
+│ 14:22:09 tx ktbr1/phones KD2ABC-7>APRS,WIDE1-1::W1AW-9   :hello{12           │
+│>14:22:11 rx ktbr1/radio  W1AW-9>APDR16,WIDE1-1::KD2ABC-7 :ack12              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├ Frame 14:22:11 rx ktbr1/radio ───────────────────────────────────────────────┤
+│ W1AW-9 > APDR16 via WIDE1-1                                                  │
+│ message to KD2ABC-7: ack12                                                   │
+│ KISS c0 00 82 a0 88 a4 62 6c 60 ae 62 82 ae 40 40 72 ae 92 88 8a 62 40 63 …  │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  space pause  / filter  b this bridge  h hex  1 2 views  q quit      │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+Notes
+-----
+
+- It follows the newest frame until you move up; then it holds still and
+  the title says how many came in since. End (or G) goes back to
+  following. Space pauses outright.
+- / filters by text (a callsign, usually). b toggles between all bridges
+  and the bridge selected in the Bridges view.
+- rx is from a TNC (heard on the air); tx is to a TNC, and its line shows
+  the app port it came from, as the Bridges view does. The decode pane
+  names the app.
+- The decode pane is what the daemon decodes for display; h toggles the
+  raw KISS bytes in full.
+- It keeps the last 1,000 frames.

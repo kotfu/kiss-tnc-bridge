@@ -1,0 +1,88 @@
+ktbctl tui: confirming, refusing, and errors
+============================================
+
+The consent rule, as in the CLI: anything that would disconnect someone is
+tried with non_disruptive first, and if the daemon says it would disrupt,
+the TUI shows exactly what and asks. Anything harmless just happens.
+
+Disabling a bridge that's in use
+--------------------------------
+
+      ┌ Disable ktbr1 (TH-D75)? ─────────────────────────────────┐
+      │                                                          │
+      │  This would:                                             │
+      │    • disconnect 1 app on ktbr1/phones                    │
+      │    • close the link to TNC d75                           │
+      │                                                          │
+      │            [ y  Disable it ]     [ n  Cancel ]           │
+      │                                                          │
+      └──────────────────────────────────────────────────────────┘
+
+Switching
+---------
+
+      ┌ Switch to ktbr2 (Shack relay)? ──────────────────────────┐
+      │                                                          │
+      │  ktbr2 needs TNC d75, which ktbr1 is using. Switching    │
+      │  disables ktbr1 and enables ktbr2. This would:           │
+      │    • disconnect 1 app on ktbr1/phones                    │
+      │    • close ktbr1's link to TNC d75                       │
+      │                                                          │
+      │            [ y  Switch ]     [ n  Cancel ]               │
+      │                                                          │
+      └──────────────────────────────────────────────────────────┘
+
+Removing something nobody's using still asks, since it's deleted
+----------------------------------------------------------------
+
+      ┌ Remove port lan from ktbr1? ─────────────────────────────┐
+      │                                                          │
+      │  Nobody is connected to it, so nothing is disrupted.     │
+      │  It's removed from dynamic.toml.                         │
+      │                                                          │
+      │            [ y  Remove it ]     [ n  Cancel ]            │
+      │                                                          │
+      └──────────────────────────────────────────────────────────┘
+
+Trying to change a static object
+--------------------------------
+
+      ┌ ktbr0 is in the config file ─────────────────────────────┐
+      │                                                          │
+      │  ktbr0 comes from /etc/kiss-tnc-bridge/config.toml, so   │
+      │  only enabling and disabling it works from here. To      │
+      │  change it, edit that file, then press R to reload.      │
+      │                                                          │
+      └─────────────────────────────────────────────── ⏎ close ──┘
+
+Errors and refusals
+-------------------
+
+A refusal or error shows on the line above the keys, in red, until the
+next key press. Results that need nothing from you ("ktbr1 enabled") show
+there too, in the normal colour.
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│       PORT    TYPE        WHERE                   STATE                RX TX │
+│   ● ktbr1  TH-D75                                         running · up 2h14m │
+│       radio   spp-client  TNC d75 on builtin      connected 2h14m      ■  ■  │
+│       phones  ble-server  "TH-D75" on dongle      1 of 2 apps          ■  □  │
+│         └ 40:33:E0:1B:DB:76                       since 14:01          ■  □  │
+│       lan     tcp-server  wlan0:8001              0 of 4 apps          □  □  │
+│   ● ktbr0  KISS at wolfden                       static · running · up 3d02h │
+│       tnc     tcp-client  wolfden.kotfu.net:6700  connected 3d02h      ■  □  │
+│       lan     tcp-server  eth0:8002               0 of 4 apps          □  □  │
+│   ○ ktbr2  Shack relay                                              disabled │
+│ > ○ ktbr3  Mobilinkd                            disabled · needs an app port │
+├ Frames: ktbr1 ────────────────────────────────── Tab details · f full screen ┤
+│ 14:21:52 rx radio   N1MIE-10>APNU19,WIDE2-1:!4228.50N/07131.00W#PHG5360 Mt W…│
+│ 14:21:58 tx phones  KD2ABC-7>APRS,WIDE1-1:>on the trail                      │
+│ 14:22:03 rx radio   W1AW-9>T2SP0W,WIDE1-1:`c5Ll!Ok/`"4V}_%                   │
+│ 14:22:05 rx radio   KB1ZZZ>APRS,TCPIP*,qAC,T2BOS::KD2ABC-7 :ack12            │
+│ 14:22:07 rx radio   W1XM-3>BEACON,WIDE2-1:MIT Radio Society                  │
+│ 14:22:09 tx phones  KD2ABC-7>APRS,WIDE1-1::W1AW-9   :hello{12                │
+│ 14:22:11 rx radio   W1AW-9>APDR16,WIDE1-1::KD2ABC-7 :ack12                   │
+│ ✗ ktbr3 can't be enabled: it has no app port. a adds one.                    │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ ↑↓ move  e enable  d disable  s switch  a add  - remove  ? help  q quit      │
+└──────────────────────────────────────────────────────────────────────────────┘

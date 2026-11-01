@@ -120,6 +120,16 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
 - `port.release` (`ktbctl release BRIDGE/PORT`) hands a TNC link held by
   `connect` or `disconnect` back to its connect policy; `status` shows a
   held link.
+- `ktbctl tui` (also `ktbctl` with no arguments, in a terminal): a
+  full-screen view at 80×24 over SSH. Bridges with their ports and app
+  sessions, activity lights, and the selected bridge's frames; TNCs and
+  adapters, with pairing, unpairing and scanning; and every frame with a
+  decode. Enabling, disabling, switching, connecting and kicking from a
+  key, asking first before anyone is disconnected. `a` adds a port, an
+  empty bridge, a TNC or a name for an adapter in a small form, or hands
+  off to `ktbctl setup`; `E` hands off to `ktbctl edit` for the selected
+  bridge, TNC or adapter, and `C` for all of `dynamic.toml`. It reconnects
+  when the daemon restarts.
 
 ### Fixed
 

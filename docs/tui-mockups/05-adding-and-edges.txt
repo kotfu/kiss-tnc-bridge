@@ -1,0 +1,107 @@
+ktbctl tui: adding things, and the edges
+========================================
+
+Adding (a)
+----------
+
+A menu of what can be added where you are:
+
+      ┌ Add ─────────────────────────────────────────────────────┐
+      │                                                          │
+      │  > A bridge for a TNC, step by step (ktbctl setup)       │
+      │    A port on ktbr1                                       │
+      │    An empty bridge                                       │
+      │    A TNC                                                 │
+      │    A name for an adapter                                 │
+      │                                                          │
+      └─────────────────────────────────────────── Esc cancel ───┘
+
+The first entry hands off to `ktbctl setup`: the TUI steps aside (the
+terminal goes back to normal), the wizard runs as it does today, and the
+TUI comes back when it's done, with the new bridge selected. The wizard
+already does scanning, pairing, the model table's instructions and the
+check at the end; doing it all again as TUI forms would be a second copy
+to keep in step.
+
+The rest are small forms in a dialog. A port, for example:
+
+      ┌ Add a port to ktbr1 ─────────────────────────────────────┐
+      │                                                          │
+      │  Type      ◂ tcp-server ▸                                │
+      │  Id          lan2                                        │
+      │  Listen      wlan0:8002                                  │
+      │  Allow         (empty: anyone)                           │
+      │                                                          │
+      │  Anyone who can reach wlan0:8002 can transmit through    │
+      │  your radio, under your callsign.                        │
+      │                                                          │
+      │       [ ⏎ Add ]     [ Esc Cancel ]                       │
+      └──────────────────────────────────────────────────────────┘
+
+The fields follow the type: an spp-client or serial port picks
+its TNC from a list, a ble-server its adapter. ↑↓ move between fields,
+←→ change a choice, and the id follows the type until it's typed in.
+
+E (on anything dynamic) does the same hand-off to `ktbctl edit`, in
+$EDITOR, for everything a form doesn't cover. C opens all of
+dynamic.toml the same way, whatever is selected; the static config files
+are edited directly, then reloaded with R.
+
+No bridges yet
+--------------
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│                                                                              │
+│                                                                              │
+│   No bridges yet.                                                            │
+│                                                                              │
+│   A bridge shares one TNC (a radio over Bluetooth or USB, or a KISS TCP      │
+│   server) with apps over BLE, TCP or both.                                   │
+│                                                                              │
+│   Press a to set one up, step by step.                                       │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ a add  2 TNCs  ? help  q quit                                                │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+The daemon isn't running, or goes away
+--------------------------------------
+
+┌ kiss-tnc-bridge 0.6.0 · aprscc ─────────────── [1 Bridges]  2 TNCs  3 Frames ┐
+│                                                                              │
+│                                                                              │
+│   Can't reach the daemon: /run/kiss-tnc-bridge/control.sock doesn't          │
+│   exist. Is kiss-tnc-bridge running? (systemctl status kiss-tnc-bridge)      │
+│                                                                              │
+│   Trying again every 2 s...                                                  │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+├──────────────────────────────────────────────────────────────────────────────┤
+│ q quit                                                                       │
+└──────────────────────────────────────────────────────────────────────────────┘
+
+When it comes back the TUI picks up where it was. If it goes away while
+the TUI is open, the same message replaces the screen.

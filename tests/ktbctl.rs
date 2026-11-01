@@ -309,6 +309,18 @@ fn setup_needs_a_terminal() {
 }
 
 #[test]
+fn the_tui_needs_a_terminal_and_bare_ktbctl_shows_status() {
+    let d = daemon();
+    let out = ktbctl(&d.socket, &["tui"]);
+    assert!(!out.ok);
+    assert!(out.stderr.contains("needs a terminal"), "{}", out.stderr);
+    // Without a terminal, no command is status, as before.
+    let out = ktbctl(&d.socket, &[]);
+    assert!(out.ok, "{}", out.stderr);
+    assert!(out.stdout.contains("ktbr0"), "{}", out.stdout);
+}
+
+#[test]
 fn a_held_link_can_be_released() {
     let d = daemon();
     let s = &d.socket;
