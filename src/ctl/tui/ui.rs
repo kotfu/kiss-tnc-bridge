@@ -25,9 +25,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
 
-use super::app::{App, Dialog, FrameRow, Link, Lower, Row, TncRow, View};
+use super::app::{
+    App, Ask, Dialog, FrameRow, Link, Lower, Pairing, Row, SCAN_SECS, Scan, TncRow, View, links_to,
+};
 use crate::control::protocol::{
-    AdapterStatus, BridgeStatus, Dir, PortStatus, SessionStatus, Status, TncStatus,
+    AdapterStatus, BridgeStatus, BtDevice, Dir, PortStatus, SessionStatus, Status, TncStatus,
 };
 use crate::ctl::render::{ago, parse_rfc3339};
 
@@ -58,6 +60,12 @@ pub fn draw(f: &mut Frame, app: &App, now: Instant, wall: SystemTime) {
     }
     if app.help {
         help(f, app);
+    }
+    if let Some(sc) = &app.scan {
+        scan(f, sc, now);
+    }
+    if let Some(p) = app.pairing.as_ref().filter(|p| !p.hidden) {
+        pairing(f, p);
     }
     if let Some(d) = &app.dialog {
         dialog(f, d);
@@ -667,7 +675,7 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
     let (title, lines) = match sel.map(|i| rows[i].0) {
         Some(TncRow::Tnc(i)) => {
             let t = &s.tncs[i];
-            (format!("Details: {}", t.id), tnc_details(t))
+            (format!("Details: {}", t.id), tnc_details(s, t))
         }
         Some(TncRow::Adapter(i)) => {
             let a = &s.adapters[i];
@@ -681,15 +689,16 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
     let block = pane(title, "");
     let inner_lower = block.inner(lower);
     let lines: Vec<Line> = lines
-        .into_iter()
-        .map(|l| Line::raw(format!(" {l}")))
+        .iter()
+        .flat_map(|l| indented(l, " ", inner_lower.width as usize))
+        .map(Line::raw)
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), lower);
     message(f, app, inner_lower);
     keys(
         f,
         k,
-        "↑↓ move  - remove  R reload  1 bridges  3 frames  ? help  q quit",
+        "↑↓ move  p pair  u unpair  n scan  - remove  R reload  ? help  q quit",
     );
 }
 
@@ -780,12 +789,19 @@ fn tnc_summary(t: &TncStatus) -> String {
     out
 }
 
-fn tnc_details(t: &TncStatus) -> Vec<String> {
+fn tnc_details(s: &Status, t: &TncStatus) -> Vec<String> {
     let mut out = vec![tnc_summary(t)];
     out.push(match &t.in_use_by {
         Some(b) => format!("Bridge {b} uses it."),
         None => "No enabled bridge uses it.".into(),
     });
+    let links = links_to(s, &t.id);
+    if t.spp.is_some() && !links.is_empty() {
+        out.push(format!(
+            "Unpairing would drop the link on {}.",
+            crate::ctl::render::join_and(&links)
+        ));
+    }
     out.push(source_line(&t.source, t.editable));
     out
 }
@@ -985,6 +1001,8 @@ fn help(f: &mut Frame, app: &App) {
             ("R", "reload the config file"),
         ]),
         View::Tncs => lines.extend([
+            ("p u", "pair, unpair a TNC's radio"),
+            ("n", "scan for Bluetooth devices"),
             ("-", "remove a TNC, or an adapter's id"),
             ("R", "reload the config file"),
         ]),
@@ -1076,6 +1094,198 @@ fn dialog(f: &mut Frame, d: &Dialog) {
         Paragraph::new(text).block(
             Block::bordered()
                 .title(Line::from(format!(" {} ", d.title)))
+                .title_bottom(Line::from(footer).right_aligned()),
+        ),
+        at,
+    );
+}
+
+// ── Pairing and scanning ────────────────────────────────────────────────
+
+/// A box `width` by `height` in the middle of `area`.
+fn centered(area: Rect, width: u16, height: u16) -> Rect {
+    let (w, h) = (width.min(area.width), height.min(area.height));
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
+/// `text` wrapped to `w`, each line indented by `indent`.
+fn indented(text: &str, indent: &str, w: usize) -> Vec<String> {
+    wrap(text, w.saturating_sub(indent.len()))
+        .into_iter()
+        .map(|l| format!("{indent}{l}"))
+        .collect()
+}
+
+fn scan(f: &mut Frame, sc: &Scan, now: Instant) {
+    let area = f.area();
+    let rows = sc.devices.len().max(1) as u16;
+    let at = centered(area, 70, rows + 6);
+    let right = if sc.over {
+        "done".to_string()
+    } else if sc.then_pair.is_some() {
+        "stopping".to_string()
+    } else {
+        let gone = now.saturating_duration_since(sc.started).as_secs();
+        format!("{} s left", SCAN_SECS.saturating_sub(gone))
+    };
+    let block = Block::bordered()
+        .title(Line::from(format!(" {} ", sc.title)))
+        .title(Line::from(format!(" {right} ")).right_aligned());
+    let inner = block.inner(at);
+    f.render_widget(Clear, at);
+    f.render_widget(block, at);
+    let [top, list, bottom] = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Fill(1),
+        Constraint::Length(2),
+    ])
+    .areas(inner);
+    f.render_widget(
+        Paragraph::new(" Radios have to be in pairing mode to be found."),
+        top,
+    );
+    let w = list.width as usize;
+    if let Some(e) = &sc.error {
+        let lines: Vec<Line> = indented(&format!("✗ {e}"), " ", w)
+            .into_iter()
+            .map(|l| Line::styled(l, Style::new().fg(Color::Red)))
+            .collect();
+        f.render_widget(Paragraph::new(lines), list);
+    } else if sc.devices.is_empty() {
+        let text = if sc.over {
+            " Nothing found. Is the radio in pairing mode, with Bluetooth on?"
+        } else {
+            " Looking..."
+        };
+        f.render_widget(Paragraph::new(text), list);
+    } else {
+        let items: Vec<ListItem> = sc
+            .devices
+            .iter()
+            .map(|d| ListItem::new(device_line(d, w)))
+            .collect();
+        let mut state = ListState::default().with_selected(sc.selected_index());
+        f.render_stateful_widget(
+            List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+            list,
+            &mut state,
+        );
+    }
+    let keys_text = if sc.over {
+        " ⏎ pair it   n scan again   Esc close"
+    } else {
+        " ⏎ pair it   Esc stop"
+    };
+    f.render_widget(
+        Paragraph::new(vec![Line::raw(""), Line::raw(keys_text)]),
+        bottom,
+    );
+}
+
+/// `40:79:12:E4:95:9D  TH-D75  Kenwood TH-D75  -52 dBm`.
+fn device_line(d: &BtDevice, w: usize) -> String {
+    let mut what = d
+        .known_tnc
+        .clone()
+        .or_else(|| d.icon.clone())
+        .unwrap_or_else(|| "-".into());
+    if let Some(t) = &d.tnc {
+        what.push_str(&format!(", tnc {t}"));
+    } else if d.paired {
+        what.push_str(", paired");
+    }
+    let rssi = d.rssi.map(|r| format!("{r} dBm")).unwrap_or_default();
+    let left = format!(
+        " {}  {:<12} {}",
+        d.address,
+        fit(d.name.as_deref().unwrap_or("-"), 12),
+        what
+    );
+    lr(&left, &format!("{rssi:>8} "), w)
+}
+
+fn pairing(f: &mut Frame, p: &Pairing) {
+    let area = f.area();
+    let width = 60u16.min(area.width);
+    let w = width.saturating_sub(4) as usize;
+    let mut text = vec![Line::raw("")];
+    for (i, s) in p.steps.iter().enumerate() {
+        // What to do at the radio, then what's happened.
+        if i == 1 {
+            text.push(Line::raw(""));
+        }
+        text.extend(indented(s, "  ", w).into_iter().map(Line::raw));
+    }
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let buttons = |yes: &str| {
+        Line::from(vec![
+            Span::raw("        "),
+            Span::styled(format!("[ y  {yes} ]"), bold),
+            Span::raw("     [ n  No ]"),
+        ])
+    };
+    match &p.ask {
+        Some(Ask::Confirm(passkey)) => {
+            let spaced: Vec<String> = passkey.chars().map(String::from).collect();
+            text.push(Line::raw(""));
+            text.push(Line::from(vec![
+                Span::raw("  The radio should show   "),
+                Span::styled(spaced.join(" "), bold),
+            ]));
+            text.push(Line::raw("  Does it?"));
+            text.push(Line::raw(""));
+            text.push(buttons("Yes, it matches"));
+        }
+        Some(Ask::Authorize) => {
+            text.push(Line::raw(""));
+            text.push(Line::raw("  Allow the device to pair?"));
+            text.push(Line::raw(""));
+            text.push(buttons("Allow it"));
+        }
+        Some(ask @ (Ask::Pin | Ask::Passkey)) => {
+            let label = if *ask == Ask::Pin {
+                "The device's PIN:"
+            } else {
+                "The passkey the device shows:"
+            };
+            text.push(Line::raw(""));
+            text.push(Line::from(vec![
+                Span::raw(format!("  {label} ")),
+                Span::styled(format!("{}_", p.typed), bold),
+            ]));
+        }
+        None => {}
+    }
+    if let Some((said, ok)) = &p.end {
+        let (mark, style) = if *ok {
+            ("✓ ", Style::new().fg(Color::Green))
+        } else {
+            ("✗ ", Style::new().fg(Color::Red))
+        };
+        text.push(Line::raw(""));
+        for (i, l) in wrap(said, w.saturating_sub(4)).into_iter().enumerate() {
+            let lead = if i == 0 { mark } else { "  " };
+            text.push(Line::styled(format!("  {lead}{l}"), style));
+        }
+    }
+    text.push(Line::raw(""));
+    let footer = match (&p.end, &p.ask) {
+        (Some(_), _) => " ⏎ close ",
+        (None, Some(Ask::Pin | Ask::Passkey)) => " ⏎ send  Esc cancel ",
+        (None, Some(_)) => " Esc no ",
+        (None, None) => " Esc hide ",
+    };
+    let at = centered(area, width, text.len() as u16 + 2);
+    f.render_widget(Clear, at);
+    f.render_widget(
+        Paragraph::new(text).block(
+            Block::bordered()
+                .title(Line::from(format!(" {} ", p.title)))
                 .title_bottom(Line::from(footer).right_aligned()),
         ),
         at,
@@ -1331,5 +1541,99 @@ mod tests {
             source_line("static: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml", false),
             "from /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml: read-only here; edit the file, then reload"
         );
+    }
+    #[test]
+    fn the_scan_and_pairing_boxes() {
+        use super::super::app::{Pairing, Scan};
+        use crate::control::protocol::BtDevice;
+        let mut app = app();
+        app.view = View::Tncs;
+        let s = screen(&app);
+        let all = s.join("\n");
+        assert!(has(&s, "p pair  u unpair  n scan"), "{all}");
+        assert!(
+            has(&s, "Unpairing would drop the link on ktbr1/radio."),
+            "{all}"
+        );
+        let d = |address: &str, name: Option<&str>, known: Option<&str>, rssi| BtDevice {
+            address: address.into(),
+            name: name.map(Into::into),
+            rssi: Some(rssi),
+            icon: Some("phone".into()),
+            paired: false,
+            known_tnc: known.map(Into::into),
+            model: None,
+            tnc: None,
+        };
+        app.scan = Some(Scan {
+            title: "Scan on builtin (hci0)".into(),
+            adapter: None,
+            request: Some(1),
+            started: Instant::now(),
+            devices: vec![
+                d(
+                    "40:79:12:E4:95:9D",
+                    Some("TH-D75"),
+                    Some("Kenwood TH-D75"),
+                    -52,
+                ),
+                d("50:3B:70:E1:1C:11", None, None, -64),
+            ],
+            selected: None,
+            over: false,
+            error: None,
+            then_pair: None,
+        });
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(has(&s, "┌ Scan on builtin (hci0) "), "{all}");
+        assert!(has(&s, " s left ┐"), "{all}");
+        assert!(
+            has(&s, "40:79:12:E4:95:9D  TH-D75       Kenwood TH-D75"),
+            "{all}"
+        );
+        assert!(has(&s, "-52 dBm"), "{all}");
+        assert!(has(&s, "50:3B:70:E1:1C:11  -            phone"), "{all}");
+        assert!(has(&s, "⏎ pair it   Esc stop"), "{all}");
+
+        app.scan = None;
+        app.pairing = Some(Pairing {
+            title: "Pair d75 (TH-D75)".into(),
+            request: Some(1),
+            steps: vec![
+                "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode".into(),
+                "Pairing with TH-D75...".into(),
+            ],
+            ask: Some(Ask::Confirm("774523".into())),
+            typed: String::new(),
+            end: None,
+            bridge: None,
+            hidden: false,
+        });
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(has(&s, "┌ Pair d75 (TH-D75) "), "{all}");
+        assert!(
+            has(&s, "Put the radio in pairing mode: Menu > Bluetooth >"),
+            "{all}"
+        );
+        assert!(has(&s, "The radio should show   7 7 4 5 2 3"), "{all}");
+        assert!(has(&s, "[ y  Yes, it matches ]     [ n  No ]"), "{all}");
+        assert!(has(&s, " Esc no ┘"), "{all}");
+
+        let p = app.pairing.as_mut().unwrap();
+        p.ask = None;
+        p.end = Some((
+            "Paired and trusted on hci0 (2C:CF:67:6E:2E:BC). Bridge ktbr1 can connect to it now."
+                .into(),
+            true,
+        ));
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(has(&s, "✓ Paired and trusted on hci0"), "{all}");
+        assert!(has(&s, " ⏎ close ┘"), "{all}");
     }
 }
