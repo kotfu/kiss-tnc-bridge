@@ -40,6 +40,8 @@ pub const PAIR_TIMEOUT: Duration = Duration::from_secs(90);
 /// How long to look for a device that BlueZ doesn't know yet before
 /// pairing it.
 const FIND_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long to wait before a second try when the first can't connect.
+const RETRY_PAIR: Duration = Duration::from_secs(1);
 
 /// What a Bluetooth name says about the device: (what it is, its model),
 /// from the radios in the model table.
@@ -272,9 +274,27 @@ pub async fn pair(
         .await
         .map_err(|e| format!("can't register a pairing agent: {e}"))?;
 
-    match tokio::time::timeout(PAIR_TIMEOUT, device.pair()).await {
+    // A scan that just ended (the caller's, or find's above) may still be
+    // stopping discovery, and paging the radio meanwhile can fail.
+    settle(adapter).await;
+    let attempt = async {
+        match device.pair().await {
+            // The page can fail once as discovery winds down: try again.
+            Err(e) if e.kind == bluer::ErrorKind::ConnectionAttemptFailed => {
+                tracing::info!(device = %addr, error = %e, "pairing: couldn't connect; trying again");
+                tokio::time::sleep(RETRY_PAIR).await;
+                settle(adapter).await;
+                device.pair().await
+            }
+            res => res,
+        }
+    };
+    match tokio::time::timeout(PAIR_TIMEOUT, attempt).await {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(pair_error(&e)),
+        Ok(Err(e)) => {
+            tracing::info!(device = %addr, error = %e, "pairing failed");
+            return Err(pair_error(&e));
+        }
         // Dropping the pair() future cancels the pairing.
         Err(_) => return Err("pairing timed out".into()),
     }
@@ -294,6 +314,16 @@ pub async fn unpair(adapter: &Adapter, addr: Address) -> Result<(), String> {
         .remove_device(addr)
         .await
         .map_err(|e| format!("can't unpair {addr}: {e}"))
+}
+
+/// Wait, up to a few seconds, for `adapter` to stop discovering.
+async fn settle(adapter: &Adapter) {
+    for _ in 0..30 {
+        if !adapter.is_discovering().await.unwrap_or(false) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
 }
 
 /// Run discovery until `addr` turns up.
