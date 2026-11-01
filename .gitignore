@@ -1,8 +1,9 @@
 .claude
 /target
 
-# Local settings for scripts/pi-deploy.sh
+# Local settings for scripts/pi-deploy.sh (one per Pi: pi-deploy.NAME.local)
 /scripts/pi-deploy.local
+/scripts/pi-deploy.*.local
 
 # Spike build outputs
 /spikes/*/target

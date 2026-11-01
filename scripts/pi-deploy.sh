@@ -8,7 +8,8 @@
 # lock). It's started again when the dev build exits, including on Ctrl-C.
 #
 # Settings come from scripts/pi-deploy.local (not tracked by git), a bash
-# file of variable assignments:
+# file of variable assignments; for another Pi, put them in its own file,
+# such as scripts/pi-deploy.wolfcub.local, and name it in PI_DEPLOY_SETTINGS:
 #
 #   PI_HOST=raspberrypi.local     # required
 #   PI_USER=pi                    # default: your ssh config / local user
@@ -70,7 +71,7 @@ while [[ $# -gt 0 ]]; do
         --release) profile="release" ;;
         --no-build) build=false ;;
         --copy-only) run=false ;;
-        -h|--help) sed -n '2,38p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,39p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         --) shift; bin_args=("$@"); break ;;
         *) die "unknown option '$1' (try --help)" ;;
     esac
