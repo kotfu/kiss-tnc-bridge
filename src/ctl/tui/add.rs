@@ -285,6 +285,13 @@ impl App {
         if self.pairing.is_some() {
             return self.say("a pairing is under way".into());
         }
+        // A paired device: set it up, as a scan box's a does.
+        if self.view == View::Tncs
+            && let Some((a, d)) = self.selected_device()
+        {
+            let (d, mac) = (d.clone(), a.mac.clone());
+            return self.set_up(&d, Some(&mac));
+        }
         let mut items = vec![(
             "A bridge for a TNC, step by step (ktbctl setup)".to_string(),
             Add::Setup,

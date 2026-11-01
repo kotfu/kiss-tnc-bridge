@@ -664,6 +664,7 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
         items.push(ListItem::new(match row {
             TncRow::Tnc(i) => tnc_lines(&s.tncs[*i], w),
             TncRow::Adapter(i) => vec![Line::raw(adapter_line(&s.adapters[*i], w))],
+            TncRow::Device(a, d) => vec![Line::raw(device_row(&s.adapters[*a].devices[*d], w))],
         }));
     }
     if s.adapters.is_empty() {
@@ -691,6 +692,10 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
                 adapter_details(a),
             )
         }
+        Some(TncRow::Device(a, d)) => {
+            let (a, d) = (&s.adapters[a], &s.adapters[a].devices[d]);
+            (format!("Details: {}", d.address), device_details(a, d))
+        }
         None => ("Details".into(), Vec::new()),
     };
     let block = pane(title, "");
@@ -702,11 +707,44 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
         .collect();
     f.render_widget(Paragraph::new(lines).block(block), lower);
     message(f, app, inner_lower);
-    keys(
-        f,
-        k,
-        "↑↓ move  p pair  u unpair  n scan  a add  - remove  E edit  ? help  q quit",
-    );
+    let hint = match sel.map(|i| rows[i].0) {
+        Some(TncRow::Device(..)) => "↑↓ move  a set it up  u unpair  n scan  ? help  q quit",
+        _ => "↑↓ move  p pair  u unpair  n scan  a add  - remove  E edit  ? help  q quit",
+    };
+    keys(f, k, hint);
+}
+
+/// A device paired on the adapter above, not a TNC yet.
+fn device_row(d: &BtDevice, w: usize) -> String {
+    let what = match (&d.name, &d.known_tnc) {
+        (Some(n), Some(k)) if n != k => format!("  {n} ({k})"),
+        (Some(n), _) => format!("  {n}"),
+        (None, Some(k)) => format!("  {k}"),
+        (None, None) => String::new(),
+    };
+    lr(
+        &format!("          paired  {}{what}", d.address),
+        "not a TNC yet ",
+        w,
+    )
+}
+
+fn device_details(a: &AdapterStatus, d: &BtDevice) -> Vec<String> {
+    let mut out = vec![format!(
+        "{}{}, paired on {}",
+        d.address,
+        d.name
+            .as_deref()
+            .map(|n| format!(" ({n})"))
+            .unwrap_or_default(),
+        super::app::adapter_label(a)
+    )];
+    out.push(match &d.known_tnc {
+        Some(k) => format!("A {k}, not set up as a TNC yet: a sets it up, with a bridge."),
+        None => "Not set up as a TNC: a sets it up, with a bridge.".into(),
+    });
+    out.push("u unpairs it.".into());
+    out
 }
 
 fn tnc_lines(t: &TncStatus, w: usize) -> Vec<Line<'static>> {
@@ -1587,6 +1625,31 @@ mod tests {
             "{all}"
         );
         assert!(has(&s, "Bridge ktbr1 uses it."), "{all}");
+
+        // A paired radio that isn't a TNC, under its adapter.
+        let mut st = status();
+        st.adapters[0].devices = vec![crate::control::protocol::BtDevice {
+            address: "40:79:12:00:00:01".into(),
+            name: Some("TH-D75".into()),
+            rssi: None,
+            icon: None,
+            paired: true,
+            known_tnc: Some("Kenwood TH-D75".into()),
+            model: Some("th-d75".into()),
+            tnc: None,
+        }];
+        app.set_status(st);
+        app.tnc_selected = Some("device:2C:CF:67:6E:2E:BC/40:79:12:00:00:01".into());
+        let s = screen(&app);
+        let all = s.join("\n");
+        assert!(
+            has(&s, "paired  40:79:12:00:00:01  TH-D75 (Kenwood TH-D75)"),
+            "{all}"
+        );
+        assert!(has(&s, "not a TNC yet"), "{all}");
+        assert!(has(&s, "not set up as a TNC yet: a sets it up"), "{all}");
+        assert!(has(&s, "a set it up  u unpair  n scan"), "{all}");
+        app.set_status(status());
 
         app.view = View::Frames;
         let s = screen(&app);

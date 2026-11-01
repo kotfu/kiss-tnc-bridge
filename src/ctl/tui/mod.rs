@@ -221,9 +221,13 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
                 if let Action::Run(args) = a {
                     // Its connections go quiet meanwhile; start afresh.
                     conn = None;
-                    let said = hand_off(terminal, &input, socket, &args).await?;
+                    let (said, failed) = hand_off(terminal, &input, socket, &args).await?;
                     app.link = Link::Connecting;
-                    app.message = Some(said);
+                    if failed {
+                        app.error(said);
+                    } else {
+                        app.message = Some((said, false));
+                    }
                     retry_at = Instant::now();
                     continue;
                 }
@@ -284,7 +288,7 @@ async fn hand_off(
     input.pause().await;
     ratatui::restore();
     let what = format!("'ktbctl {}'", args.join(" "));
-    let mut cmd = std::process::Command::new(std::env::current_exe()?);
+    let mut cmd = std::process::Command::new(this_ktbctl()?);
     cmd.arg("--socket").arg(socket).args(args);
     let said = match tokio::task::spawn_blocking(move || cmd.status()).await {
         Ok(Ok(s)) if s.success() => (format!("back from {what}"), false),
@@ -306,6 +310,20 @@ async fn hand_off(
     *terminal = ratatui::try_init()?;
     input.resume();
     Ok(said)
+}
+
+/// This program's path, to run it again. If it was replaced while the TUI
+/// ran (an upgrade), Linux names the old one `PATH (deleted)`, and the new
+/// one is at PATH.
+fn this_ktbctl() -> std::io::Result<std::path::PathBuf> {
+    std::env::current_exe().map(undeleted)
+}
+
+fn undeleted(exe: std::path::PathBuf) -> std::path::PathBuf {
+    match exe.to_str().and_then(|p| p.strip_suffix(" (deleted)")) {
+        Some(p) => p.into(),
+        None => exe,
+    }
 }
 
 /// Do what a key or an answer asks. True to quit.
@@ -374,5 +392,22 @@ fn hostname() -> String {
         name.split('.').next().unwrap_or_default().to_string()
     } else {
         "this host".into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_replaced_ktbctl_runs_the_new_one() {
+        assert_eq!(
+            undeleted("/home/jared/ktb-dev/ktbctl (deleted)".into()),
+            Path::new("/home/jared/ktb-dev/ktbctl")
+        );
+        assert_eq!(
+            undeleted("/usr/bin/ktbctl".into()),
+            Path::new("/usr/bin/ktbctl")
+        );
     }
 }

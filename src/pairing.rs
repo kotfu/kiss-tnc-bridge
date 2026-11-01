@@ -144,6 +144,25 @@ async fn device(
     })
 }
 
+/// The devices paired on `adapter`, as a scan shows them but without a
+/// signal strength: they needn't be on or nearby.
+pub async fn paired_devices(
+    adapter: &Adapter,
+    tnc_for: impl Fn(Address) -> Option<String>,
+) -> Vec<BtDevice> {
+    let mut out = Vec::new();
+    for addr in adapter.device_addresses().await.unwrap_or_default() {
+        if let Some(mut d) = device(adapter, addr, &tnc_for).await
+            && d.paired
+        {
+            d.rssi = None;
+            out.push(d);
+        }
+    }
+    out.sort_by(|a, b| a.address.cmp(&b.address));
+    out
+}
+
 /// A reply to a [`PairingStep`] that needs one.
 #[derive(Debug, Clone, Default)]
 pub struct Reply {
