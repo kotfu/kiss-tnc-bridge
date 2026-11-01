@@ -139,7 +139,9 @@ Everything at once. No parameters.
 ```jsonc
 {"version": "1.0.0",
  "adapters": [
-   {"id": "builtin", "mac": "2C:CF:67:6E:2E:BC", "hci": "hci0", "present": true, "powered": true, "source": "static: …"},
+   {"id": "builtin", "mac": "2C:CF:67:6E:2E:BC", "hci": "hci0", "present": true, "powered": true, "source": "static: …",
+    "devices": [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "icon": "phone", "paired": true,
+                 "known_tnc": "Kenwood TH-D75", "model": "th-d75", "tnc": "d75"}]},
    {"mac": "AC:A7:F1:29:9C:7F", "hci": "hci1", "present": true, "powered": true}],
  "tncs": [
    {"id": "d75", "name": "TH-D75", "model": "th-d74/th-d75",
@@ -165,6 +167,9 @@ Everything at once. No parameters.
 
 - Adapters present on the host are listed whether or not an `[[adapter]]`
   names them, and named ones whether or not they're present.
+  A present adapter's `devices` are those paired on it, as `bluetooth.scan`
+  shows them but without `rssi` (they needn't be on); one with no `tnc`
+  is paired but not set up as a TNC.
 - A TNC port's `state` is `idle`, `connecting`, `connected`, `backoff`,
   `unpaired` or `waiting for device`, with `detail` saying why or when it
   retries. A `tcp-server` port is `listening`, `waiting for interface`,

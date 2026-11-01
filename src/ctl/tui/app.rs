@@ -273,6 +273,9 @@ pub enum Row {
 pub enum TncRow {
     Tnc(usize),
     Adapter(usize),
+    /// A device paired on adapter `.0` that isn't a TNC yet:
+    /// `adapters[.0].devices[.1]`.
+    Device(usize, usize),
 }
 
 #[derive(Debug, Default)]
@@ -578,12 +581,34 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, t)| (TncRow::Tnc(i), format!("tnc:{}", t.id)));
-        let adapters = s
-            .adapters
-            .iter()
-            .enumerate()
-            .map(|(i, a)| (TncRow::Adapter(i), format!("adapter:{}", a.mac)));
+        // Each adapter, then what's paired on it that isn't a TNC yet.
+        let adapters = s.adapters.iter().enumerate().flat_map(|(i, a)| {
+            std::iter::once((TncRow::Adapter(i), format!("adapter:{}", a.mac))).chain(
+                a.devices
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, d)| d.tnc.is_none())
+                    .map(move |(j, d)| {
+                        (
+                            TncRow::Device(i, j),
+                            format!("device:{}/{}", a.mac, d.address),
+                        )
+                    }),
+            )
+        });
         tncs.chain(adapters).collect()
+    }
+
+    /// The paired device selected in the TNCs view, and its adapter.
+    pub fn selected_device(&self) -> Option<(&AdapterStatus, &BtDevice)> {
+        let rows = self.tnc_rows();
+        match rows.get(self.tnc_selected_index(&rows)?)?.0 {
+            TncRow::Device(a, d) => {
+                let a = self.status.as_ref()?.adapters.get(a)?;
+                Some((a, a.devices.get(d)?))
+            }
+            _ => None,
+        }
     }
 
     pub fn tnc_selected_index(&self, rows: &[(TncRow, String)]) -> Option<usize> {
@@ -952,6 +977,9 @@ impl App {
             return Action::None;
         };
         match rows[i].0 {
+            TncRow::Device(..) => {
+                return self.say("u unpairs it; a sets it up as a TNC".into());
+            }
             TncRow::Tnc(t) => {
                 let t = &s.tncs[t];
                 if !t.editable {
@@ -1026,12 +1054,15 @@ impl App {
         let rows = self.tnc_rows();
         match rows.get(self.tnc_selected_index(&rows)?)?.0 {
             TncRow::Tnc(i) => self.status.as_ref()?.tncs.get(i),
-            TncRow::Adapter(_) => None,
+            TncRow::Adapter(_) | TncRow::Device(..) => None,
         }
     }
 
     /// `p` in the TNCs view.
     fn pair_tnc(&mut self) -> Action {
+        if self.selected_device().is_some() {
+            return self.say("it's paired already; a sets it up as a TNC".into());
+        }
         let Some(t) = self.selected_tnc().cloned() else {
             return self.say("select a TNC to pair with it".into());
         };
@@ -1228,6 +1259,35 @@ impl App {
     /// `u` in the TNCs view. Always asks: pairing again needs someone at
     /// the radio.
     fn unpair_tnc(&mut self) -> Action {
+        if let Some((a, d)) = self.selected_device() {
+            let (adapter, address) = (a.mac.clone(), d.address.clone());
+            let what = match &d.name {
+                Some(n) => format!("{n} ({address})"),
+                None => address.clone(),
+            };
+            self.dialog = Some(Dialog {
+                title: format!("Unpair {what}?"),
+                lines: vec![
+                    format!(
+                        "It's paired on {}, and isn't set up as a TNC.",
+                        adapter_label(a)
+                    ),
+                    "Pairing again needs it in pairing mode.".into(),
+                ],
+                yes: Some((
+                    "Unpair it".into(),
+                    Req {
+                        command: Command::BluetoothUnpair {
+                            tnc: None,
+                            address: Some(address.clone()),
+                            adapter: Some(adapter),
+                        },
+                        then: Then::Done(format!("{address} unpaired")),
+                    },
+                )),
+            });
+            return Action::None;
+        }
         let Some(t) = self.selected_tnc().cloned() else {
             return self.say("select a TNC to unpair it".into());
         };
@@ -1292,7 +1352,11 @@ impl App {
             return Err("not connected to the daemon".into());
         };
         let rows = self.tnc_rows();
-        let row = self.tnc_selected_index(&rows).map(|i| rows[i].0);
+        // A paired device scans on its adapter.
+        let row = self.tnc_selected_index(&rows).map(|i| match rows[i].0 {
+            TncRow::Device(a, _) => TncRow::Adapter(a),
+            r => r,
+        });
         let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
         match row {
             Some(TncRow::Adapter(i)) => {
@@ -1403,6 +1467,16 @@ impl App {
                 self.scan = None;
                 a
             }
+            // Hand it to setup, as a new TNC. Closing the connection on
+            // the way out stops the scan, and lets go of the adapter.
+            KeyCode::Char('a') if s.target.is_none() => {
+                let Some(d) = at.map(|i| s.devices[i].clone()) else {
+                    return Action::None;
+                };
+                let adapter = s.adapter.clone();
+                self.scan = None;
+                self.set_up(&d, adapter.as_deref())
+            }
             KeyCode::Char('n') if s.over => {
                 let scan = s.again();
                 let req = scan.command();
@@ -1411,6 +1485,28 @@ impl App {
             }
             _ => Action::None,
         }
+    }
+
+    /// Hand device `d` to `ktbctl setup`, as a new TNC.
+    pub(super) fn set_up(&mut self, d: &BtDevice, adapter: Option<&str>) -> Action {
+        let mut args = vec!["setup".to_string(), "--address".into(), d.address.clone()];
+        if let Some(a) = adapter {
+            args.extend(["--adapter".into(), a.to_string()]);
+        }
+        if let Some(n) = &d.name {
+            args.extend(["--name".into(), n.clone()]);
+        }
+        if let Some(m) = &d.model {
+            args.extend(["--model".into(), m.clone()]);
+        }
+        if d.paired {
+            args.push("--paired".into());
+        }
+        self.new_since = self
+            .status
+            .as_ref()
+            .map(|s| s.bridges.iter().map(|b| b.id.clone()).collect());
+        Action::Run(args)
     }
 
     /// Pair with a device a scan found.
@@ -1479,6 +1575,9 @@ impl App {
                         let source = a.source.clone().unwrap_or_default();
                         let editable = source == "dynamic";
                         (vec!["adapter".into(), id], source, editable)
+                    }
+                    Some(TncRow::Device(..)) => {
+                        return self.say("it isn't a TNC yet; a sets it up".into());
                     }
                     None => (Vec::new(), String::new(), true),
                 }
@@ -1818,6 +1917,7 @@ pub(crate) mod tests {
                 bus: Some("board".into()),
                 product: None,
                 usb_id: None,
+                devices: Vec::new(),
             }],
             tncs: vec![TncStatus {
                 id: "d75".into(),
@@ -2433,8 +2533,41 @@ pub(crate) mod tests {
             "Put the radio in pairing mode: Menu > Bluetooth > Pairing Mode"
         );
 
-        // Esc stops a scan and closes it.
+        // a hands the selected device to setup, as a new TNC.
         app.pairing = None;
+        let Action::Request(req) = app.key(key(KeyCode::Char('n'))) else {
+            panic!("n scans");
+        };
+        app.sent(10, &req.then);
+        let mut d75 = device("40:79:12:E4:95:9D", "TH-D75", Some("Kenwood TH-D75"));
+        d75.paired = true;
+        app.on_own_event(Event::Found {
+            request: 10,
+            device: d75,
+        });
+        assert_eq!(
+            app.key(key(KeyCode::Char('a'))),
+            Action::Run(
+                [
+                    "setup",
+                    "--address",
+                    "40:79:12:E4:95:9D",
+                    "--adapter",
+                    "2C:CF:67:6E:2E:BC",
+                    "--name",
+                    "TH-D75",
+                    "--model",
+                    "th-d75",
+                    "--paired"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
+        assert!(app.scan.is_none());
+        assert!(app.new_since.is_some());
+
+        // Esc stops a scan and closes it.
         let Action::Request(req) = app.key(key(KeyCode::Char('n'))) else {
             panic!("n scans");
         };
@@ -2488,5 +2621,70 @@ pub(crate) mod tests {
         assert!(app.dialog.is_some());
         assert_eq!(app.key(key(KeyCode::Esc)), Action::None);
         assert_eq!(app.key(key(KeyCode::Esc)), Action::Quit);
+    }
+
+    #[test]
+    fn a_paired_radio_that_isnt_a_tnc_can_be_set_up() {
+        let mut app = App::new("pi".into());
+        let mut s = status();
+        let mut known = device("40:79:12:E4:95:9D", "TH-D75", Some("Kenwood TH-D75"));
+        known.paired = true;
+        known.tnc = Some("d75".into());
+        let mut other = device("40:79:12:00:00:01", "TH-D75", Some("Kenwood TH-D75"));
+        other.paired = true;
+        s.adapters[0].devices = vec![known, other];
+        app.set_status(s);
+        app.view = View::Tncs;
+        // The one that's a TNC already isn't listed again.
+        let ids: Vec<String> = app.tnc_rows().into_iter().map(|r| r.1).collect();
+        assert_eq!(
+            ids,
+            [
+                "tnc:d75",
+                "adapter:2C:CF:67:6E:2E:BC",
+                "device:2C:CF:67:6E:2E:BC/40:79:12:00:00:01"
+            ]
+        );
+        app.key(key(KeyCode::End));
+        assert_eq!(app.key(key(KeyCode::Char('p'))), Action::None);
+        assert_eq!(
+            app.message,
+            Some(("it's paired already; a sets it up as a TNC".into(), false))
+        );
+        assert_eq!(
+            app.key(key(KeyCode::Char('a'))),
+            Action::Run(
+                [
+                    "setup",
+                    "--address",
+                    "40:79:12:00:00:01",
+                    "--adapter",
+                    "2C:CF:67:6E:2E:BC",
+                    "--name",
+                    "TH-D75",
+                    "--model",
+                    "th-d75",
+                    "--paired"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
+        app.key(key(KeyCode::Char('u')));
+        assert_eq!(
+            app.dialog.as_ref().unwrap().title,
+            "Unpair TH-D75 (40:79:12:00:00:01)?"
+        );
+        let Action::Request(r) = app.key(key(KeyCode::Char('y'))) else {
+            panic!("y unpairs");
+        };
+        assert_eq!(
+            r.command,
+            Command::BluetoothUnpair {
+                tnc: None,
+                address: Some("40:79:12:00:00:01".into()),
+                adapter: Some("2C:CF:67:6E:2E:BC".into())
+            }
+        );
     }
 }

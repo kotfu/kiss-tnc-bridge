@@ -223,7 +223,7 @@ impl Ctl {
                 self.change(c, |nd| Command::Reload { non_disruptive: nd })
                     .await
             }
-            Cmd::Setup => self.setup(c).await,
+            Cmd::Setup(args) => self.setup(c, args).await,
             Cmd::Monitor { .. } | Cmd::Tui => unreachable!("handled in run"),
         }
     }

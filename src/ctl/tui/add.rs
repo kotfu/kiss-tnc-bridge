@@ -285,6 +285,13 @@ impl App {
         if self.pairing.is_some() {
             return self.say("a pairing is under way".into());
         }
+        // A paired device: set it up, as a scan box's a does.
+        if self.view == View::Tncs
+            && let Some((a, d)) = self.selected_device()
+        {
+            let (d, mac) = (d.clone(), a.mac.clone());
+            return self.set_up(&d, Some(&mac));
+        }
         let mut items = vec![(
             "A bridge for a TNC, step by step (ktbctl setup)".to_string(),
             Add::Setup,
@@ -415,10 +422,21 @@ impl App {
                 Vec::new(),
             ),
             Add::Tnc => {
+                // A model's radios come most common first: write the first
+                // one's name (th-d75, not th-d74), and show it first.
                 let mut models: Vec<(String, String)> = self
                     .models
                     .iter()
-                    .map(|m| (m.names.join(", "), m.names[0].clone()))
+                    .map(|m| {
+                        let model = m
+                            .radios
+                            .first()
+                            .map_or(m.names[0].clone(), |r| r.model.clone());
+                        let others = m.names.iter().filter(|n| **n != model).cloned();
+                        let shown: Vec<String> =
+                            std::iter::once(model.clone()).chain(others).collect();
+                        (shown.join(", "), model)
+                    })
                     .collect();
                 if models.is_empty() {
                     models.push(("generic".into(), "generic".into()));
@@ -724,18 +742,27 @@ mod tests {
     #[test]
     fn a_tnc_form_says_what_it_needs() {
         let mut app = app();
+        // As the daemon lists them: the names in order, the radios most
+        // common first.
         app.models = serde_json::from_value::<Vec<ModelEntry>>(json!([
             {"names": ["generic"], "summary": "Any KISS TNC"},
-            {"names": ["th-d75", "th-d74"], "summary": "Kenwood"}
+            {"names": ["th-d74", "th-d75"], "summary": "Kenwood", "radios": [
+                {"name": "Kenwood TH-D75", "model": "th-d75"},
+                {"name": "Kenwood TH-D74", "model": "th-d74"}
+            ]}
         ]))
         .unwrap();
         app.view = View::Tncs;
         app.key(key(KeyCode::Char('a')));
         app.key(key(KeyCode::Enter));
         assert_eq!(app.form.as_ref().unwrap().get("id"), "tnc");
-        // A TH-D75, and d75 is taken.
+        // A TH-D74/D75 is written as a TH-D75, the common one; d75 is
+        // taken.
         app.key(key(KeyCode::Right));
-        assert_eq!(app.form.as_ref().unwrap().get("id"), "d752");
+        let f = app.form.as_ref().unwrap();
+        assert_eq!(f.fields[0].shown(), "th-d75, th-d74");
+        assert_eq!(f.get("model"), "th-d75");
+        assert_eq!(f.get("id"), "d752");
         assert_eq!(app.key(key(KeyCode::Enter)), Action::None);
         assert_eq!(
             app.form.as_ref().unwrap().error.as_deref(),

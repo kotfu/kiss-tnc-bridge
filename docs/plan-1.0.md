@@ -1737,8 +1737,8 @@ the TUI.
       dialog, works at 80×24 over SSH; it reconnects when the daemon
       restarts, as `monitor` does. Adding a bridge hands off to `setup`,
       and `E` to `edit`; small forms add a port, an empty bridge, a TNC
-      and an adapter name. Not yet: setting up a scanned device as a new
-      TNC straight from the scan box (`setup` would need to take it).
+      and an adapter name. `a` in the scan box sets the selected device
+      up as a new TNC, by `setup --address`.
 
 - [ ] **Deferred: BLE TNCs** (a `ble-client` TNC port). Some radios'
       built-in TNCs are reached over Bluetooth LE rather than Classic SPP

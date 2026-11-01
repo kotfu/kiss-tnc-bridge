@@ -777,6 +777,11 @@ pub struct AdapterStatus {
     /// A USB adapter's `vendor:product`: `2357:0604`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb_id: Option<String>,
+    /// The devices paired on it, while it's present, as a scan shows them
+    /// but without a signal strength: they needn't be on or nearby. A
+    /// radio paired here but not set up as a TNC has no `tnc`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub devices: Vec<BtDevice>,
 }
 
 impl AdapterStatus {

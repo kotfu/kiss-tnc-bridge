@@ -1360,27 +1360,37 @@ impl Daemon {
     async fn status(&self) -> Status {
         let cfg = &self.cfg;
         // Adapters: those present, and those an [[adapter]] names.
-        let present = self.bt.adapter_details().await;
+        let tnc_for = |m: Mac| {
+            cfg.tncs
+                .iter()
+                .find(|t| t.spp.as_ref().is_some_and(|s| s.address == m))
+                .map(|t| t.id.clone())
+        };
+        let present = self.bt.adapter_details(&tnc_for).await;
         let mut adapters: Vec<AdapterStatus> = present
-            .iter()
-            .map(|(hci, mac, powered)| {
-                let named = cfg.adapters.iter().find(|a| a.mac == *mac);
-                let hw = crate::bt_hardware::adapter_hardware(hci);
+            .into_iter()
+            .map(|(hci, mac, powered, devices)| {
+                let named = cfg.adapters.iter().find(|a| a.mac == mac);
+                let hw = crate::bt_hardware::adapter_hardware(&hci);
                 AdapterStatus {
                     id: named.map(|a| a.id.clone()),
                     mac: mac.to_string(),
                     hci: Some(hci.clone()),
                     present: true,
-                    powered: Some(*powered),
+                    powered: Some(powered),
                     source: named.map(|a| a.source.to_string()),
                     bus: hw.as_ref().map(|h| h.bus.to_string()),
                     product: hw.as_ref().and_then(|h| h.product.clone()),
                     usb_id: hw.and_then(|h| h.usb_id),
+                    devices,
                 }
             })
             .collect();
         for a in &cfg.adapters {
-            if !present.iter().any(|(_, mac, _)| *mac == a.mac) {
+            if !adapters
+                .iter()
+                .any(|x| x.present && x.mac == a.mac.to_string())
+            {
                 adapters.push(AdapterStatus {
                     id: Some(a.id.clone()),
                     mac: a.mac.to_string(),
@@ -1391,6 +1401,7 @@ impl Daemon {
                     bus: None,
                     product: None,
                     usb_id: None,
+                    devices: Vec::new(),
                 });
             }
         }
@@ -2331,9 +2342,14 @@ impl Bt {
         out
     }
 
-    /// Adapters present now, with whether they're powered. Opens a BlueZ
-    /// session if there isn't one (without the agent: listing isn't using).
-    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+    /// Adapters present now, with whether they're powered and the devices
+    /// paired on them (`tnc_for` names the TNC at an address). Opens a
+    /// BlueZ session if there isn't one (without the agent: listing isn't
+    /// using).
+    async fn adapter_details(
+        &self,
+        tnc_for: &(dyn Fn(Mac) -> Option<String> + Sync),
+    ) -> Vec<(String, Mac, bool, Vec<protocol::BtDevice>)> {
         let session = match &self.session {
             Some(s) => s.clone(),
             None => match bluer::Session::new().await {
@@ -2348,7 +2364,13 @@ impl Bt {
             if let Ok(a) = session.adapter(&n)
                 && let Ok(addr) = a.address().await
             {
-                out.push((n, Mac(addr.0), a.is_powered().await.unwrap_or(false)));
+                let devices = crate::pairing::paired_devices(&a, |d| tnc_for(Mac(d.0))).await;
+                out.push((
+                    n,
+                    Mac(addr.0),
+                    a.is_powered().await.unwrap_or(false),
+                    devices,
+                ));
             }
         }
         out
@@ -2402,7 +2424,10 @@ impl Bt {
         Vec::new()
     }
 
-    async fn adapter_details(&self) -> Vec<(String, Mac, bool)> {
+    async fn adapter_details(
+        &self,
+        _tnc_for: &(dyn Fn(Mac) -> Option<String> + Sync),
+    ) -> Vec<(String, Mac, bool, Vec<protocol::BtDevice>)> {
         Vec::new()
     }
 
