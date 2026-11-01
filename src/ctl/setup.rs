@@ -844,7 +844,7 @@ async fn ask_default(question: &str, default: &str) -> String {
 }
 
 /// `hci1  AC:A7:F1:29:9C:7F  USB: TP-Link UB500 Adapter  (id dongle)`.
-fn describe_adapter(a: &AdapterStatus) -> String {
+pub(super) fn describe_adapter(a: &AdapterStatus) -> String {
     let mut d = format!("{}  {}", a.hci.as_deref().unwrap_or("-"), a.mac);
     if let Some(hw) = a.hardware() {
         d.push_str("  ");
@@ -857,7 +857,7 @@ fn describe_adapter(a: &AdapterStatus) -> String {
 }
 
 /// How config refers to an adapter: its id if it has one, else its MAC.
-fn adapter_ref(a: &AdapterStatus) -> String {
+pub(super) fn adapter_ref(a: &AdapterStatus) -> String {
     a.id.clone().unwrap_or_else(|| a.mac.clone())
 }
 
@@ -878,13 +878,13 @@ fn ble_adapters_in_use(s: &Status) -> Vec<String> {
 }
 
 /// `d75` for a TH-D75, `tnc` otherwise; numbered if that's taken.
-fn suggest_tnc_id(model: &str, taken: &[&str]) -> String {
+pub(super) fn suggest_tnc_id(model: &str, taken: &[&str]) -> String {
     let base = model.strip_prefix("th-").unwrap_or("tnc");
     numbered(base, taken)
 }
 
 /// `builtin` for the board's own adapter, `dongle` for a USB one.
-fn suggest_adapter_id(a: &AdapterStatus, taken: &[&str]) -> String {
+pub(super) fn suggest_adapter_id(a: &AdapterStatus, taken: &[&str]) -> String {
     let base = match a.bus.as_deref() {
         Some("board") => "builtin",
         Some(_) => "dongle",
@@ -895,7 +895,7 @@ fn suggest_adapter_id(a: &AdapterStatus, taken: &[&str]) -> String {
     numbered(base, taken)
 }
 
-fn numbered(base: &str, taken: &[&str]) -> String {
+pub(super) fn numbered(base: &str, taken: &[&str]) -> String {
     if !taken.contains(&base) {
         return base.to_string();
     }
@@ -907,7 +907,7 @@ fn numbered(base: &str, taken: &[&str]) -> String {
 
 /// Whether a `listen` value is reachable from other hosts: anything but a
 /// bare port or a loopback address.
-fn reaches_network(listen: &str) -> bool {
+pub(super) fn reaches_network(listen: &str) -> bool {
     let Some((host, _)) = listen.rsplit_once(':') else {
         return false;
     };

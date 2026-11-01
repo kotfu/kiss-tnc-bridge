@@ -25,6 +25,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::super::client::CtlError;
 use super::super::render::join_and;
+use super::add::{Form, Menu};
 use crate::ax25::Decoded;
 use crate::control::protocol::{
     AdapterStatus, BridgeStatus, BtDevice, Command, Dir, ErrorCode, Event, ModelEntry, PairResult,
@@ -72,9 +73,11 @@ pub enum Action {
     Quit,
     /// Send this to the daemon.
     Request(Box<Req>),
+    /// Step aside for `ktbctl ARGS` (setup, edit), and come back.
+    Run(Vec<String>),
 }
 
-fn request(req: Req) -> Action {
+pub(super) fn request(req: Req) -> Action {
     Action::Request(Box::new(req))
 }
 
@@ -109,6 +112,9 @@ pub enum Then {
     Pair,
     /// The answer ends the scan in `App::scan`.
     Scan,
+    /// Sent from the form in `App::form`: a mistake goes back to it, to be
+    /// put right; otherwise as `Then`.
+    Form(Box<Then>),
 }
 
 /// A question or a notice over the screen.
@@ -313,6 +319,12 @@ pub struct App {
     pub models: Vec<ModelEntry>,
     pub pairing: Option<Pairing>,
     pub scan: Option<Scan>,
+    /// `a`'s menu.
+    pub menu: Option<Menu>,
+    pub form: Option<Form>,
+    /// The bridges there were before something that adds one; the first
+    /// new one gets selected.
+    pub new_since: Option<Vec<String>>,
 }
 
 impl App {
@@ -337,10 +349,20 @@ impl App {
             models: Vec::new(),
             pairing: None,
             scan: None,
+            menu: None,
+            form: None,
+            new_since: None,
         }
     }
 
     pub fn set_status(&mut self, s: Status) {
+        if let Some(before) = &self.new_since
+            && let Some(b) = s.bridges.iter().find(|b| !before.contains(&b.id))
+        {
+            self.selected = Some(b.id.clone());
+            self.view = View::Bridges;
+            self.new_since = None;
+        }
         self.status = Some(s);
     }
 
@@ -692,6 +714,12 @@ impl App {
                 _ => Action::None,
             };
         }
+        if self.menu.is_some() {
+            return self.menu_key(k);
+        }
+        if self.form.is_some() {
+            return self.form_key(k);
+        }
         if self.pairing.as_ref().is_some_and(|p| !p.hidden) {
             return self.pairing_key(k);
         }
@@ -719,6 +747,8 @@ impl App {
             KeyCode::Char('1') => self.view = View::Bridges,
             KeyCode::Char('2') => self.view = View::Tncs,
             KeyCode::Char('3') | KeyCode::Char('f') => self.view = View::Frames,
+            KeyCode::Char('a') if self.view != View::Frames => return self.add_menu(),
+            KeyCode::Char('E') if self.view != View::Frames => return self.edit(),
             KeyCode::Char('R') if self.view != View::Frames => {
                 return request(consent(
                     |nd| Command::Reload { non_disruptive: nd },
@@ -1419,7 +1449,50 @@ impl App {
         }
     }
 
-    fn say(&mut self, text: String) -> Action {
+    /// `E`: the selected bridge, TNC or adapter in `$EDITOR`, by
+    /// `ktbctl edit`; all of dynamic.toml with nothing selected.
+    fn edit(&mut self) -> Action {
+        let Some(s) = &self.status else {
+            return Action::None;
+        };
+        let (args, source, editable) = match self.view {
+            View::Tncs => {
+                let rows = self.tnc_rows();
+                match self.tnc_selected_index(&rows).map(|i| rows[i].0) {
+                    Some(TncRow::Tnc(i)) => {
+                        let t = &s.tncs[i];
+                        (
+                            vec!["tnc".into(), t.id.clone()],
+                            t.source.clone(),
+                            t.editable,
+                        )
+                    }
+                    Some(TncRow::Adapter(i)) => {
+                        let a = &s.adapters[i];
+                        let Some(id) = a.id.clone() else {
+                            return self.say(format!("{} has no id to edit; a names it", a.mac));
+                        };
+                        let source = a.source.clone().unwrap_or_default();
+                        let editable = source == "dynamic";
+                        (vec!["adapter".into(), id], source, editable)
+                    }
+                    None => (Vec::new(), String::new(), true),
+                }
+            }
+            _ => match self.selected_bridge() {
+                Some(b) => (vec![b.id.clone()], b.source.clone(), b.editable),
+                None => (Vec::new(), String::new(), true),
+            },
+        };
+        if !editable {
+            let id = args.last().cloned().unwrap_or_default();
+            self.dialog = Some(static_notice(&id, &source, "it can't be edited"));
+            return Action::None;
+        }
+        Action::Run(std::iter::once("edit".to_string()).chain(args).collect())
+    }
+
+    pub(super) fn say(&mut self, text: String) -> Action {
         self.message = Some((text, false));
         Action::None
     }
@@ -1436,6 +1509,18 @@ impl App {
             // Without them, pairing just says less.
             (Then::Models, Err(_)) => {}
             (Then::Pair, res) => self.paired(res),
+            // A mistake in a form goes back to it, to be put right.
+            (Then::Form(_), Err(CtlError::Api(e)))
+                if e.code != ErrorCode::ReloadWouldDisrupt && self.form.is_some() =>
+            {
+                if let Some(f) = &mut self.form {
+                    f.error = Some(e.message.clone());
+                }
+            }
+            (Then::Form(then), res) => {
+                self.form = None;
+                return self.on_answer(*then, res);
+            }
             (Then::Scan, res) => return self.scanned(res),
             (
                 Then::Consent {
@@ -1597,7 +1682,7 @@ pub fn adapter_label(a: &AdapterStatus) -> String {
 
 /// A change to send with `non_disruptive`, asking before it disconnects
 /// anyone.
-fn consent(make: impl Fn(bool) -> Command, title: &str, yes: &str, done: &str) -> Req {
+pub(super) fn consent(make: impl Fn(bool) -> Command, title: &str, yes: &str, done: &str) -> Req {
     Req {
         command: make(true),
         then: Then::Consent {

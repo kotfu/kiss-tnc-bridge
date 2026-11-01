@@ -19,16 +19,24 @@
 //! and frames. A state event means "read `status` again"; nothing is
 //! polled. Keys come from a thread of their own. If the daemon goes away,
 //! the TUI says so and tries again every 2 s.
+//!
+//! `ktbctl setup` and `ktbctl edit` run as they do from the shell: the TUI
+//! steps aside, runs them, and comes back.
 
+mod add;
 mod app;
 mod ui;
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TermEvent, KeyEvent, KeyEventKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::mpsc;
 
 use self::app::{Action, App, Link, Req, Then};
@@ -41,6 +49,9 @@ const TICK: Duration = Duration::from_millis(100);
 const RETRY: Duration = Duration::from_secs(2);
 
 pub async fn run(socket: &Path) -> Result<(), CtlError> {
+    // In raw mode Ctrl-C is a key. While setup runs it's a signal, for
+    // setup; this keeps it from ending the TUI as well.
+    let _sigint = signal(SignalKind::interrupt())?;
     let mut terminal = ratatui::try_init()?;
     let res = run_app(&mut terminal, socket).await;
     ratatui::restore();
@@ -53,11 +64,42 @@ enum Input {
     Resize,
 }
 
-/// Read the terminal on a thread of its own: crossterm's reads block.
-fn read_input() -> mpsc::UnboundedReceiver<Input> {
+/// The terminal, read on a thread of its own: crossterm's reads block.
+struct Keys {
+    rx: mpsc::UnboundedReceiver<Input>,
+    /// Asks the thread to leave the terminal alone.
+    pause: Arc<AtomicBool>,
+    /// The thread is leaving it alone.
+    parked: Arc<AtomicBool>,
+}
+
+impl Keys {
+    /// Stop reading the terminal, for something else to read it.
+    async fn pause(&self) {
+        self.pause.store(true, Ordering::SeqCst);
+        while !self.parked.load(Ordering::SeqCst) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    fn resume(&self) {
+        self.pause.store(false, Ordering::SeqCst);
+    }
+}
+
+fn read_input() -> Keys {
     let (tx, rx) = mpsc::unbounded_channel();
+    let pause = Arc::new(AtomicBool::new(false));
+    let parked = Arc::new(AtomicBool::new(false));
+    let (p, k) = (pause.clone(), parked.clone());
     std::thread::spawn(move || {
         loop {
+            if p.load(Ordering::SeqCst) {
+                k.store(true, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            k.store(false, Ordering::SeqCst);
             match event::poll(Duration::from_millis(200)) {
                 Ok(true) => {
                     let input = match event::read() {
@@ -76,7 +118,7 @@ fn read_input() -> mpsc::UnboundedReceiver<Input> {
             }
         }
     });
-    rx
+    Keys { rx, pause, parked }
 }
 
 /// The two connections to the daemon.
@@ -166,7 +208,7 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
                 None => (None, None),
             };
             tokio::select! {
-                i = input.recv() => Woke::Input(i),
+                i = input.rx.recv() => Woke::Input(i),
                 m = next(requests) => Woke::Request(m),
                 m = next(events) => Woke::Event(m),
                 _ = tick.tick() => Woke::Tick,
@@ -176,6 +218,15 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
             Woke::Input(None) => return Ok(()),
             Woke::Input(Some(Input::Key(k))) => {
                 let a = app.key(k);
+                if let Action::Run(args) = a {
+                    // Its connections go quiet meanwhile; start afresh.
+                    conn = None;
+                    let said = hand_off(terminal, &input, socket, &args).await?;
+                    app.link = Link::Connecting;
+                    app.message = Some(said);
+                    retry_at = Instant::now();
+                    continue;
+                }
                 match act(a, &mut app, &mut conn).await {
                     Ok(true) => return Ok(()),
                     Ok(false) => Ok(()),
@@ -221,11 +272,49 @@ async fn run_app(terminal: &mut DefaultTerminal, socket: &Path) -> Result<(), Ct
     }
 }
 
+/// Step aside for `ktbctl ARGS`: the terminal goes back to normal while it
+/// runs, and the TUI comes back after. What to say about it, and whether
+/// that's an error.
+async fn hand_off(
+    terminal: &mut DefaultTerminal,
+    input: &Keys,
+    socket: &Path,
+    args: &[String],
+) -> Result<(String, bool), CtlError> {
+    input.pause().await;
+    ratatui::restore();
+    let what = format!("'ktbctl {}'", args.join(" "));
+    let mut cmd = std::process::Command::new(std::env::current_exe()?);
+    cmd.arg("--socket").arg(socket).args(args);
+    let said = match tokio::task::spawn_blocking(move || cmd.status()).await {
+        Ok(Ok(s)) if s.success() => (format!("back from {what}"), false),
+        Ok(Ok(s)) => match s.code() {
+            Some(n) => (format!("{what} ended with exit status {n}"), true),
+            None => (format!("{what} was stopped"), false),
+        },
+        Ok(Err(e)) => (format!("couldn't run {what}: {e}"), true),
+        Err(e) => (format!("couldn't run {what}: {e}"), true),
+    };
+    // What it said last stays on the screen until the TUI is back.
+    print!("\nPress Enter to go back to the TUI. ");
+    let _ = std::io::stdout().flush();
+    let _ = tokio::task::spawn_blocking(|| {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)
+    })
+    .await;
+    *terminal = ratatui::try_init()?;
+    input.resume();
+    Ok(said)
+}
+
 /// Do what a key or an answer asks. True to quit.
 async fn act(action: Action, app: &mut App, conn: &mut Option<Conn>) -> Result<bool, CtlError> {
     match action {
         Action::Quit => Ok(true),
         Action::None => Ok(false),
+        // Only keys hand off, and the loop does that.
+        Action::Run(_) => Ok(false),
         Action::Request(req) => {
             let Req { command, then } = *req;
             match conn.as_mut() {

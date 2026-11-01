@@ -25,6 +25,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, List, ListItem, ListState, Paragraph, Wrap};
 use serde_json::Value;
 
+use super::add::{FieldValue, Form, Menu};
 use super::app::{
     App, Ask, Dialog, FrameRow, Link, Lower, Pairing, Row, SCAN_SECS, Scan, TncRow, View, links_to,
 };
@@ -66,6 +67,12 @@ pub fn draw(f: &mut Frame, app: &App, now: Instant, wall: SystemTime) {
     }
     if let Some(p) = app.pairing.as_ref().filter(|p| !p.hidden) {
         pairing(f, p);
+    }
+    if let Some(m) = &app.menu {
+        menu(f, m);
+    }
+    if let Some(form) = &app.form {
+        form_box(f, form);
     }
     if let Some(d) = &app.dialog {
         dialog(f, d);
@@ -246,7 +253,7 @@ fn bridges(f: &mut Frame, app: &App, s: &Status, now: Instant, wall: SystemTime)
             "   A bridge shares one TNC (a radio over Bluetooth or USB, or a KISS TCP",
             "   server) with apps over BLE, TCP or both.",
             "",
-            "   'ktbctl setup' sets one up, step by step.",
+            "   Press a to set one up, step by step.",
         ];
         f.render_widget(
             Paragraph::new(text.map(Line::raw).to_vec()).wrap(Wrap { trim: false }),
@@ -312,14 +319,14 @@ fn bridges(f: &mut Frame, app: &App, s: &Status, now: Instant, wall: SystemTime)
 
     let hint = match row {
         Some(Row::Bridge(_)) => {
-            "↑↓ move  e enable  d disable  s switch  - remove  R reload  ? help  q quit"
+            "↑↓ move  e enable  d disable  s switch  a add  - remove  ? help  q quit"
         }
         Some(Row::Port(b, p)) if s.bridges[b].ports[p].role != "app" => {
-            "↑↓ move  c connect  x disconnect  r release  - remove  ? help  q quit"
+            "↑↓ move  c connect  x disconnect  r release  a add  - remove  ? help  q quit"
         }
-        Some(Row::Port(..)) => "↑↓ move  - remove  R reload  Tab details  ? help  q quit",
+        Some(Row::Port(..)) => "↑↓ move  a add  - remove  E edit  Tab details  ? help  q quit",
         Some(Row::Session(..)) => "↑↓ move  k kick  Tab details  ? help  q quit",
-        None => "R reload  2 TNCs  3 frames  ? help  q quit",
+        None => "a add  2 TNCs  ? help  q quit",
     };
     keys(f, k, hint);
 }
@@ -643,7 +650,7 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
     // Where each row's item is in the list.
     let mut at = Vec::new();
     if s.tncs.is_empty() {
-        items.push(ListItem::new("   none yet: 'ktbctl setup' adds one"));
+        items.push(ListItem::new("   none yet: a adds one"));
     }
     for (row, _) in &rows {
         if let TncRow::Adapter(0) = row {
@@ -698,7 +705,7 @@ fn tncs(f: &mut Frame, app: &App, s: &Status) {
     keys(
         f,
         k,
-        "↑↓ move  p pair  u unpair  n scan  - remove  R reload  ? help  q quit",
+        "↑↓ move  p pair  u unpair  n scan  a add  - remove  E edit  ? help  q quit",
     );
 }
 
@@ -997,13 +1004,17 @@ fn help(f: &mut Frame, app: &App) {
             ("e d s", "enable, disable, switch to a bridge"),
             ("c x r", "connect, disconnect, release a TNC"),
             ("k", "kick an app's session"),
+            ("a", "add a bridge, port, TNC or adapter name"),
             ("-", "remove a bridge or port"),
+            ("E", "edit in $EDITOR (ktbctl edit)"),
             ("R", "reload the config file"),
         ]),
         View::Tncs => lines.extend([
             ("p u", "pair, unpair a TNC's radio"),
             ("n", "scan for Bluetooth devices"),
+            ("a", "add a bridge, TNC or adapter name"),
             ("-", "remove a TNC, or an adapter's id"),
+            ("E", "edit in $EDITOR (ktbctl edit)"),
             ("R", "reload the config file"),
         ]),
         View::Frames => lines.extend([
@@ -1303,6 +1314,96 @@ fn pairing(f: &mut Frame, p: &Pairing) {
             Block::bordered()
                 .title(Line::from(format!(" {} ", p.title)))
                 .title_bottom(Line::from(footer).right_aligned()),
+        ),
+        at,
+    );
+}
+
+// ── Adding ──────────────────────────────────────────────────────────────
+
+fn menu(f: &mut Frame, m: &Menu) {
+    let area = f.area();
+    let at = centered(area, 60, m.items.len() as u16 + 4);
+    let block = Block::bordered()
+        .title(" Add ")
+        .title_bottom(Line::from(" ⏎ choose  Esc cancel ").right_aligned());
+    let inner = block.inner(at);
+    f.render_widget(Clear, at);
+    f.render_widget(block, at);
+    let list = Rect {
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(2),
+        ..inner
+    };
+    let items: Vec<ListItem> = m
+        .items
+        .iter()
+        .map(|(text, _)| ListItem::new(format!("  {text}")))
+        .collect();
+    let mut state = ListState::default().with_selected(Some(m.selected));
+    f.render_stateful_widget(
+        List::new(items).highlight_style(Style::new().add_modifier(Modifier::REVERSED)),
+        list,
+        &mut state,
+    );
+}
+
+fn form_box(f: &mut Frame, form: &Form) {
+    let area = f.area();
+    let width = 64u16.min(area.width);
+    let w = width.saturating_sub(4) as usize;
+    let bold = Style::new().add_modifier(Modifier::BOLD);
+    let dim = Style::new().add_modifier(Modifier::DIM);
+    let mut text = vec![Line::raw("")];
+    for i in form.visible() {
+        let field = &form.fields[i];
+        let focused = i == form.focus;
+        let label = Span::styled(
+            format!("  {:<9} ", field.label),
+            if focused { bold } else { Style::new() },
+        );
+        let value = match (&field.value, focused) {
+            (FieldValue::Choice(..), true) => format!("◂ {} ▸", field.shown()),
+            (FieldValue::Choice(..), false) => format!("  {}", field.shown()),
+            (FieldValue::Text(t), true) => format!("  {t}_"),
+            (FieldValue::Text(t), false) => format!("  {t}"),
+        };
+        let room = w.saturating_sub(12);
+        let mut spans = vec![label, Span::raw(fit(&value, room))];
+        let used = value.chars().count();
+        if !field.note.is_empty() && used + 2 + field.note.chars().count() <= room {
+            spans.push(Span::styled(format!("  {}", field.note), dim));
+        }
+        text.push(Line::from(spans));
+    }
+    if let Some(warn) = form.warning() {
+        text.push(Line::raw(""));
+        text.extend(indented(&warn, "  ", w).into_iter().map(Line::raw));
+    }
+    if let Some(e) = &form.error {
+        text.push(Line::raw(""));
+        for (i, l) in wrap(e, w.saturating_sub(4)).into_iter().enumerate() {
+            let lead = if i == 0 { "✗ " } else { "  " };
+            text.push(Line::styled(
+                format!("  {lead}{l}"),
+                Style::new().fg(Color::Red),
+            ));
+        }
+    }
+    text.push(Line::raw(""));
+    text.push(Line::from(vec![
+        Span::raw("        "),
+        Span::styled("[ ⏎ Add ]", bold),
+        Span::raw("     [ Esc Cancel ]"),
+    ]));
+    text.push(Line::raw(""));
+    let at = centered(area, width, text.len() as u16 + 2);
+    f.render_widget(Clear, at);
+    f.render_widget(
+        Paragraph::new(text).block(
+            Block::bordered()
+                .title(Line::from(format!(" {} ", form.title)))
+                .title_bottom(Line::from(" ↑↓ field  ←→ choose ").right_aligned()),
         ),
         at,
     );
@@ -1681,5 +1782,58 @@ mod tests {
         println!("{all}");
         assert!(has(&s, "✓ Paired and trusted on hci0"), "{all}");
         assert!(has(&s, " ⏎ close ┘"), "{all}");
+    }
+
+    #[test]
+    fn the_add_menu_forms_and_no_bridges() {
+        let mut app = app();
+        let k = |c| KeyEvent::new(c, KeyModifiers::NONE);
+        app.selected = Some("ktbr1".into());
+        app.key(k(KeyCode::Char('a')));
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(has(&s, "┌ Add "), "{all}");
+        assert!(
+            has(&s, "A bridge for a TNC, step by step (ktbctl setup)"),
+            "{all}"
+        );
+        assert!(has(&s, "A port on ktbr1"), "{all}");
+
+        app.key(k(KeyCode::Down));
+        app.key(k(KeyCode::Enter));
+        app.key(k(KeyCode::Right));
+        app.key(k(KeyCode::Down));
+        app.key(k(KeyCode::Down));
+        for _ in 0..4 {
+            app.key(k(KeyCode::Backspace));
+        }
+        for c in "wlan0:8002".chars() {
+            app.key(k(KeyCode::Char(c)));
+        }
+        let s = screen(&app);
+        let all = s.join("\n");
+        println!("{all}");
+        assert!(has(&s, "┌ Add a port to ktbr1 "), "{all}");
+        assert!(has(&s, "Type        tcp-server"), "{all}");
+        assert!(has(&s, "Id          lan2"), "{all}");
+        assert!(has(&s, "Listen      wlan0:8002_"), "{all}");
+        assert!(has(&s, "(empty: anyone)"), "{all}");
+        assert!(
+            has(&s, "Anyone who can reach wlan0:8002 can transmit"),
+            "{all}"
+        );
+        assert!(has(&s, "[ ⏎ Add ]     [ Esc Cancel ]"), "{all}");
+
+        let mut none = App::new("aprscc".into());
+        none.link = Link::Up;
+        let mut st = status();
+        st.bridges.clear();
+        none.set_status(st);
+        let s = screen(&none);
+        let all = s.join("\n");
+        assert!(has(&s, "No bridges yet."), "{all}");
+        assert!(has(&s, "Press a to set one up, step by step."), "{all}");
+        assert!(has(&s, "a add  2 TNCs  ? help  q quit"), "{all}");
     }
 }

@@ -27,12 +27,10 @@ The rest are small forms in a dialog. A port, for example:
 
       ┌ Add a port to ktbr1 ─────────────────────────────────────┐
       │                                                          │
-      │  Type    > ble-server   tcp-server   tcp-client          │
-      │            spp-client   serial                           │
-      │                                                          │
-      │  Id        lan2                                          │
-      │  Listen    wlan0:8002                                    │
-      │  Allow     192.168.1.0/24          (empty: anyone)       │
+      │  Type      ◂ tcp-server ▸                                │
+      │  Id          lan2                                        │
+      │  Listen      wlan0:8002                                  │
+      │  Allow         (empty: anyone)                           │
       │                                                          │
       │  Anyone who can reach wlan0:8002 can transmit through    │
       │  your radio, under your callsign.                        │
@@ -41,7 +39,8 @@ The rest are small forms in a dialog. A port, for example:
       └──────────────────────────────────────────────────────────┘
 
 The fields follow the type: an spp-client or serial port picks
-its TNC from a list, a ble-server its adapter.
+its TNC from a list, a ble-server its adapter. ↑↓ move between fields,
+←→ change a choice, and the id follows the type until it's typed in.
 
 E (on anything dynamic) does the same hand-off to `ktbctl edit`, in
 $EDITOR, for everything a form doesn't cover.

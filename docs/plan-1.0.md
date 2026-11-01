@@ -1733,9 +1733,12 @@ the TUI.
 - [ ] Revisit `ktbctl status` output: on the Pi it worked but was hard to
       follow at first. Specific changes held until there's more use of it.
 - [x] Mock up the TUI (`docs/tui-mockups/`) and settle its open questions.
-- [ ] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
+- [x] `ktbctl tui`: tree view, activity squares, frame pane, actions, pairing
       dialog, works at 80×24 over SSH; it reconnects when the daemon
-      restarts, as `monitor` does.
+      restarts, as `monitor` does. Adding a bridge hands off to `setup`,
+      and `E` to `edit`; small forms add a port, an empty bridge, a TNC
+      and an adapter name. Not yet: setting up a scanned device as a new
+      TNC straight from the scan box (`setup` would need to take it).
 
 - [ ] **Deferred: BLE TNCs** (a `ble-client` TNC port). Some radios'
       built-in TNCs are reached over Bluetooth LE rather than Classic SPP
