@@ -80,7 +80,8 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   `max_clients` no longer admit are disconnected. An invalid config is
   rejected and the running bridges carry on.
 - The control API: a Unix socket (`/run/kiss-tnc-bridge/control.sock`,
-  group `kiss-tnc-bridge`) speaking newline-delimited JSON, documented in
+  group `kiss-tnc-bridge`, which the deb and rpm packages create) speaking
+  newline-delimited JSON, documented in
   `docs/control-api.md` with a published JSON Schema. `status`; events for
   state changes, activity and frames (with AX.25 headers decoded for
   display); `reload` and `config.check` with the plan they'd apply and
