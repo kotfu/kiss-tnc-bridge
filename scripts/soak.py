@@ -111,13 +111,19 @@ class Client(threading.Thread):
                     s.settimeout(None)
                     self.connects += 1
                     in_frame = False
+                    empty = True
                     while chunk := s.recv(4096):
                         for byte in chunk:
-                            # A frame is the bytes between two FENDs.
+                            # A frame is the bytes between two FENDs. Frames
+                            # come as FEND data FEND, so back-to-back FENDs
+                            # hold nothing and don't count.
                             if byte == 0xC0:
-                                if in_frame:
+                                if in_frame and not empty:
                                     self.frames += 1
                                 in_frame = True
+                                empty = True
+                            else:
+                                empty = False
             except OSError:
                 pass
             time.sleep(5)
