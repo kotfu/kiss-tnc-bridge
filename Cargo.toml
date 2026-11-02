@@ -73,3 +73,5 @@ assets = [
     { source = "70-kiss-tnc-bridge.rules", dest = "/usr/lib/udev/rules.d/70-kiss-tnc-bridge.rules", mode = "644" },
 ]
 requires = { bluez = "*" }
+pre_install_script = "rpm/pre-install.sh"
+post_install_script = "rpm/post-install.sh"

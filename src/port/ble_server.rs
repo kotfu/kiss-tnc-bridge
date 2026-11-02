@@ -61,6 +61,11 @@ const DISCONNECT_WAIT: Duration = Duration::from_secs(2);
 /// enough for a phone that's just connected to subscribe, which takes a
 /// second or two.
 const LINK_GRACE: Duration = Duration::from_secs(10);
+/// After a phone's link drops, how long to wait before advertising again.
+/// The kernel starts a newly registered advertisement at once only when its
+/// instance-rotation timer isn't running, and it runs for 2 seconds (the
+/// kernel's default rotation interval) after each advertisement starts.
+const ADV_ROTATION_WAIT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BleState {
@@ -105,6 +110,8 @@ enum BleEvent {
     Check { addr: Address },
     /// A phone's link watcher ended (its device went away).
     Unwatched { addr: Address },
+    /// A phone the port has served dropped its link.
+    LinkDown { addr: Address },
 }
 
 struct Client {
@@ -201,6 +208,9 @@ impl BleServerPort {
         let mut follow_max = true;
         // Phones the port has served, whose links it watches.
         let mut watched: HashSet<Address> = HashSet::new();
+        // When to advertise again after a phone's link dropped; nothing else
+        // registers an advertisement until then.
+        let mut refresh_at: Option<tokio::time::Instant> = None;
 
         loop {
             tokio::select! {
@@ -216,7 +226,7 @@ impl BleServerPort {
                         if adv.take().is_some() {
                             state_tx.send_replace(BleState::Full);
                         }
-                    } else if adv.is_none() {
+                    } else if adv.is_none() && refresh_at.is_none() {
                         match self.advertise(&public_name).await {
                             Ok(h) => {
                                 adv = Some(h);
@@ -224,6 +234,20 @@ impl BleServerPort {
                             }
                             Err(e) => tracing::error!(bridge = %self.bridge_id, port = %self.port_id, "can't resume advertising: {e}"),
                         }
+                    }
+                }
+                _ = tokio::time::sleep_until(refresh_at.unwrap_or_else(tokio::time::Instant::now)), if refresh_at.is_some() => {
+                    refresh_at = None;
+                    if clients.len() < max {
+                        match self.advertise(&public_name).await {
+                            Ok(h) => {
+                                adv = Some(h);
+                                state_tx.send_replace(BleState::Advertising);
+                            }
+                            Err(e) => tracing::error!(bridge = %self.bridge_id, port = %self.port_id, "can't resume advertising: {e}"),
+                        }
+                    } else {
+                        state_tx.send_replace(BleState::Full);
                     }
                 }
                 res = name_rx.changed(), if follow_name => {
@@ -324,6 +348,24 @@ impl BleServerPort {
                             }
                             continue;
                         }
+                        BleEvent::LinkDown { addr } => {
+                            // When a phone's link drops, the kernel turns
+                            // advertising back on for the advertisement the
+                            // phone connected through. If that one is gone
+                            // (replaced, or withdrawn at max_clients), it
+                            // falls back to the adapter's defaults:
+                            // non-connectable, from a random address, with no
+                            // scan response, so no name. Controllers with
+                            // legacy advertising, like the Pi 4's, then
+                            // advertise that over ours. Withdrawing ours
+                            // stops advertising altogether, and a new one,
+                            // once the kernel will start it at once (see
+                            // ADV_ROTATION_WAIT), has its own settings again.
+                            tracing::debug!(bridge = %self.bridge_id, port = %self.port_id, %addr, "a phone's link dropped, advertising afresh shortly");
+                            adv = None;
+                            refresh_at = Some(tokio::time::Instant::now() + ADV_ROTATION_WAIT);
+                            continue;
+                        }
                     };
                     let current = clients.get(&addr).map(|c| c.generation);
                     if current != Some(g) {
@@ -342,7 +384,7 @@ impl BleServerPort {
                     if watched.insert(addr) {
                         tokio::spawn(watch_link(self.adapter.clone(), addr, ev_tx.clone(), self.shutdown.clone()));
                     }
-                    if clients.len() < max && adv.is_none() {
+                    if clients.len() < max && adv.is_none() && refresh_at.is_none() {
                         match self.advertise(&public_name).await {
                             Ok(h) => {
                                 adv = Some(h);
@@ -682,7 +724,8 @@ async fn writer_task(
 
 /// Watch the link of a phone the port has served, for as long as the port
 /// runs: every [`LINK_GRACE`] that it's connected, ask the port to check it
-/// has a session ([`BleEvent::Check`]).
+/// has a session ([`BleEvent::Check`]), and say when the link drops
+/// ([`BleEvent::LinkDown`]).
 async fn watch_link(
     adapter: Adapter,
     addr: Address,
@@ -719,6 +762,7 @@ async fn link_checks(
                     ev = events.next() => {
                         if let DeviceEvent::PropertyChanged(DeviceProperty::Connected(false)) = ev? {
                             connected = false;
+                            ev_tx.send(BleEvent::LinkDown { addr }).await.ok()?;
                             break;
                         }
                     }

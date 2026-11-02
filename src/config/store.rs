@@ -288,6 +288,7 @@ impl DynamicStore {
                 }
             }
         }
+        renumber(&mut self.doc);
     }
 
     /// Remove the object with `id`; whether there was one.
@@ -328,6 +329,29 @@ impl DynamicStore {
         self.on_disk = Some(revision(&text));
         Ok(())
     }
+}
+
+/// Number every table in `doc` in the order it's nested. toml_edit writes
+/// tables in the order of their positions, and a table put in from
+/// elsewhere (an object parsed from its own text, edited) keeps the
+/// positions it had there: a second bridge's `[[bridge.port]]`s would be
+/// written before its `[[bridge]]`, and read back as the first bridge's.
+fn renumber(doc: &mut DocumentMut) {
+    fn walk(table: &mut Table, next: &mut isize) {
+        for (_, item) in table.iter_mut() {
+            let tables: Vec<&mut Table> = match item {
+                Item::Table(t) => vec![t],
+                Item::ArrayOfTables(a) => a.iter_mut().collect(),
+                _ => continue,
+            };
+            for t in tables {
+                t.set_position(Some(*next));
+                *next += 1;
+                walk(t, next);
+            }
+        }
+    }
+    walk(doc.as_table_mut(), &mut 0);
 }
 
 #[cfg(test)]
@@ -398,6 +422,80 @@ name = "Shack relay"   # kept as written
         assert!(store.remove(Kind::Bridge, "ktbr2"));
         assert!(!store.remove(Kind::Bridge, "ktbr2"));
         assert!(!store.text().contains("bridge"));
+    }
+
+    #[test]
+    fn an_edited_bridge_keeps_its_ports() {
+        // As on wolfcub: the second of two bridges, got, edited and put
+        // back. Its ports came out under the first.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dynamic.toml");
+        let two = r#"[[bridge]]
+name = "One"
+id = "ktbr0"
+
+[[bridge.port]]
+id = "radio"
+type = "tcp-client"
+address = "192.168.4.1:8001"
+
+[[bridge.port]]
+id = "lan"
+type = "tcp-server"
+listen = "8001"
+
+[[bridge]]
+name = "Two"
+id = "ktbr1"
+
+[[bridge.port]]
+id = "radio"
+type = "tcp-client"
+address = "192.168.4.2:8001"
+
+[[bridge.port]]
+id = "phones"
+type = "ble-server"
+"#;
+        std::fs::write(&path, two).unwrap();
+        let mut store = DynamicStore::open(&path).unwrap();
+        for id in ["ktbr1", "ktbr0"] {
+            let edited = store.get(Kind::Bridge, id).unwrap().replace(
+                "type = \"ble-server\"",
+                "type = \"ble-server\"\nmax_clients = 2",
+            );
+            store.put(
+                Kind::Bridge,
+                id,
+                DynamicStore::parse_object(Kind::Bridge, &edited).unwrap(),
+            );
+            let parsed = crate::config::load::parse_str(&store.text()).unwrap();
+            let ports = |i: usize| -> Vec<String> {
+                parsed.bridge[i]
+                    .ports
+                    .iter()
+                    .map(|p| p.id().unwrap_or_default().to_string())
+                    .collect()
+            };
+            assert_eq!(parsed.bridge.len(), 2, "{}", store.text());
+            assert_eq!(ports(0), ["radio", "lan"], "{}", store.text());
+            assert_eq!(ports(1), ["radio", "phones"], "{}", store.text());
+        }
+        assert!(store.text().contains("max_clients = 2"));
+        // A new one goes after them.
+        let three = two
+            .split("[[bridge]]")
+            .nth(2)
+            .unwrap()
+            .replace("ktbr1", "ktbr2");
+        store.put(
+            Kind::Bridge,
+            "ktbr2",
+            DynamicStore::parse_object(Kind::Bridge, &format!("[[bridge]]{three}")).unwrap(),
+        );
+        let parsed = crate::config::load::parse_str(&store.text()).unwrap();
+        assert_eq!(parsed.bridge[2].ports.len(), 2, "{}", store.text());
+        assert_eq!(parsed.bridge[0].ports.len(), 2, "{}", store.text());
     }
 
     #[test]
