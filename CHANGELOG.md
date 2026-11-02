@@ -152,9 +152,15 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   phone it has served that stays connected without a session (checked
   every 10 s).
 - A second phone can find the bridge while one is connected, on
-  controllers that can advertise while connected (such as the RTL8761B):
+  controllers that can advertise while connected (such as the Raspberry
+  Pi 4's built-in chip and the RTL8761B):
   the daemon registers a new advertisement each time a phone connects,
   since the kernel brings the old one back only when that phone leaves.
+- When a phone leaves, other phones can still connect. On controllers with
+  legacy advertising, such as the Raspberry Pi 4's built-in chip, the kernel
+  replaced the bridge's advertisement with a nameless one phones couldn't
+  connect to; the daemon now advertises afresh a few seconds after a phone's
+  link drops.
 
 ## 0.5.1 (30 May 2026)
 
