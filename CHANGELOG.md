@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased (1.0 in progress)
+## 1.0.0 (2 November 2026)
 
-The 1.0 work in [docs/plan-1.0.md](docs/plan-1.0.md) lands on `main` in
-phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
+A rewrite around bridges and ports, with a new TOML configuration and
+`ktbctl` to manage the running daemon. The 0.5 config is not read or
+migrated; "Coming from 0.5" in the README shows the equivalent TOML.
 
 ### Changed
 
@@ -21,9 +22,10 @@ phases; nothing is released until 1.0.0. The 0.5 config is not migrated.
   writer; frames from the TNC are broadcast to every app; apps never hear
   each other.
 - The TNC connection no longer blocks BLE handling: connecting runs in its
-  own task with exponential backoff, uplink frames are queued while it
-  comes up, and a flood from one app backs up to that app instead of
-  being dropped.
+  own task with exponential backoff, retrying when the first connect fails
+  ([#2](https://github.com/kotfu/kiss-tnc-bridge/issues/2)), uplink frames
+  are queued while it comes up, and a flood from one app backs up to that
+  app instead of being dropped.
 - The KISS "return" command (`C0 FF C0`) from an app is dropped;
   `app_params = "drop"` also drops KISS parameter commands.
 - Each `ble-server` port registers its own GATT application and

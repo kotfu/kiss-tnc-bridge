@@ -108,11 +108,6 @@ This project uses [Semantic Versioning](https://semver.org/). Applied to this pr
 
 ## Creating a release
 
-> **No releases while 1.0 is in progress.** Once the 1.0 work in
-> [docs/plan-1.0.md](docs/plan-1.0.md) starts landing on `main`, `main` can't
-> be released until 1.0 is done. Fixes for 0.5 users go on a `0.5.x` branch;
-> see the plan for details.
-
 Releases are created using [cargo-release](https://github.com/crate-ci/cargo-release).
 Install it once with:
 

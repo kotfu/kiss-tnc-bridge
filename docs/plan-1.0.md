@@ -1,6 +1,6 @@
 # kiss-tnc-bridge 1.0 plan
 
-Status: draft, October 2026
+Status: done; released as 1.0.0 on 2 November 2026
 
 ## Goal
 
@@ -1754,16 +1754,21 @@ the TUI.
 
 ### Phase 5: Hardening → release 1.0.0
 
-- [ ] Soak test: 24 h on a Pi Zero 2 W with a D75, two BLE clients and one TCP
+- [x] Soak test: 24 h on a Pi Zero 2 W with a D75, two BLE clients and one TCP
       client, checking memory, reconnects, and that no frames are lost while
-      the TNC is up. Repeat over USB.
-- [ ] Check the daemon's footprint on a Pi 1 (armhf) still fits the README's
-      "~5MB" claim.
-- [ ] Stretch: `spp-server` for Android SPP apps.
-- [ ] Rewrite the README around bridges and ports, with new architecture
+      the TNC is up. Repeat over USB. Done instead for 13 h on a Pi Model B+
+      (no Zero 2 W to hand), the D75 over Bluetooth, an iPad and an iPhone
+      over BLE and a TCP client: memory flat, one TNC connect, no frames
+      lost. Not repeated over USB.
+- [x] Check the daemon's footprint on a Pi 1 (armhf) still fits the README's
+      "~5MB" claim. 8 MB resident and under 1% of the CPU on the Model B+;
+      the README says so.
+- [ ] Stretch: `spp-server` for Android SPP apps. Moved to 1.x.
+- [x] Rewrite the README around bridges and ports, with new architecture
       diagrams and a "coming from 0.5" section showing the equivalent TOML.
+      The architecture is in `docs/architecture.md`.
 - [ ] Flipper One validation, if hardware is available by then. Otherwise 1.0
-      ships for Pi and the Flipper work moves to 1.x.
+      ships for Pi and the Flipper work moves to 1.x. Moved to 1.x.
 
 ### Phase 6: `ktb-gateway` (1.x)
 
