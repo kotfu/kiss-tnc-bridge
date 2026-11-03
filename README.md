@@ -993,11 +993,37 @@ Here's why:
   `dongle (AC:A7:F1:29:9C:7F)`. A port given a bare MAC is shown the same
   way when an `[[adapter]]` has that MAC.
 
-`ktbctl adapter list` shows the adapters on the computer and their MACs
-(`bluetoothctl list` does too). `ktbctl adapter add dongle --mac
-AC:A7:F1:29:9C:7F` defines an adapter in dynamic config. Static config can't
+**Finding an adapter's MAC.** With the daemon running, `ktbctl adapter list`
+shows every adapter on the computer, with its MAC and what it is. On a
+Raspberry Pi 4 with a USB dongle plugged in:
+
+```
+$ ktbctl adapter list
+Adapters
+  -          hci0   2C:CF:67:6E:2E:BC  powered  built into the board
+  -          hci1   AC:A7:F1:29:9C:7F  powered  USB: TP-Link UB500 Adapter
+```
+
+The chip on the Pi's board says `built into the board`, and a dongle says
+`USB` with its name. The first column is the adapter's `[[adapter]]` id, or
+`-` until you give it one. `ktbctl adapter add builtin --mac
+2C:CF:67:6E:2E:BC` gives it one in dynamic config. Static config can't
 refer to dynamic objects, so a bridge in `/etc` that should use an id needs
 the `[[adapter]]` defined in `/etc` too (or a MAC instead).
+
+Without the daemon, `bluetoothctl list` shows each adapter's MAC but not
+which is which. `readlink -f /sys/class/bluetooth/hci0` tells them apart:
+the Pi's own chip is attached to a serial port, so its path runs through
+`serial`, and a dongle's runs through `usb`. Then `btmgmt --index 0 info`
+shows the MAC of `hci0` (`--index 1` for `hci1`) on its second line:
+
+```
+$ readlink -f /sys/class/bluetooth/hci0
+/sys/devices/platform/soc/fe201000.serial/fe201000.serial:0/fe201000.serial:0.0/serial0/serial0-0/bluetooth/hci0
+$ btmgmt --index 0 info
+hci0:	Primary controller
+	addr 2C:CF:67:6E:2E:BC version 9 manufacturer 305 class 0x6c0000
+```
 
 ### Configuration reference
 
@@ -1025,7 +1051,7 @@ configuration will be easier to read and modify if you define an adapter with a 
 | Key | Description |
 |-----|-------------|
 | `adapter.id` | Lowercase letters, digits and `-`, at most 15 characters |
-| `adapter.mac` | The adapter's address, `XX:XX:XX:XX:XX:XX` (`ktbctl adapter list` or `bluetoothctl list` shows them) |
+| `adapter.mac` | The adapter's address, `XX:XX:XX:XX:XX:XX`; see [Finding an adapter's MAC](#referencing-a-bluetooth-adapter) |
 
 **`[[tnc]]`** is a hardware KISS TNC and the ways to reach it. A TNC can be
 in only one enabled bridge, over whichever transport.
@@ -1503,7 +1529,8 @@ tell, all these common adapters use that chipset:
 - Plugable USB Bluetooth 5 Adapter
 
 If you plug in one of these USB Bluetooth adapters to a computer that already has a built-in
-adapter, `ktbctl adapter list` shows each adapter's address. Give them ids with
+adapter, `ktbctl adapter list` shows each adapter's address and which one is built in (see
+[Referencing a Bluetooth adapter](#referencing-a-bluetooth-adapter)). Give them ids with
 `[[adapter]]` (or `ktbctl adapter add`) so each port uses the adapter you mean; `hciN`
 numbers can swap when adapters are plugged in.
 
