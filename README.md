@@ -243,7 +243,7 @@ one **TNC port**, and one or more **app ports**, where apps who want to use the 
 | Port type | Role | What it connects |
 |---|---|---|
 | `spp-client` | TNC | A TNC over Bluetooth Classic using the Serial Port Profile, such as a TH-D75 |
-| `ble-client` | TNC | A TNC over Bluetooth LE using the BLE KISS API, such as an Ailunce HA2 |
+| `ble-client` | TNC | A TNC over Bluetooth LE: the BLE KISS API, such as an Ailunce HA2, or a radio's own KISS service, such as a TIDRADIO TD-H9's |
 | `serial` | TNC | A TNC on a USB or UART serial device |
 | `tcp-client` | TNC | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem |
 | `ble-server` | app | Phones and tablets, over Bluetooth LE |
@@ -509,9 +509,10 @@ that it doesn't meet your needs, here's some things this project doesn't do:
 - It isn't a TNC, digipeater or iGate itself. It shares a TNC you already
   have. Use Dire Wolf or Graywolf for those jobs, and the bridge to share
   them.
-- It connects to BLE TNCs only if they follow the
-  [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
-  A radio with its own GATT layout instead can't be used over BLE yet.
+- It connects to BLE TNCs that follow the
+  [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md),
+  and to radios with their own GATT layout only when there's a model for
+  them (the TIDRADIO TD-H9 so far).
 - Apps can reach it over BLE or KISS over TCP, not over Bluetooth Classic,
   and not with the AGWPE protocol. An Android app that only knows
   Bluetooth Classic TNCs can't connect to it yet; use TCP if the app has
@@ -1459,6 +1460,14 @@ default) the bridge lets go of the radio when the last app leaves (after
 UV-PRO and Vero VR-N76 are expected to work the same way, but haven't been
 tested yet.
 
+Some radios carry plain KISS over a GATT service of their own instead of
+the BLE KISS API's, and need their `model` so the bridge knows where to
+look. The TIDRADIO TD-H9 is one: set `model = "td-h9"` in its `[[tnc]]`.
+It doesn't advertise a KISS service, and its name can be changed in its
+menus, so `ktbctl scan --le` lists every named Bluetooth LE device nearby;
+pick it by address. `ktbctl setup` sets the model when you choose
+"TIDRADIO TD-H9" from its list of radios.
+
 With the generic model the bridge sends the TNC nothing, so it can't tell a
 TNC that's quiet from one that isn't working. If apps hear nothing,
 `ktbctl status` and `ktbctl monitor` show whether anything is arriving
@@ -1473,6 +1482,7 @@ and `ktbctl tnc models` list the models.
 | `tnc.model` | For | What it does |
 |---|---|---|
 | `generic` (default) | Any TNC that's always in KISS mode: NinoTNC, TNC-Pi, Mobilinkd | Nothing beyond KISS. With `bridge.port.exit_kiss_on_disconnect`, sends KISS "return" (`C0 FF C0`) when the bridge lets go |
+| `td-h9` | TIDRADIO TD-H9 | KISS over BLE on TIDRADIO's own GATT service (`af00`) instead of the BLE KISS API's; otherwise like `generic` |
 | `th-d74`, `th-d75` | Kenwood TH-D74 and TH-D75 | Switches the TNC to KISS mode at every connect; fails with a pointer to menu 983 if KISS is on the other interface; reconnects if the radio stops answering (as it does after a USB replug); with `bridge.port.exit_kiss_on_disconnect`, puts the TNC back in the mode it was found in |
 
 Radios that need commands of their own get a new model once someone can

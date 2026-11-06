@@ -82,7 +82,7 @@ pub async fn init<S: AsyncRead + AsyncWrite + Unpin>(
     model: TncModel,
 ) -> Result<InitOutcome, Error> {
     match model {
-        TncModel::Generic => Ok(InitOutcome {
+        TncModel::Generic | TncModel::TdH9 => Ok(InitOutcome {
             exit_kiss: vec![KISS_RETURN.to_vec()],
             ..Default::default()
         }),

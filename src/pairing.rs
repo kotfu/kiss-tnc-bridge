@@ -51,7 +51,10 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
 }
 
 /// Look for devices on `adapter` for `seconds`, or until `stop`: Bluetooth
-/// Classic devices, or LE devices advertising the BLE KISS service. Each device goes to `found` as it's heard, and again when
+/// Classic devices, or LE devices with a name. LE isn't filtered on the
+/// BLE KISS service, because some radios (the TD-H9) don't advertise the
+/// service their KISS link is on, nor on names, which radios let users
+/// change. Each device goes to `found` as it's heard, and again when
 /// there's news about it (its name came in). Returns them all, likely TNCs
 /// first, then the strongest signal. `tnc_for` names the TNC already
 /// defined at an address.
@@ -75,7 +78,6 @@ pub async fn scan(
             },
             ScanTransport::Le => DiscoveryFilter {
                 transport: DiscoveryTransport::Le,
-                uuids: std::iter::once(KISS_SERVICE_UUID).collect(),
                 ..Default::default()
             },
         })
@@ -99,7 +101,8 @@ pub async fn scan(
                 let Some(d) = device(adapter, addr, &tnc_for).await else {
                     continue;
                 };
-                if d.rssi.is_none() {
+                // LE is full of nameless beacons; a TNC has a name.
+                if d.rssi.is_none() || (transport == ScanTransport::Le && d.name.is_none()) {
                     continue;
                 }
                 match heard.iter_mut().find(|h| h.address == d.address) {
@@ -140,7 +143,13 @@ async fn device(
 ) -> Option<BtDevice> {
     let dev = adapter.device(addr).ok()?;
     let name = dev.name().await.ok().flatten();
-    let known = known_tnc(name.as_deref());
+    let kiss_api = dev
+        .uuids()
+        .await
+        .ok()
+        .flatten()
+        .is_some_and(|u| u.contains(&KISS_SERVICE_UUID));
+    let known = known_tnc(name.as_deref()).or(kiss_api.then_some(("BLE KISS TNC", "generic")));
     Some(BtDevice {
         address: addr.to_string(),
         rssi: dev.rssi().await.ok().flatten(),

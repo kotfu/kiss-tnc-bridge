@@ -331,8 +331,11 @@ otherwise).
 in pairing mode to be found. Only devices heard during the scan are
 listed, so a paired radio that's switched off isn't, though BlueZ still
 knows it. With `"transport": "le"` it looks over Bluetooth LE instead, for
-TNCs advertising the BLE KISS service (`ble-client` TNCs); the default is
-`"classic"`.
+`ble-client` TNCs: it lists every LE device with a name, those advertising
+the BLE KISS service (`known_tnc` "BLE KISS TNC") and radios the daemon
+knows first. It doesn't filter on the service, because some radios (the
+TIDRADIO TD-H9) don't advertise the one their KISS link is on. The default
+is `"classic"`.
 
 ```jsonc
 [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,

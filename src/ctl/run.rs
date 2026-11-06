@@ -153,8 +153,9 @@ impl Ctl {
                 if !self.json {
                     if le {
                         eprintln!(
-                            "Looking for {seconds} s for BLE KISS TNCs. A TNC that something \
-                             else is connected to doesn't advertise, so it won't be found."
+                            "Looking for {seconds} s for Bluetooth LE devices, TNCs first. A TNC \
+                             that something else is connected to doesn't advertise, so it won't \
+                             be found."
                         );
                     } else {
                         eprintln!(

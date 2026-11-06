@@ -857,8 +857,8 @@ pub enum ScanTransport {
     /// Bluetooth Classic: radios in pairing mode, for `spp-client`.
     #[default]
     Classic,
-    /// Bluetooth LE: TNCs advertising the BLE KISS service, for
-    /// `ble-client`.
+    /// Bluetooth LE, for `ble-client`: every LE device with a name, those
+    /// advertising the BLE KISS service and radios the daemon knows first.
     Le,
 }
 

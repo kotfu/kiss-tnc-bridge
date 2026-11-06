@@ -454,7 +454,7 @@
             },
             {
               "const": "le",
-              "description": "Bluetooth LE: TNCs advertising the BLE KISS service, for\n`ble-client`.",
+              "description": "Bluetooth LE, for `ble-client`: every LE device with a name, those\nadvertising the BLE KISS service and radios the daemon knows first.",
               "type": "string"
             }
           ]
