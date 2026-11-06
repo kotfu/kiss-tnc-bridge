@@ -19,6 +19,10 @@
 //! it connects to the TNC, subscribes to the RX characteristic, and writes
 //! frames to the TX characteristic.
 //!
+//! Some radios carry plain KISS on a GATT service of their own instead;
+//! the TNC's `model` picks the service and characteristics (see
+//! [`GattProfile`]). The TIDRADIO TD-H9 is one.
+//!
 //! Both characteristics go through BlueZ's file-descriptor I/O
 //! (`AcquireNotify` and `AcquireWrite`), like the `ble-server` side, so the
 //! link is a byte stream with no D-Bus call per notification. Writes are
@@ -43,6 +47,7 @@ use bluer::{
 };
 use futures::StreamExt;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use uuid::Uuid;
 
 use crate::bluetooth;
 use crate::bridge::{ConnectFuture, Opened, TncConnector};
@@ -58,6 +63,43 @@ const DISCOVER_TIMEOUT: Duration = Duration::from_secs(15);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Longest BlueZ may take to read the TNC's GATT services once connected.
 const RESOLVE_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Where a TNC's KISS link is in GATT: a service with a characteristic
+/// the bridge writes frames to and one it gets them from as notifications.
+#[derive(Debug, PartialEq, Eq)]
+pub struct GattProfile {
+    pub service: Uuid,
+    /// App → TNC.
+    pub tx: Uuid,
+    /// TNC → app.
+    pub rx: Uuid,
+    /// For errors: what the service is.
+    what: &'static str,
+}
+
+/// The [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
+pub const KISS_API: GattProfile = GattProfile {
+    service: KISS_SERVICE_UUID,
+    tx: KISS_TX_CHAR_UUID,
+    rx: KISS_RX_CHAR_UUID,
+    what: "the BLE KISS service",
+};
+
+/// The TIDRADIO TD-H9: plain KISS, with every frame padded with extra
+/// FENDs (which reassembly skips).
+pub const TD_H9: GattProfile = GattProfile {
+    service: Uuid::from_u128(0x0000af00_0000_1000_8000_00805f9b34fb),
+    tx: Uuid::from_u128(0x0000af01_0000_1000_8000_00805f9b34fb),
+    rx: Uuid::from_u128(0x0000af02_0000_1000_8000_00805f9b34fb),
+    what: "TIDRADIO's KISS service (af00)",
+};
+
+pub fn gatt_profile(model: TncModel) -> &'static GattProfile {
+    match model {
+        TncModel::TdH9 => &TD_H9,
+        TncModel::Generic | TncModel::ThD7x => &KISS_API,
+    }
+}
 
 pub struct BleConnector {
     session: Session,
@@ -103,7 +145,7 @@ impl TncConnector for BleConnector {
 
             let addr = Address(ble.address.0);
             let device = find_device(&adapter, addr).await.map_err(fail)?;
-            let link = open(&device).await.map_err(|e| {
+            let link = open(&device, gatt_profile(model)).await.map_err(|e| {
                 // Don't leave a half-set-up LE link holding the TNC.
                 let d = device.clone();
                 tokio::spawn(async move { d.disconnect().await });
@@ -125,6 +167,8 @@ impl TncConnector for BleConnector {
 }
 
 /// The TNC's BlueZ device, scanning for it first if BlueZ doesn't know it.
+/// The scan isn't filtered on a service: not every TNC advertises the
+/// service its KISS link is on (the TD-H9 doesn't).
 async fn find_device(adapter: &Adapter, addr: Address) -> Result<Device, String> {
     let known = adapter
         .device_addresses()
@@ -135,7 +179,6 @@ async fn find_device(adapter: &Adapter, addr: Address) -> Result<Device, String>
         adapter
             .set_discovery_filter(DiscoveryFilter {
                 transport: DiscoveryTransport::Le,
-                uuids: std::iter::once(KISS_SERVICE_UUID).collect(),
                 ..Default::default()
             })
             .await
@@ -167,7 +210,7 @@ async fn find_device(adapter: &Adapter, addr: Address) -> Result<Device, String>
 }
 
 /// Connect to the TNC and open both KISS characteristics.
-async fn open(device: &Device) -> Result<BleLink, String> {
+async fn open(device: &Device, profile: &GattProfile) -> Result<BleLink, String> {
     if !device.is_connected().await.unwrap_or(false) {
         tokio::time::timeout(CONNECT_TIMEOUT, device.connect())
             .await
@@ -183,7 +226,7 @@ async fn open(device: &Device) -> Result<BleLink, String> {
             )
         })??;
 
-    let (tx, rx) = kiss_characteristics(device).await?;
+    let (tx, rx) = kiss_characteristics(device, profile).await?;
     let reader = rx
         .notify_io()
         .await
@@ -218,26 +261,41 @@ async fn services_resolved(device: &Device) -> Result<(), String> {
 }
 
 /// The TX (app → TNC) and RX (TNC → app) characteristics.
-async fn kiss_characteristics(device: &Device) -> Result<(Characteristic, Characteristic), String> {
+async fn kiss_characteristics(
+    device: &Device,
+    profile: &GattProfile,
+) -> Result<(Characteristic, Characteristic), String> {
     let bluez = |e: bluer::Error| format!("BlueZ: {e}");
+    let mut uuids = Vec::new();
     for service in device.services().await.map_err(bluez)? {
-        if service.uuid().await.map_err(bluez)? != KISS_SERVICE_UUID {
+        let uuid = service.uuid().await.map_err(bluez)?;
+        if uuid != profile.service {
+            uuids.push(uuid);
             continue;
         }
         let (mut tx, mut rx) = (None, None);
         for c in service.characteristics().await.map_err(bluez)? {
             match c.uuid().await.map_err(bluez)? {
-                u if u == KISS_TX_CHAR_UUID => tx = Some(c),
-                u if u == KISS_RX_CHAR_UUID => rx = Some(c),
+                u if u == profile.tx => tx = Some(c),
+                u if u == profile.rx => rx = Some(c),
                 _ => {}
             }
         }
         return match (tx, rx) {
             (Some(tx), Some(rx)) => Ok((tx, rx)),
-            _ => Err("its KISS service is missing the TX or RX characteristic".into()),
+            _ => Err(format!(
+                "{} is missing its TX or RX characteristic",
+                profile.what
+            )),
         };
     }
-    Err("it doesn't offer the BLE KISS service; is its KISS TNC turned on?".into())
+    let mut msg = format!("it doesn't offer {}", profile.what);
+    if *profile == KISS_API && uuids.contains(&TD_H9.service) {
+        msg.push_str("; if it's a TIDRADIO TD-H9, set its model = \"td-h9\"");
+    } else {
+        msg.push_str("; is its KISS TNC turned on?");
+    }
+    Err(msg)
 }
 
 /// BlueZ's errors, with what they usually mean for a radio.

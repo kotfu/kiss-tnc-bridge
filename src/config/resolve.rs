@@ -272,6 +272,9 @@ pub enum TncModel {
     Generic,
     /// Kenwood TH-D74 and TH-D75: the same command set, so one profile.
     ThD7x,
+    /// TIDRADIO TD-H9: plain KISS, but over BLE on TIDRADIO's own GATT
+    /// service rather than the BLE KISS API's.
+    TdH9,
 }
 
 /// One `model` a config can name, and what it does.
@@ -389,6 +392,25 @@ pub const MODELS: &[ModelInfo] = &[
                 }),
             },
         ],
+    },
+    ModelInfo {
+        model: TncModel::TdH9,
+        names: &["td-h9"],
+        summary: "TIDRADIO TD-H9: KISS over BLE on TIDRADIO's own GATT service (af00) instead of \
+                  the BLE KISS API's; otherwise like generic",
+        radios: &[RadioInfo {
+            name: "TIDRADIO TD-H9",
+            model: "td-h9",
+            bluetooth: None,
+            ble: Some(RadioBle {
+                name_prefix: "TD-H9",
+                setup: "On the radio, set Menu > Bluetooth > BT On/Off to On and BT Mode to \
+                        Receiver, and Menu > APRS > APRS Switch to On (with it off, the radio \
+                        transmits but passes nothing it receives to the bridge). Disconnect any \
+                        phone app from it: while something is connected, it doesn't advertise.",
+            }),
+            usb: None,
+        }],
     },
 ];
 
@@ -1266,6 +1288,10 @@ mod tests {
             radio_by_bluetooth_name("Ailunce HA2").unwrap().model,
             "generic"
         );
+        assert_eq!(
+            radio_by_bluetooth_name("TD-H9-2660(BLE)").unwrap().model,
+            "td-h9"
+        );
         assert_eq!(radio_by_usb_id(0x2166, 0x9023).unwrap().model, "th-d75");
         assert!(radio_by_usb_id(0x1234, 0x5678).is_none());
         // Every radio's model is one a config can name.
@@ -1524,6 +1550,7 @@ name = "HA2"
             assert_eq!(m.parse::<TncModel>().unwrap(), TncModel::ThD7x);
         }
         assert_eq!("generic".parse::<TncModel>().unwrap(), TncModel::Generic);
+        assert_eq!("td-h9".parse::<TncModel>().unwrap(), TncModel::TdH9);
         assert_eq!(TncModel::ThD7x.to_string(), "th-d74/th-d75");
         // Unknown names, typos and the old "none" are errors that list
         // every model.

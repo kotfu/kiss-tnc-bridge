@@ -1,0 +1,19 @@
+# Spike: throwaway code. See spikes/README.md.
+[package]
+name = "ble-relay"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[dependencies]
+anyhow = "1"
+bluer = { version = "0.17", features = ["bluetoothd"] }
+libdbus-sys = { version = "0.2", features = ["vendored"] }
+clap = { version = "4", features = ["derive"] }
+futures = "0.3"
+tokio = { version = "1", features = ["full"] }
+uuid = "1"
+
+[profile.release]
+strip = true

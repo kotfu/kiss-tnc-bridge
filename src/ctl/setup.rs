@@ -99,7 +99,7 @@ impl Ctl {
             "How will the bridge reach the TNC?",
             &[
                 "Bluetooth Classic (such as a Kenwood TH-D74 or TH-D75)".into(),
-                "Bluetooth LE (a BLE KISS TNC, such as an Ailunce HA2)".into(),
+                "Bluetooth LE (such as an Ailunce HA2 or TIDRADIO TD-H9)".into(),
                 "USB or serial".into(),
                 "On the network (a KISS TCP server, such as Dire Wolf or Graywolf)".into(),
             ],

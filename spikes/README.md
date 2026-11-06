@@ -31,6 +31,33 @@ clearing rfkill if an adapter shows `PowerState: off-blocked`
 
 `-v` adds raw bytes.
 
+## `ble-relay`
+
+A BLE man in the middle for learning a radio's GATT protocol from its own
+app (Linux-only, cross-built like `spp-spike` with
+`spikes/ble-relay/deploy.sh`). It connects to the radio, copies its GATT
+services (same UUIDs and properties) into a GATT application of its own,
+and advertises that under another name. The app connects to the relay;
+every read, write, subscription and notification is passed through and
+logged with a timestamp. Notifications on the radio are turned on only when
+the app subscribes, so the radio sees what it would see from the app.
+
+```
+ssh -t pi 'cd ktb-dev && ./spike/ble-relay FB:5D:C0:5E:D5:7E | tee h9-relay.log'
+```
+
+`--name` sets the advertised name (default `TD-H9-RELAY`), `--adv-uuid` the
+advertised service UUIDs (default: the radio's own), `-a` the adapter.
+
+Found with it (5 November 2026): the TIDRADIO
+TD-H9 carries plain KISS on service `af00`, writes to `af01` (write without
+response) and notifications on `af02`, each frame whole in one BLE packet,
+padded with extra FENDs (`c0 c0 c0 c0 c0 00 … c0 c0 c0`). The app sends
+the standard KISS parameters (TXDELAY 30, persistence 63, slot time 10, TX
+tail 0, full duplex off) at connect; the radio transmits without them. Its
+`ff00` service isn't used for KISS. The full write-up is
+[docs/td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md).
+
 ## Coexistence test (BLE GATT + RFCOMM on one controller)
 
 Today's daemon is unchanged and sits in front of the spike's TCP server, so
