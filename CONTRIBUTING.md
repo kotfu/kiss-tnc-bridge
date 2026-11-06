@@ -51,6 +51,20 @@ Run `cross clippy` and `cross test` before sending changes that touch
 Linux-only code: it's the quickest way to catch code that builds on macOS but
 not on Linux.
 
+`scripts/clippy-linux.sh` runs that clippy, with warnings as errors as in
+CI, for the target in `scripts/pi-deploy.local` (or `--target`). With
+`PI_DOCKER_CONTEXT` set it builds on that remote Docker engine, where plain
+`cross clippy` fails (cross's remote mode finds this machine's
+`cargo-clippy` in the container and can't run it); the script runs
+`cross check` with `clippy-driver` instead. Lint both Pi targets: `time_t`
+and other C types differ between 64-bit and 32-bit ARM, and CI only lints
+x86_64.
+
+```
+$ scripts/clippy-linux.sh                                       # PI_TARGET, or aarch64
+$ scripts/clippy-linux.sh --target arm-unknown-linux-gnueabihf  # 32-bit Pi
+```
+
 ### 3. Hardware tests on a Raspberry Pi
 
 Anything involving Bluetooth (BlueZ, radios, phones) has to be tested on real

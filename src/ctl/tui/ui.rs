@@ -1533,6 +1533,9 @@ fn local(t: SystemTime) -> (i32, i32, i32) {
     if ok {
         (tm.tm_hour, tm.tm_min, tm.tm_sec)
     } else {
+        // time_t is i64 on most targets but i32 on 32-bit ARM Linux, where
+        // the cast does nothing.
+        #[allow(clippy::unnecessary_cast)]
         let s = secs.rem_euclid(86_400) as i32;
         (s / 3600, s % 3600 / 60, s % 60)
     }
