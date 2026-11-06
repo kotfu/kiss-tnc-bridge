@@ -15,13 +15,15 @@
 
 //! `ktbctl setup`: a TNC and a bridge for it, step by step.
 //!
-//! 1. How the bridge reaches the TNC: Bluetooth, USB/serial, or the
-//!    network (a KISS TCP server, which needs nothing more).
+//! 1. How the bridge reaches the TNC: Bluetooth Classic, Bluetooth LE,
+//!    USB/serial, or the network (a KISS TCP server, which needs nothing
+//!    more).
 //! 2. For Bluetooth and USB, which radio it is, from the radios in the
 //!    daemon's model table, or another; its entry gives the instructions
 //!    from here on, and generic ones stand in for another radio.
 //! 3. Bluetooth: an existing TNC, or pick the adapter, scan, pick the
-//!    radio, and pair it. USB: pick the device from the stable paths.
+//!    radio, and pair it (Classic only; BLE KISS TNCs aren't paired). USB:
+//!    pick the device from the stable paths.
 //! 4. The TNC: one already at that address or path, a new section on the
 //!    same radio's TNC, or a new TNC.
 //! 5. The bridge: how apps reach it (BLE and on which adapter, TCP and
@@ -46,12 +48,13 @@ use super::client::{Client, CtlError, Message, result};
 use super::run::{Ctl, ask_line, confirm, interactive, prompt, read_line};
 use crate::control::protocol::{
     AdapterStatus, BtDevice, Command, ConfigText, ErrorCode, Event, ModelEntry, ObjectKind,
-    RadioEntry, SerialEntry, Status, Topic,
+    RadioEntry, ScanTransport, SerialEntry, Status, Topic,
 };
 
 /// How the bridge reaches the TNC.
 enum Link {
     Bluetooth,
+    Ble,
     Serial,
 }
 
@@ -95,7 +98,8 @@ impl Ctl {
         let how = menu(
             "How will the bridge reach the TNC?",
             &[
-                "Bluetooth".into(),
+                "Bluetooth Classic (such as a Kenwood TH-D74 or TH-D75)".into(),
+                "Bluetooth LE (a BLE KISS TNC, such as an Ailunce HA2)".into(),
                 "USB or serial".into(),
                 "On the network (a KISS TCP server, such as Dire Wolf or Graywolf)".into(),
             ],
@@ -108,6 +112,10 @@ impl Ctl {
                 TncSide::Tnc(self.setup_bluetooth(c, &s, radio.as_ref()).await?)
             }
             1 => {
+                let radio = self.pick_radio(c, Link::Ble).await?;
+                TncSide::Tnc(self.setup_ble(c, &s, radio.as_ref()).await?)
+            }
+            2 => {
                 let radio = self.pick_radio(c, Link::Serial).await?;
                 TncSide::Tnc(self.setup_serial(c, &s, radio.as_ref()).await?)
             }
@@ -130,6 +138,7 @@ impl Ctl {
             .flat_map(|m| m.radios)
             .filter(|r| match link {
                 Link::Bluetooth => r.bluetooth.is_some(),
+                Link::Ble => r.ble.is_some(),
                 Link::Serial => r.usb.is_some(),
             })
             .collect();
@@ -278,7 +287,8 @@ impl Ctl {
             if !confirm("Ready to look for it?", true).await {
                 return Err(CtlError::Message("stopped".into()));
             }
-            let found = match pick_device(c, &adapter_value, prefix).await? {
+            let found = match pick_device(c, &adapter_value, prefix, ScanTransport::Classic).await?
+            {
                 Scan::Picked(d) => break d,
                 Scan::Done(found) => found,
             };
@@ -333,6 +343,80 @@ impl Ctl {
         let name = device.name.clone().or(radio.map(|r| short_name(&r.name)));
         let section = json!({"address": device.address, "adapter": adapter_value});
         self.setup_tnc(c, s, "spp", section, &model, name.as_deref())
+            .await
+    }
+
+    /// Steps 2 and 4 over Bluetooth LE. BLE KISS TNCs aren't paired: the
+    /// scan finds the TNC, and it gets a `ble` section. Returns the TNC's
+    /// id.
+    async fn setup_ble(
+        &self,
+        c: &mut Client,
+        s: &Status,
+        radio: Option<&RadioEntry>,
+    ) -> Result<String, CtlError> {
+        let ble = radio.and_then(|r| r.ble.as_ref());
+        let existing: Vec<_> = s.tncs.iter().filter(|t| t.ble.is_some()).collect();
+        if !existing.is_empty() {
+            let mut options: Vec<String> = existing
+                .iter()
+                .map(|t| {
+                    let ble = t.ble.as_ref().expect("filtered");
+                    format!("{} ({}, {} on {})", t.id, t.name, ble.address, ble.adapter)
+                })
+                .collect();
+            options.push("One not set up yet".into());
+            let pick = menu(
+                "Is it a TNC that's already set up?",
+                &options,
+                options.len() - 1,
+            )
+            .await;
+            if let Some(t) = existing.get(pick) {
+                return Ok(t.id.clone());
+            }
+        }
+
+        println!(
+            "\n{}",
+            ble.map(|b| b.setup.clone()).unwrap_or_else(|| {
+                "Turn on its Bluetooth and its KISS TNC, and disconnect any phone app from it: \
+                 while something is connected, it doesn't advertise."
+                    .into()
+            })
+        );
+        let present: Vec<&AdapterStatus> = s.adapters.iter().filter(|a| a.present).collect();
+        let adapter = pick_adapter(&present).await?;
+        let adapter_value = self.adapter_value(c, adapter, s).await?;
+
+        let prefix = ble.map(|b| b.name_prefix.as_str());
+        let device = loop {
+            if !confirm("Ready to look for it?", true).await {
+                return Err(CtlError::Message("stopped".into()));
+            }
+            let found = match pick_device(c, &adapter_value, prefix, ScanTransport::Le).await? {
+                Scan::Picked(d) => break d,
+                Scan::Done(found) => found,
+            };
+            let mut options: Vec<String> = found.iter().map(device_option).collect();
+            options.push("Look again".into());
+            if found.is_empty() {
+                println!("Nothing found.");
+            }
+            let likely = likely_device(&found, prefix).unwrap_or(0);
+            let pick = menu("Which is it?", &options, likely).await;
+            if let Some(d) = found.get(pick) {
+                break d.clone();
+            }
+        };
+        if let Some(t) = device.tnc {
+            println!("That's TNC {t}, already set up.");
+            return Ok(t);
+        }
+        let model = model_for(radio, device.known_tnc.as_deref(), device.model.as_deref());
+        let name = device.name.clone().or(radio.map(|r| short_name(&r.name)));
+        let section = json!({"address": device.address, "adapter": adapter_value});
+        self.setup_tnc(c, s, "ble", section, &model, name.as_deref())
             .await
     }
 
@@ -402,7 +486,7 @@ impl Ctl {
             .await
     }
 
-    /// Step 4: add `section` (`spp` or `serial`) to the same radio's TNC, or
+    /// Step 4: add `section` (`spp`, `ble` or `serial`) to the same radio's TNC, or
     /// make a new TNC with it. Returns the TNC's id.
     async fn setup_tnc(
         &self,
@@ -420,10 +504,10 @@ impl Ctl {
             .iter()
             .filter(|t| {
                 t.editable
-                    && if kind == "spp" {
-                        t.spp.is_none()
-                    } else {
-                        t.serial.is_none()
+                    && match kind {
+                        "spp" => t.spp.is_none(),
+                        "ble" => t.ble.is_none(),
+                        _ => t.serial.is_none(),
                     }
             })
             .collect();
@@ -502,26 +586,41 @@ impl Ctl {
                     .iter()
                     .find(|t| t.id == *tnc)
                     .ok_or_else(|| CtlError::Message(format!("TNC {tnc} went away")))?;
-                let kind = if t.spp.is_some() && t.serial.is_some() {
-                    let pick = menu(
-                        "Which way should this bridge reach the radio?",
-                        &["Bluetooth".into(), "USB or serial".into()],
-                        0,
-                    )
-                    .await;
-                    if pick == 0 { "spp-client" } else { "serial" }
-                } else if t.spp.is_some() {
-                    "spp-client"
-                } else {
-                    "serial"
+                let mut ways: Vec<(&str, &str)> = Vec::new();
+                if t.spp.is_some() {
+                    ways.push(("spp-client", "Bluetooth Classic"));
+                }
+                if t.ble.is_some() {
+                    ways.push(("ble-client", "Bluetooth LE"));
+                }
+                if t.serial.is_some() {
+                    ways.push(("serial", "USB or serial"));
+                }
+                let kind = match ways.as_slice() {
+                    [] => {
+                        return Err(CtlError::Message(format!(
+                            "TNC {tnc} has no way to reach it"
+                        )));
+                    }
+                    [(k, _)] => *k,
+                    many => {
+                        let options: Vec<String> =
+                            many.iter().map(|(_, l)| l.to_string()).collect();
+                        let pick =
+                            menu("Which way should this bridge reach the radio?", &options, 0)
+                                .await;
+                        many[pick].0
+                    }
+                };
+                let radio_adapter = match kind {
+                    "spp-client" => t.spp.as_ref().map(|s| s.adapter.clone()),
+                    "ble-client" => t.ble.as_ref().map(|b| b.adapter.clone()),
+                    _ => None,
                 };
                 (
                     json!({"id": "radio", "type": kind, "tnc": tnc}),
                     t.name.clone(),
-                    t.spp
-                        .as_ref()
-                        .map(|s| s.adapter.clone())
-                        .unwrap_or_default(),
+                    radio_adapter.unwrap_or_default(),
                 )
             }
         };
@@ -837,12 +936,14 @@ async fn pick_device(
     c: &mut Client,
     adapter: &str,
     prefix: Option<&str>,
+    transport: ScanTransport,
 ) -> Result<Scan, CtlError> {
     println!("Looking for up to {SCAN_SECS} s. Pick it as soon as it shows up.");
     let id = c
         .send(Command::BluetoothScan {
             adapter: Some(adapter.to_string()),
             seconds: Some(SCAN_SECS),
+            transport: Some(transport),
         })
         .await?;
     let mut shown: Vec<BtDevice> = Vec::new();

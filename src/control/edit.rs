@@ -548,8 +548,8 @@ enum RefPath {
         port: usize,
         key: &'static str,
     },
-    /// A TNC's `spp.adapter`.
-    TncSpp { tnc: String },
+    /// A TNC's `spp.adapter` or `ble.adapter`.
+    TncSection { tnc: String, section: &'static str },
 }
 
 fn references(store: &DynamicStore, kind: Kind, id: &str) -> Vec<Reference> {
@@ -583,20 +583,22 @@ fn references(store: &DynamicStore, kind: Kind, id: &str) -> Vec<Reference> {
     }
     if kind == Kind::Adapter {
         for t in store.tables(Kind::Tnc) {
-            let spp_adapter = t
-                .get("spp")
-                .and_then(|s| s.get("adapter"))
-                .and_then(|v| v.as_str());
-            if spp_adapter == Some(id) {
-                let tid = t
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("?")
-                    .to_string();
-                out.push(Reference {
-                    describe: format!("tnc {tid}"),
-                    path: RefPath::TncSpp { tnc: tid },
-                });
+            for section in ["spp", "ble"] {
+                let adapter = t
+                    .get(section)
+                    .and_then(|s| s.get("adapter"))
+                    .and_then(|v| v.as_str());
+                if adapter == Some(id) {
+                    let tid = t
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    out.push(Reference {
+                        describe: format!("tnc {tid}"),
+                        path: RefPath::TncSection { tnc: tid, section },
+                    });
+                }
             }
         }
     }
@@ -615,12 +617,12 @@ fn set_reference(store: &mut DynamicStore, path: &RefPath, to: &str) {
                 p.insert(key, toml_edit::value(to));
             }
         }
-        RefPath::TncSpp { tnc } => {
-            if let Some(spp) = store
+        RefPath::TncSection { tnc, section } => {
+            if let Some(s) = store
                 .table_mut(Kind::Tnc, tnc)
-                .and_then(|t| t.get_mut("spp"))
+                .and_then(|t| t.get_mut(section))
             {
-                match spp {
+                match s {
                     Item::Table(t) => {
                         t.insert("adapter", toml_edit::value(to));
                     }

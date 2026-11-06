@@ -441,6 +441,17 @@ fn place(s: &Status, b: &BridgeStatus, p: &PortStatus) -> String {
                 .unwrap_or_default();
             format!("TNC {tnc}{on}")
         }
+        "ble-client" => {
+            let tnc = get("tnc").unwrap_or("?");
+            let on = s
+                .tncs
+                .iter()
+                .find(|t| t.id == tnc)
+                .and_then(|t| t.ble.as_ref())
+                .map(|ble| format!(" on {}", short_adapter(&ble.adapter)))
+                .unwrap_or_default();
+            format!("TNC {tnc} (BLE){on}")
+        }
         "serial" => format!("TNC {} (serial)", get("tnc").unwrap_or("?")),
         "tcp-client" => get("address").unwrap_or_default().to_string(),
         "tcp-server" => get("listen").unwrap_or_default().to_string(),
@@ -773,6 +784,13 @@ fn tnc_lines(t: &TncStatus, w: usize) -> Vec<Line<'static>> {
             w,
         )));
     }
+    if let Some(ble) = &t.ble {
+        out.push(Line::raw(format!(
+            "          BLE        {} on {}",
+            ble.address,
+            short_adapter(&ble.adapter)
+        )));
+    }
     if let Some(ser) = &t.serial {
         let present = if ser.present {
             "plugged in "
@@ -822,6 +840,13 @@ fn tnc_summary(t: &TncStatus) -> String {
             ", Bluetooth {} on {}{paired}",
             spp.address,
             short_adapter(&spp.adapter)
+        ));
+    }
+    if let Some(ble) = &t.ble {
+        out.push_str(&format!(
+            ", BLE {} on {}",
+            ble.address,
+            short_adapter(&ble.adapter)
         ));
     }
     if let Some(ser) = &t.serial {

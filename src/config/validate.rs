@@ -77,6 +77,7 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
 
     let mut seen_tnc_ids: HashMap<&str, &Source> = HashMap::new();
     let mut seen_spp: HashMap<(&Mac, &AdapterSel), (&str, &Source)> = HashMap::new();
+    let mut seen_ble: HashMap<(&Mac, &AdapterSel), (&str, &Source)> = HashMap::new();
     let mut seen_paths: HashMap<&str, (&str, &Source)> = HashMap::new();
     for t in &cfg.tncs {
         let object = format!("tnc {}", t.id);
@@ -100,6 +101,21 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
                     "Bluetooth address {} on {} is already tnc {id} ({first})",
                     spp.address,
                     describe_adapter(&spp.adapter)
+                ),
+            );
+        }
+        if let Some(ble) = &t.ble
+            && let Some((id, first)) =
+                seen_ble.insert((&ble.address, &ble.adapter), (&t.id, &t.source))
+        {
+            err(
+                &mut r,
+                &t.source,
+                &object,
+                format!(
+                    "BLE address {} on {} is already tnc {id} ({first})",
+                    ble.address,
+                    describe_adapter(&ble.adapter)
                 ),
             );
         }
@@ -158,7 +174,7 @@ pub fn validate(cfg: &Config, host_checks: bool) -> Report {
                 &b.source,
                 &object,
                 format!(
-                    "an enabled bridge needs exactly one TNC port (spp-client, serial, tcp-client, or a port with role = \"tnc\"); this one has {tnc}. Fix its ports, or disable it"
+                    "an enabled bridge needs exactly one TNC port (spp-client, ble-client, serial, tcp-client, or a port with role = \"tnc\"); this one has {tnc}. Fix its ports, or disable it"
                 ),
             );
         }
@@ -449,6 +465,19 @@ name = "Graywolf at home"
             "[[bridge]]\nid = \"ktbr0\"\nname = \"x\"\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"a:1\"\n[[bridge.port]]\ntype = \"tcp-client\"\naddress = \"b:1\"\nrole = \"app\"\n",
         );
         assert!(e.is_empty(), "{e:?}");
+    }
+
+    #[test]
+    fn a_ble_tnc_is_defined_once_per_adapter() {
+        let e = errors(
+            "[[tnc]]\nid = \"a\"\nble = { address = \"34:3E:27:3F:E0:10\" }\n\
+             [[tnc]]\nid = \"b\"\nble = { address = \"34:3E:27:3F:E0:10\" }\n",
+        );
+        assert!(
+            e.iter()
+                .any(|m| m.contains("BLE address 34:3E:27:3F:E0:10") && m.contains("already tnc a")),
+            "{e:?}"
+        );
     }
 
     #[test]

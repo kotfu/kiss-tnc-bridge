@@ -152,14 +152,17 @@ impl Form {
                     "listen" | "allow" => t == "tcp-server",
                     "address" => t == "tcp-client",
                     "tnc_spp" => t == "spp-client",
+                    "tnc_ble" => t == "ble-client",
                     "tnc_serial" => t == "serial",
                     "adapter" => t == "ble-server",
-                    "connect" => matches!(t, "tcp-client" | "spp-client" | "serial"),
+                    "connect" => {
+                        matches!(t, "tcp-client" | "spp-client" | "ble-client" | "serial")
+                    }
                     _ => true,
                 }
             }
             Add::Tnc => {
-                let bt = self.get("link") == "spp";
+                let bt = matches!(self.get("link"), "spp" | "ble");
                 match key {
                     "address" | "adapter" => bt,
                     "path" => !bt,
@@ -238,6 +241,9 @@ impl Form {
                     "spp-client" => {
                         d["tnc"] = json!(need("tnc_spp", "A TNC with Bluetooth (add one first)")?)
                     }
+                    "ble-client" => {
+                        d["tnc"] = json!(need("tnc_ble", "A TNC with BLE (add one first)")?)
+                    }
                     _ => d["tnc"] = json!(need("tnc_serial", "A TNC with USB (add one first)")?),
                 }
                 if self.applies("connect") && self.get("connect") == "always" {
@@ -259,13 +265,14 @@ impl Form {
                     n => n.to_string(),
                 };
                 let mut d = json!({"id": id, "name": name, "model": self.get("model")});
-                if self.get("link") == "spp" {
-                    let mut spp =
+                let link = self.get("link");
+                if matches!(link, "spp" | "ble") {
+                    let mut bt =
                         json!({"address": need("address", "The radio's Bluetooth address")?});
                     if !self.get("adapter").is_empty() {
-                        spp["adapter"] = json!(self.get("adapter"));
+                        bt["adapter"] = json!(self.get("adapter"));
                     }
-                    d["spp"] = spp;
+                    d[link] = bt;
                 } else {
                     d["serial"] = json!({"path": need("path", "The device's path")?});
                 }
@@ -375,6 +382,7 @@ impl App {
                     "tcp-server",
                     "tcp-client",
                     "spp-client",
+                    "ble-client",
                     "serial",
                 ]
                 .map(|t| (t.to_string(), t.to_string()));
@@ -398,6 +406,7 @@ impl App {
                             "(the KISS TCP server)",
                         ),
                         Field::choice("tnc_spp", "TNC", tncs(|t| t.spp.is_some())),
+                        Field::choice("tnc_ble", "TNC", tncs(|t| t.ble.is_some())),
                         Field::choice("tnc_serial", "TNC", tncs(|t| t.serial.is_some())),
                         Field::choice("adapter", "Adapter", adapters),
                         Field::choice(
@@ -452,7 +461,8 @@ impl App {
                             "link",
                             "Reached",
                             vec![
-                                ("over Bluetooth".into(), "spp".into()),
+                                ("over Bluetooth Classic".into(), "spp".into()),
+                                ("over Bluetooth LE".into(), "ble".into()),
                                 ("over USB or serial".into(), "serial".into()),
                             ],
                         ),
@@ -768,10 +778,12 @@ mod tests {
             app.form.as_ref().unwrap().error.as_deref(),
             Some("The radio's Bluetooth address is needed")
         );
-        // Over USB instead: a path.
+        // Over USB instead (past Bluetooth LE): a path.
         for _ in 0..3 {
             app.key(key(KeyCode::Down));
         }
+        app.key(key(KeyCode::Right));
+        assert_eq!(app.form.as_ref().unwrap().get("link"), "ble");
         app.key(key(KeyCode::Right));
         app.key(key(KeyCode::Down));
         typed(&mut app, "usb-JVC");

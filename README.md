@@ -58,8 +58,8 @@ and offers more capability.
 - Phones and tablets connect over BLE without pairing (see
   [Phones and pairing](#phones-and-pairing) below) and the bridge advertises
   over bluetooth so the apps can easily find it.
-- TNCs over Bluetooth Classic (SPP), USB or UART serial, and TCP. Kenwood
-  TH-D74/D75 radios are put in KISS mode automatically.
+- TNCs over Bluetooth Classic (SPP), Bluetooth LE, USB or UART serial, and
+  TCP. Kenwood TH-D74/D75 radios are put in KISS mode automatically.
 - Apps over BLE and TCP at the same time, on one TNC. TCP apps can find the
   bridge by name with DNS-SD.
 - Apps can transmit at the same time. Frames from apps are assembled, queued
@@ -218,6 +218,9 @@ tool, handy for looking at the Bluetooth adapters and devices on your computer.
   needs pairing. You can do that with the computer running `kiss-tnc-bridge`
   with `ktbctl pair` (or `ktbctl setup`). After that the bridge connects
   to the radio whenever an app needs it.
+- **BLE TNCs don't pair either.** A radio whose TNC is on Bluetooth LE,
+  such as the Ailunce HA2, is found by a scan (`ktbctl scan --le`) and
+  connected to the way a phone app would.
 - **Phones don't pair at all.** The bridge advertises over BLE, and the
   phone connects from inside the app, **not from the phone's Bluetooth settings**.
   Nothing the bridge offers needs pairing, and leaving it out avoids a whole class of
@@ -240,6 +243,7 @@ one **TNC port**, and one or more **app ports**, where apps who want to use the 
 | Port type | Role | What it connects |
 |---|---|---|
 | `spp-client` | TNC | A TNC over Bluetooth Classic using the Serial Port Profile, such as a TH-D75 |
+| `ble-client` | TNC | A TNC over Bluetooth LE using the BLE KISS API, such as an Ailunce HA2 |
 | `serial` | TNC | A TNC on a USB or UART serial device |
 | `tcp-client` | TNC | A KISS TCP server: Dire Wolf, Graywolf, Soundmodem |
 | `ble-server` | app | Phones and tablets, over Bluetooth LE |
@@ -505,9 +509,9 @@ that it doesn't meet your needs, here's some things this project doesn't do:
 - It isn't a TNC, digipeater or iGate itself. It shares a TNC you already
   have. Use Dire Wolf or Graywolf for those jobs, and the bridge to share
   them.
-- It doesn't connect to TNCs whose Bluetooth is BLE only (Mobilinkd TNC4,
-  BTech UV-PRO, Vero VR-N76) yet. You'll have to use them over USB for now, but
-  support is coming soon...
+- It connects to BLE TNCs only if they follow the
+  [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md).
+  A radio with its own GATT layout instead can't be used over BLE yet.
 - Apps can reach it over BLE or KISS over TCP, not over Bluetooth Classic,
   and not with the AGWPE protocol. An Android app that only knows
   Bluetooth Classic TNCs can't connect to it yet; use TCP if the app has
@@ -560,9 +564,10 @@ app or TNC that follows them, not just the ones it was tested with.
   [docs/architecture.md](docs/architecture.md#ble)), and
   KISS frames are streamed across them, split to fit the link. aprs.fi on
   iOS and Android, the Mobilinkd TNC3 and TNC4, and radios like the
-  Vero VR-N76 and BTech UV-PRO use it. `kiss-tnc-bridge` follows it when it
-  advertises to phones and serves them, and is listed among its
-  implementations.
+  Vero VR-N76, BTech UV-PRO and Ailunce HA2 use it. `kiss-tnc-bridge`
+  follows it on both sides: when it advertises to phones and serves them
+  (`ble-server`), and when it connects to a BLE TNC as an app would
+  (`ble-client`). It is listed among its implementations.
 - **KISS TNC discovery on the network.** Heikki also wrote the
   [TCP KISS DNS-SD spec](https://github.com/hessu/aprs-specs/blob/master/TCP-KISS-DNS-SD.md),
   which lets apps find KISS TCP servers on the local network by name. The
@@ -577,11 +582,13 @@ app or TNC that follows them, not just the ones it was tested with.
   drivers and [BlueZ](https://github.com/bluez/bluez), the official Linux
   Bluetooth stack, through BlueZ's D-Bus API: a
   [profile](https://github.com/bluez/bluez/blob/master/doc/org.bluez.Profile.rst)
-  for SPP, and a
+  for SPP, a
   [GATT application](https://github.com/bluez/bluez/blob/master/doc/org.bluez.GattManager.rst)
   and an
   [advertisement](https://github.com/bluez/bluez/blob/master/doc/org.bluez.LEAdvertisingManager.rst)
-  for BLE. That's why any Bluetooth 4.0 or later adapter Linux supports
+  for serving phones over BLE, and BlueZ's
+  [GATT client](https://github.com/bluez/bluez/blob/master/doc/org.bluez.GattCharacteristic.rst)
+  for BLE TNCs. That's why any Bluetooth 4.0 or later adapter Linux supports
   works, built in or USB, with nothing extra to install.
 
 Some radio manufacturers build similar features without following these
@@ -1064,6 +1071,8 @@ in only one enabled bridge, over whichever transport.
 | `tnc.spp.address` | | The TNC's Bluetooth address, for `spp-client` ports |
 | `tnc.spp.adapter` | `global.adapter` | The adapter it's paired on: an `[[adapter]]` id, a MAC, or `hciN`. Pairings belong to one adapter |
 | `tnc.spp.channel` | found by SDP | An RFCOMM channel, only for devices whose SDP record is wrong |
+| `tnc.ble.address` | | The TNC's Bluetooth LE address, for `ble-client` ports. `ktbctl scan --le` finds it |
+| `tnc.ble.adapter` | `global.adapter` | The adapter that connects to it: an `[[adapter]]` id, a MAC, or `hciN`. Nothing is paired, so any adapter in range will do |
 | `tnc.serial.path` | | The serial device, for `serial` ports. Use its `/dev/serial/by-id/` or `/dev/serial/by-path/` name: `/dev/ttyACM0` can change between boots |
 | `tnc.serial.baud` | `9600` | Ignored by USB radios; matters for real UARTs |
 
@@ -1082,6 +1091,7 @@ in only one enabled bridge, over whichever transport.
 | Type | Role | Keys |
 |------|------|------|
 | `spp-client` | TNC | `bridge.port.tnc` (a `[[tnc]]` with `tnc.spp`); `bridge.port.connect`, `bridge.port.idle_timeout`, `bridge.port.exit_kiss_on_disconnect` (below) |
+| `ble-client` | TNC | `bridge.port.tnc` (a `[[tnc]]` with `tnc.ble`); `bridge.port.connect`, `bridge.port.idle_timeout`, `bridge.port.exit_kiss_on_disconnect` (below) |
 | `serial` | TNC | `bridge.port.tnc` (a `[[tnc]]` with `tnc.serial`); `bridge.port.connect`, `bridge.port.idle_timeout`, `bridge.port.exit_kiss_on_disconnect` (below) |
 | `tcp-client` | TNC | `bridge.port.address` (`host:port` of a KISS TCP server such as Dire Wolf or Graywolf); `bridge.port.connect`, `bridge.port.idle_timeout` (below) |
 | `ble-server` | app | `bridge.port.adapter` (an `[[adapter]]` id, a MAC, or `hciN`; default: `global.adapter`); `bridge.port.max_clients` (default `1`; many Bluetooth chips can't serve more, see below) |
@@ -1095,7 +1105,7 @@ the type). TNC ports also take:
 |-----|---------|-------------|
 | `bridge.port.connect` | `on_demand` | `on_demand` connects the TNC when the first app attaches; `always` keeps it connected with no apps |
 | `bridge.port.idle_timeout` | `0s` | With `bridge.port.connect = "on_demand"`, how long to keep the TNC connected after the last app leaves, e.g. `"90s"`. A Bluetooth link to a radio takes a few seconds to come up, so a minute or two avoids a slow reconnect when a phone briefly drops BLE |
-| `bridge.port.exit_kiss_on_disconnect` | `false` | `spp-client` and `serial`: take the TNC out of KISS mode when the bridge lets go of it (a TH-D75 goes back to APRS mode if that's how it was found). By default the radio stays in KISS mode |
+| `bridge.port.exit_kiss_on_disconnect` | `false` | `spp-client`, `ble-client` and `serial`: take the TNC out of KISS mode when the bridge lets go of it (a TH-D75 goes back to APRS mode if that's how it was found). By default the radio stays in KISS mode |
 
 Frames from apps are filtered: the KISS "return" command (`C0 FF C0`), which
 takes radios like the TH-D75 out of KISS mode for every app, never reaches
@@ -1412,9 +1422,42 @@ name = "Mobilinkd"
 ```
 
 Pair it with `ktbctl pair` as for the TH-D75; it may ask for a PIN or
-nothing at all instead of a number to compare. TNCs whose Bluetooth is BLE
-only, such as the Mobilinkd TNC4, BTech UV-PRO and Vero VR-N76, can only be
-used over USB for now; connecting to BLE TNCs comes after 1.0.
+nothing at all instead of a number to compare.
+
+TNCs on Bluetooth LE that follow the
+[BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md),
+such as the Ailunce HA2, use a `ble` section and a `ble-client` port. They
+aren't paired. `ktbctl scan --le` lists the ones in range, or
+`ktbctl setup` finds one for you:
+
+```toml
+[[tnc]]
+id = "ha2"
+name = "Ailunce HA2"
+ble = { address = "34:3E:27:3F:E0:10" }   # from ktbctl scan --le
+
+[[bridge]]
+id = "ktbr0"
+name = "HA2"
+
+  [[bridge.port]]
+  id = "radio"
+  type = "ble-client"
+  tnc = "ha2"
+  idle_timeout = "90s"
+
+  [[bridge.port]]
+  id = "phones"
+  type = "ble-server"
+```
+
+A BLE TNC takes one connection at a time and stops advertising while it has
+one, so while the bridge is connected, a phone can't reach the radio
+directly; it reaches the bridge instead. With `connect = "on_demand"` (the
+default) the bridge lets go of the radio when the last app leaves (after
+`idle_timeout`), and the radio advertises again. The Mobilinkd TNC4, BTech
+UV-PRO and Vero VR-N76 are expected to work the same way, but haven't been
+tested yet.
 
 With the generic model the bridge sends the TNC nothing, so it can't tell a
 TNC that's quiet from one that isn't working. If apps hear nothing,

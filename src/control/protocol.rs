@@ -255,19 +255,23 @@ pub enum Command {
     #[serde(rename = "tnc.models")]
     TncModels,
 
-    // Bluetooth Classic, for radios. A device is named by `tnc` (its
-    // `spp` address and adapter) or by `address` and optionally `adapter`
-    // (id, MAC or hciN; the default adapter otherwise).
-    /// Look for Bluetooth Classic devices for `seconds` (default 10), likely
-    /// TNCs first. Radios have to be in pairing mode to be found, and only
-    /// devices heard during the scan are listed. Meanwhile the daemon sends
-    /// this connection a `found` event for each device as it turns up.
+    // Bluetooth, for radios. A device is named by `tnc` (its `spp`
+    // address and adapter) or by `address` and optionally `adapter` (id,
+    // MAC or hciN; the default adapter otherwise).
+    /// Look for devices for `seconds` (default 10), likely TNCs first. Over
+    /// Bluetooth Classic (the default), radios have to be in pairing mode
+    /// to be found; over LE, only TNCs offering the BLE KISS service are
+    /// listed. Only devices heard during the scan are listed. Meanwhile the
+    /// daemon sends this connection a `found` event for each device as it
+    /// turns up.
     #[serde(rename = "bluetooth.scan")]
     BluetoothScan {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adapter: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         seconds: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        transport: Option<ScanTransport>,
     },
     /// End this connection's `bluetooth.scan` request `request` now; it
     /// answers with what it found so far.
@@ -622,9 +626,21 @@ pub struct RadioEntry {
     /// Present when it has a TNC over Bluetooth Classic.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bluetooth: Option<RadioBluetoothEntry>,
+    /// Present when it has a TNC over Bluetooth LE.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ble: Option<RadioBleEntry>,
     /// Present when it has a TNC over USB.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usb: Option<RadioUsbEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct RadioBleEntry {
+    /// The start of the name it advertises.
+    pub name_prefix: String,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -810,6 +826,8 @@ pub struct TncStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spp: Option<SppStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ble: Option<BleStatus>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub serial: Option<SerialStatus>,
     /// The enabled bridge using it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -829,6 +847,29 @@ pub struct SppStatus {
     /// (no BlueZ, adapter not present).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paired: Option<bool>,
+}
+
+/// What a `bluetooth.scan` listens on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum ScanTransport {
+    /// Bluetooth Classic: radios in pairing mode, for `spp-client`.
+    #[default]
+    Classic,
+    /// Bluetooth LE: TNCs advertising the BLE KISS service, for
+    /// `ble-client`.
+    Le,
+}
+
+/// A TNC reached over BLE. It isn't paired: BLE KISS TNCs take any
+/// central, like a phone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct BleStatus {
+    pub address: String,
+    /// As configured, like [`SppStatus::adapter`].
+    pub adapter: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

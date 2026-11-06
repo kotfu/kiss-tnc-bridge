@@ -294,6 +294,7 @@ pub struct RadioInfo {
     /// The `model` to write for it.
     pub model: &'static str,
     pub bluetooth: Option<RadioBluetooth>,
+    pub ble: Option<RadioBle>,
     pub usb: Option<RadioUsb>,
 }
 
@@ -307,6 +308,14 @@ pub struct RadioBluetooth {
     pub pairing_mode: &'static str,
     /// What happens while it pairs.
     pub pairing: &'static str,
+}
+
+/// Setting a radio up over Bluetooth LE. BLE KISS TNCs aren't paired.
+pub struct RadioBle {
+    /// The start of the name it advertises.
+    pub name_prefix: &'static str,
+    /// What to do on the radio before the bridge can use its TNC.
+    pub setup: &'static str,
 }
 
 /// Setting a radio up over USB.
@@ -324,7 +333,17 @@ pub const MODELS: &[ModelInfo] = &[
         model: TncModel::Generic,
         names: &["generic"],
         summary: "the default: any TNC that's always in KISS mode; nothing is sent to it",
-        radios: &[],
+        radios: &[RadioInfo {
+            name: "Ailunce HA2",
+            model: "generic",
+            bluetooth: None,
+            ble: Some(RadioBle {
+                name_prefix: "Ailunce HA2",
+                setup: "On the radio, turn Bluetooth on, and disconnect any phone app from it: \
+                        while something is connected, it doesn't advertise.",
+            }),
+            usb: None,
+        }],
     },
     ModelInfo {
         model: TncModel::ThD7x,
@@ -344,6 +363,7 @@ pub const MODELS: &[ModelInfo] = &[
                     pairing: "The radio shows a six-digit number. Check that it matches, then \
                               press OK on the radio within 30 seconds.",
                 }),
+                ble: None,
                 usb: Some(RadioUsb {
                     id: Some((0x2166, 0x9023)),
                     setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
@@ -361,6 +381,7 @@ pub const MODELS: &[ModelInfo] = &[
                     pairing: "The radio shows a six-digit number. Check that it matches, then \
                               press OK on the radio within 30 seconds.",
                 }),
+                ble: None,
                 usb: Some(RadioUsb {
                     id: None,
                     setup: "On the radio, set Menu > Configuration > Interface > KISS (983) to \
@@ -376,12 +397,16 @@ pub fn radios() -> impl Iterator<Item = &'static RadioInfo> {
     MODELS.iter().flat_map(|m| m.radios.iter())
 }
 
-/// The radio announcing `name` over Bluetooth, if it's one we know.
+/// The radio announcing `name` over Bluetooth Classic or LE, if it's one
+/// we know.
 pub fn radio_by_bluetooth_name(name: &str) -> Option<&'static RadioInfo> {
     radios().find(|r| {
         r.bluetooth
             .as_ref()
             .is_some_and(|b| name.starts_with(b.name_prefix))
+            || r.ble
+                .as_ref()
+                .is_some_and(|b| name.starts_with(b.name_prefix))
     })
 }
 
@@ -487,6 +512,7 @@ pub struct Tnc {
     pub name: String,
     pub model: TncModel,
     pub spp: Option<Spp>,
+    pub ble: Option<Ble>,
     pub serial: Option<SerialDevice>,
     pub source: Source,
 }
@@ -499,6 +525,14 @@ pub struct Spp {
     pub adapter: AdapterSel,
     /// `None`: found by SDP through BlueZ.
     pub channel: Option<u8>,
+}
+
+/// How to reach a TNC over Bluetooth Low Energy.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Ble {
+    pub address: Mac,
+    /// The adapter that connects to it, after the adapter fallback.
+    pub adapter: AdapterSel,
 }
 
 /// How to reach a TNC over a serial device.
@@ -569,6 +603,7 @@ impl Port {
             PortKind::TcpServer { .. } => "tcp-server",
             PortKind::BleServer { .. } => "ble-server",
             PortKind::SppClient { .. } => "spp-client",
+            PortKind::BleClient { .. } => "ble-client",
             PortKind::Serial { .. } => "serial",
         }
     }
@@ -576,7 +611,9 @@ impl Port {
     /// The `[[tnc]]` this port uses, if any.
     pub fn tnc_id(&self) -> Option<&str> {
         match &self.kind {
-            PortKind::SppClient { tnc, .. } | PortKind::Serial { tnc, .. } => Some(tnc),
+            PortKind::SppClient { tnc, .. }
+            | PortKind::BleClient { tnc, .. }
+            | PortKind::Serial { tnc, .. } => Some(tnc),
             _ => None,
         }
     }
@@ -590,6 +627,11 @@ impl Port {
                 ..
             }
             | PortKind::SppClient {
+                connect,
+                idle_timeout,
+                ..
+            }
+            | PortKind::BleClient {
                 connect,
                 idle_timeout,
                 ..
@@ -630,6 +672,14 @@ pub enum PortKind {
         tnc: String,
         model: TncModel,
         spp: Spp,
+        connect: ConnectPolicy,
+        idle_timeout: Duration,
+        exit_kiss_on_disconnect: bool,
+    },
+    BleClient {
+        tnc: String,
+        model: TncModel,
+        ble: Ble,
         connect: ConnectPolicy,
         idle_timeout: Duration,
         exit_kiss_on_disconnect: bool,
@@ -739,7 +789,11 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                 Some(a) => resolve_adapter_value(a, source, &object, &mut errors),
                 None => global_sel.clone(),
             });
-            let (tnc, mut problems) = resolve_tnc(def, source, spp_adapter);
+            let ble_adapter = def.ble.as_ref().map(|ble| match &ble.adapter {
+                Some(a) => resolve_adapter_value(a, source, &object, &mut errors),
+                None => global_sel.clone(),
+            });
+            let (tnc, mut problems) = resolve_tnc(def, source, spp_adapter, ble_adapter);
             tncs.push(tnc);
             errors.append(&mut problems);
         }
@@ -921,6 +975,36 @@ pub fn resolve(files: &[(Source, ConfigFile)]) -> Result<Config, Vec<Problem>> {
                             }
                         }
                     }
+                    PortDef::BleClient {
+                        tnc,
+                        connect,
+                        idle_timeout,
+                        exit_kiss_on_disconnect,
+                        ..
+                    } => {
+                        let idle_timeout =
+                            resolve_idle_timeout(idle_timeout, source, &pobject, &mut errors);
+                        let found = tncs.iter().find(|t| t.id == *tnc);
+                        check_tnc_visible(found, tnc, source, &pobject, &mut errors);
+                        match found.map(|t| (t, &t.ble)) {
+                            Some((t, Some(ble))) => PortKind::BleClient {
+                                tnc: t.id.clone(),
+                                model: t.model,
+                                ble: ble.clone(),
+                                connect: connect.unwrap_or_default(),
+                                idle_timeout,
+                                exit_kiss_on_disconnect: exit_kiss_on_disconnect.unwrap_or(false),
+                            },
+                            other => {
+                                errors.push(Problem::new(
+                                    Some(source.clone()),
+                                    &pobject,
+                                    tnc_reference_error(tnc, other.is_some(), "ble"),
+                                ));
+                                continue;
+                            }
+                        }
+                    }
                     PortDef::Serial {
                         tnc,
                         connect,
@@ -1046,13 +1130,14 @@ fn tnc_reference_error(tnc: &str, defined: bool, section: &str) -> String {
     }
 }
 
-/// `spp_adapter` is the `[tnc.spp]` adapter, already resolved with the
-/// fallback to `[global] adapter`. The TNC comes back even with errors, so
+/// `spp_adapter` and `ble_adapter` are the `[tnc.spp]` and `[tnc.ble]`
+/// adapters, already resolved with the fallback to `[global] adapter`. The TNC comes back even with errors, so
 /// ports that use it resolve and only the TNC's own problems are reported.
 fn resolve_tnc(
     def: &TncDef,
     source: &Source,
     spp_adapter: Option<AdapterSel>,
+    ble_adapter: Option<AdapterSel>,
 ) -> (Tnc, Vec<Problem>) {
     let object = format!("tnc {}", def.id);
     let mut errors = Vec::new();
@@ -1094,6 +1179,22 @@ fn resolve_tnc(
             })
         }
     };
+    let ble = match &def.ble {
+        None => None,
+        Some(ble) => {
+            let address = match ble.address.parse::<Mac>() {
+                Ok(a) => a,
+                Err(e) => {
+                    err(format!("ble.address: {e}"));
+                    Mac([0; 6])
+                }
+            };
+            Some(Ble {
+                address,
+                adapter: ble_adapter.unwrap_or(AdapterSel::Default),
+            })
+        }
+    };
     let serial = match &def.serial {
         None => None,
         Some(serial) => {
@@ -1113,14 +1214,15 @@ fn resolve_tnc(
             })
         }
     };
-    if spp.is_none() && serial.is_none() {
-        err("a tnc needs at least one of [tnc.spp] or [tnc.serial]".into());
+    if spp.is_none() && ble.is_none() && serial.is_none() {
+        err("a tnc needs at least one of [tnc.spp], [tnc.ble] or [tnc.serial]".into());
     }
     let tnc = Tnc {
         id: def.id.clone(),
         name,
         model,
         spp,
+        ble,
         serial,
         source: source.clone(),
     };
@@ -1160,12 +1262,20 @@ mod tests {
             "th-d74"
         );
         assert!(radio_by_bluetooth_name("jPhone").is_none());
+        assert_eq!(
+            radio_by_bluetooth_name("Ailunce HA2").unwrap().model,
+            "generic"
+        );
         assert_eq!(radio_by_usb_id(0x2166, 0x9023).unwrap().model, "th-d75");
         assert!(radio_by_usb_id(0x1234, 0x5678).is_none());
         // Every radio's model is one a config can name.
         for r in radios() {
             assert!(r.model.parse::<TncModel>().is_ok(), "{}", r.model);
-            assert!(r.bluetooth.is_some() || r.usb.is_some(), "{}", r.name);
+            assert!(
+                r.bluetooth.is_some() || r.ble.is_some() || r.usb.is_some(),
+                "{}",
+                r.name
+            );
         }
     }
     use super::*;
@@ -1343,6 +1453,69 @@ enabled = false
             p.connect_policy(),
             Some((ConnectPolicy::Always, Duration::ZERO))
         );
+    }
+
+    #[test]
+    fn ble_tncs_and_ble_client_ports() {
+        let cfg = resolve_text(
+            r#"
+[[adapter]]
+id = "dongle"
+mac = "AC:A7:F1:29:9C:7F"
+
+[[tnc]]
+id = "ha2"
+name = "HA2"
+ble = { address = "34:3E:27:3F:E0:10", adapter = "dongle" }
+
+[[bridge]]
+id = "ktbr0"
+name = "HA2"
+  [[bridge.port]]
+  type = "ble-client"
+  tnc = "ha2"
+  connect = "always"
+  [[bridge.port]]
+  type = "tcp-server"
+  listen = "8001"
+"#,
+        )
+        .unwrap();
+        let ble = cfg.tnc("ha2").unwrap().ble.clone().unwrap();
+        assert_eq!(ble.address, "34:3E:27:3F:E0:10".parse().unwrap());
+        assert_eq!(
+            ble.adapter,
+            AdapterSel::Mac("AC:A7:F1:29:9C:7F".parse().unwrap())
+        );
+        let p = &cfg.bridges[0].ports[0];
+        assert_eq!(p.id, "ble-client0");
+        assert_eq!(p.role, Role::Tnc);
+        assert_eq!(p.tnc_id(), Some("ha2"));
+        assert_eq!(
+            p.kind,
+            PortKind::BleClient {
+                tnc: "ha2".into(),
+                model: TncModel::Generic,
+                ble,
+                connect: ConnectPolicy::Always,
+                idle_timeout: Duration::ZERO,
+                exit_kiss_on_disconnect: false,
+            }
+        );
+
+        // A ble-client needs a [tnc.ble], and the address has to parse.
+        let e = resolve_text(
+            "[[tnc]]\nid = \"d75\"\nspp = { address = \"00:11:22:33:44:55\" }\n\
+             [[tnc]]\nid = \"bad\"\nble = { address = \"34:3E\" }\n\
+             [[bridge]]\nid = \"ktbr0\"\nname = \"x\"\nenabled = false\n\
+             [[bridge.port]]\ntype = \"ble-client\"\ntnc = \"d75\"\n",
+        )
+        .unwrap_err();
+        assert!(
+            e.iter().any(|m| m.contains("no [tnc.ble] section")),
+            "{e:?}"
+        );
+        assert!(e.iter().any(|m| m.contains("ble.address")), "{e:?}");
     }
 
     #[test]

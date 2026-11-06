@@ -64,6 +64,7 @@ pub struct TncDef {
     /// One of [`MODELS`](super::resolve::MODELS); `generic` if left out.
     pub model: Option<String>,
     pub spp: Option<SppDef>,
+    pub ble: Option<BleDef>,
     pub serial: Option<SerialDef>,
 }
 
@@ -76,6 +77,16 @@ pub struct SppDef {
     pub adapter: Option<String>,
     /// RFCOMM channel; normally found by SDP through BlueZ.
     pub channel: Option<u8>,
+}
+
+/// `[tnc.ble]`: the TNC over Bluetooth Low Energy, as a BLE KISS API
+/// peripheral.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BleDef {
+    pub address: String,
+    /// The adapter that connects to it.
+    pub adapter: Option<String>,
 }
 
 /// `[tnc.serial]`: the TNC over USB or a UART.
@@ -170,6 +181,15 @@ pub enum PortDef {
         idle_timeout: Option<String>,
         exit_kiss_on_disconnect: Option<bool>,
     },
+    BleClient {
+        id: Option<String>,
+        role: Option<Role>,
+        /// A `[[tnc]]` id; the TNC needs a `ble` section.
+        tnc: String,
+        connect: Option<ConnectPolicy>,
+        idle_timeout: Option<String>,
+        exit_kiss_on_disconnect: Option<bool>,
+    },
     Serial {
         id: Option<String>,
         role: Option<Role>,
@@ -188,6 +208,7 @@ impl PortDef {
             PortDef::TcpServer { .. } => "tcp-server",
             PortDef::BleServer { .. } => "ble-server",
             PortDef::SppClient { .. } => "spp-client",
+            PortDef::BleClient { .. } => "ble-client",
             PortDef::Serial { .. } => "serial",
         }
     }
@@ -198,6 +219,7 @@ impl PortDef {
             | PortDef::TcpServer { id, .. }
             | PortDef::BleServer { id, .. }
             | PortDef::SppClient { id, .. }
+            | PortDef::BleClient { id, .. }
             | PortDef::Serial { id, .. } => id.as_deref(),
         }
     }
@@ -208,6 +230,7 @@ impl PortDef {
             | PortDef::TcpServer { role, .. }
             | PortDef::BleServer { role, .. }
             | PortDef::SppClient { role, .. }
+            | PortDef::BleClient { role, .. }
             | PortDef::Serial { role, .. } => *role,
         }
     }
@@ -215,9 +238,10 @@ impl PortDef {
     /// The role a port type has unless `role` overrides it.
     pub fn default_role(&self) -> Role {
         match self {
-            PortDef::TcpClient { .. } | PortDef::SppClient { .. } | PortDef::Serial { .. } => {
-                Role::Tnc
-            }
+            PortDef::TcpClient { .. }
+            | PortDef::SppClient { .. }
+            | PortDef::BleClient { .. }
+            | PortDef::Serial { .. } => Role::Tnc,
             PortDef::TcpServer { .. } | PortDef::BleServer { .. } => Role::App,
         }
     }

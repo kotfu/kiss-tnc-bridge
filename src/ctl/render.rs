@@ -142,6 +142,9 @@ pub fn tncs(s: &Status) -> String {
                 spp.address, spp.adapter
             ));
         }
+        if let Some(ble) = &t.ble {
+            parts.push(format!("BLE {} on {}", ble.address, ble.adapter));
+        }
         if let Some(ser) = &t.serial {
             parts.push(format!(
                 "serial {}: {}",
@@ -261,6 +264,9 @@ pub fn models(list: &[ModelEntry]) -> String {
             let mut how = Vec::new();
             if r.bluetooth.is_some() {
                 how.push("Bluetooth");
+            }
+            if r.ble.is_some() {
+                how.push("BLE");
             }
             if r.usb.is_some() {
                 how.push("USB");
