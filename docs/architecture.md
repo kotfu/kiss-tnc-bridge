@@ -151,13 +151,14 @@ The TNC's `model` picks the service and characteristics:
 | `td-h9` | `0000af00-0000-1000-8000-00805f9b34fb` | `af01`, write without response | `af02`, notify |
 
 The TD-H9 pads each frame with extra FENDs (five before, three after),
-which reassembly skips as empty frames.
+which reassembly skips as empty frames. Its protocol is written up in
+[td-h9-ble-kiss.md](td-h9-ble-kiss.md).
 
 BlueZ forgets an unpaired LE device a little while after it last heard it,
 so a connect first scans for the TNC when BlueZ doesn't know it. The scan
 looks for its address, not a service or a name: the TD-H9 doesn't
-advertise the service its KISS link is on, and radios let users rename
-them. A TNC that something else is connected to doesn't
+advertise the service its KISS link is on, and a name can differ between
+radios and firmware versions. A TNC that something else is connected to doesn't
 advertise, and the connect fails and backs off as usual. When the bridge
 lets go of the link (idle, shutdown, a restart), it drops the LE connection
 too, so the TNC advertises again for phones.

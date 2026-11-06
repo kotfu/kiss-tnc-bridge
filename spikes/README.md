@@ -55,7 +55,8 @@ response) and notifications on `af02`, each frame whole in one BLE packet,
 padded with extra FENDs (`c0 c0 c0 c0 c0 00 … c0 c0 c0`). The app sends
 the standard KISS parameters (TXDELAY 30, persistence 63, slot time 10, TX
 tail 0, full duplex off) at connect; the radio transmits without them. Its
-`ff00` service isn't used for KISS.
+`ff00` service isn't used for KISS. The full write-up is
+[docs/td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md).
 
 ## Coexistence test (BLE GATT + RFCOMM on one controller)
 

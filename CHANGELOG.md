@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `td-h9` model, for the TIDRADIO TD-H9: KISS over BLE on TIDRADIO's
   own GATT service rather than the BLE KISS API's. `ktbctl scan --le` lists
   every named LE device, BLE KISS TNCs and known radios first, since the
-  TD-H9 doesn't advertise a KISS service and can be renamed.
+  TD-H9 doesn't advertise a KISS service and its name may vary.
 
 ## 1.0.0 (2 November 2026)
 

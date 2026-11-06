@@ -404,8 +404,9 @@ pub const MODELS: &[ModelInfo] = &[
             bluetooth: None,
             ble: Some(RadioBle {
                 name_prefix: "TD-H9",
-                setup: "On the radio, turn Bluetooth on, and disconnect any phone app from it: \
-                        while something is connected, it doesn't advertise.",
+                setup: "On the radio, set Menu > Bluetooth > BT On/Off to On and BT Mode to \
+                        Receiver, and disconnect any phone app from it: while something is \
+                        connected, it doesn't advertise.",
             }),
             usb: None,
         }],

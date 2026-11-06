@@ -53,8 +53,8 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
 /// Look for devices on `adapter` for `seconds`, or until `stop`: Bluetooth
 /// Classic devices, or LE devices with a name. LE isn't filtered on the
 /// BLE KISS service, because some radios (the TD-H9) don't advertise the
-/// service their KISS link is on, nor on names, which radios let users
-/// change. Each device goes to `found` as it's heard, and again when
+/// service their KISS link is on, nor on names, which can differ between
+/// radios and firmware versions. Each device goes to `found` as it's heard, and again when
 /// there's news about it (its name came in). Returns them all, likely TNCs
 /// first, then the strongest signal. `tnc_for` names the TNC already
 /// defined at an address.

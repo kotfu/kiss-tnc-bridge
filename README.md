@@ -1463,10 +1463,13 @@ tested yet.
 Some radios carry plain KISS over a GATT service of their own instead of
 the BLE KISS API's, and need their `model` so the bridge knows where to
 look. The TIDRADIO TD-H9 is one: set `model = "td-h9"` in its `[[tnc]]`.
-It doesn't advertise a KISS service, and its name can be changed in its
-menus, so `ktbctl scan --le` lists every named Bluetooth LE device nearby;
-pick it by address. `ktbctl setup` sets the model when you choose
-"TIDRADIO TD-H9" from its list of radios.
+It doesn't advertise a KISS service, and its name may differ between
+radios and firmware versions, so `ktbctl scan --le` lists every named
+Bluetooth LE device nearby; pick it by address. On the radio, set
+Menu > Bluetooth > BT On/Off to On and BT Mode to Receiver. `ktbctl setup` sets the model when you choose
+"TIDRADIO TD-H9" from its list of radios. How the TD-H9's protocol was
+worked out, and how to use it from your own code, is in
+[docs/td-h9-ble-kiss.md](docs/td-h9-ble-kiss.md).
 
 With the generic model the bridge sends the TNC nothing, so it can't tell a
 TNC that's quiet from one that isn't working. If apps hear nothing,
