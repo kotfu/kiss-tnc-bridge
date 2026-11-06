@@ -405,8 +405,9 @@ pub const MODELS: &[ModelInfo] = &[
             ble: Some(RadioBle {
                 name_prefix: "TD-H9",
                 setup: "On the radio, set Menu > Bluetooth > BT On/Off to On and BT Mode to \
-                        Receiver, and disconnect any phone app from it: while something is \
-                        connected, it doesn't advertise.",
+                        Receiver, and Menu > APRS > APRS Switch to On (with it off, the radio \
+                        transmits but passes nothing it receives to the bridge). Disconnect any \
+                        phone app from it: while something is connected, it doesn't advertise.",
             }),
             usb: None,
         }],

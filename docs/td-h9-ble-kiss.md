@@ -32,13 +32,21 @@ Corrections and findings from other firmware versions are welcome as
 
 ## Setting up the radio
 
-Two settings in the radio's Bluetooth menu are needed before anything can
-reach the TNC:
+Three settings are needed before the TNC works in both directions:
 
 | Menu | Setting |
 |---|---|
 | Menu > Bluetooth > BT On/Off | On |
 | Menu > Bluetooth > BT Mode | Receiver |
+| Menu > APRS > APRS Switch | On |
+
+With APRS Switch off, the TNC still transmits the frames you write to it,
+but passes nothing it receives back over Bluetooth. Turning it on was
+enough to start receiving, with the connection left up: in testing, the
+radio delivered nothing for eight minutes with the switch off, then
+packets within seconds of turning it on, and nothing again once it was
+turned off, while a nearby receiver kept hearing traffic it had passed on
+before.
 
 You also need to ensure any other Bluetooth apps are disconnected from the radio. It
 only handles one connection at a time, and it doesn't advertise the GATT service while
@@ -53,7 +61,7 @@ an app is connected.
 | Notifications from (radio → host) | `0000af02-0000-1000-8000-00805f9b34fb` (`0xAF02`), notify |
 | Framing | Standard KISS: `FEND` (`0xC0`) delimiters, `FESC` escaping, command byte `0x00` for data on port 0 |
 | Pairing | None. It accepts a connection from any central without bonding |
-| Initialization | None needed. It sends and receives as soon as you subscribe to `0xAF02` |
+| Initialization | Nothing over Bluetooth. It sends and receives as soon as you subscribe to `0xAF02`, if APRS Switch is on (see [Setting up the radio](#setting-up-the-radio)) |
 | Connections | One at a time. It stops advertising while connected |
 
 Write one complete KISS frame per write to `0xAF01`. Subscribe to `0xAF02`
@@ -183,6 +191,17 @@ and BlueZ 5.82.
 4. **Confirm it.** `kiss-tnc-bridge` with `model = "td-h9"` connected to
    `0xAF00`, received packets from the air, and sent a packet that the local
    digipeater repeated.
+5. **Find the APRS Switch.** In a longer test, with aprs.fi on an iPhone
+   connected to the radio through the bridge, the radio transmitted
+   everything aprs.fi sent but delivered nothing it received for eight
+   minutes. The bridge was subscribed the whole time. Menu > APRS >
+   APRS Switch had been off; turned on, with nothing else changed,
+   packets arrived within seconds, including the replies to a message sent
+   from aprs.fi. Turned off again, the radio still transmitted, but
+   delivered nothing, while a Graywolf receiver nearby kept hearing
+   stations the TD-H9 had passed on minutes before. So the TNC receives
+   over Bluetooth only with APRS Switch on (see
+   [Setting up the radio](#setting-up-the-radio)).
 
 The same relay works for other BLE radios. Give it the radio's address, and
 connect the radio's app to the relay's name. See
@@ -258,7 +277,8 @@ Each received packet then shows up as a value change on `0xAF02`.
 - Whether frames longer than the MTU are split across notifications.
 - Why the first listen (step 3 above) heard nothing for ten minutes, when
   later connections received packets right away without sending anything
-  first. It may simply not have heard a packet then.
+  first. APRS Switch being off would explain it, but its setting then
+  wasn't recorded.
 
 Corrections and findings from other firmware versions are welcome as
 [issues](https://github.com/kotfu/kiss-tnc-bridge/issues).
