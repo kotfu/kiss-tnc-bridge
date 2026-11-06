@@ -413,6 +413,48 @@ fn compare_port(bridge: &str, old: &Port, new: &Port, rt: &Runtime) -> PortPlan 
                 }
             }
             (
+                PortKind::BleClient {
+                    tnc: ot,
+                    model: om,
+                    ble: ob,
+                    connect: oc,
+                    idle_timeout: oi,
+                    exit_kiss_on_disconnect: oe,
+                },
+                PortKind::BleClient {
+                    tnc: nt,
+                    model: nm,
+                    ble: nb,
+                    connect: nc,
+                    idle_timeout: ni,
+                    exit_kiss_on_disconnect: ne,
+                },
+            ) => {
+                if ob.address != nb.address {
+                    note(&mut changes, "ble");
+                    restart = true;
+                } else if !rt.same_adapter(&ob.adapter, &nb.adapter) {
+                    note(&mut changes, "ble.adapter");
+                    restart = true;
+                }
+                if om != nm {
+                    note(&mut changes, "model");
+                    restart = true;
+                }
+                if ot != nt {
+                    note(&mut changes, "tnc");
+                }
+                if oc != nc {
+                    note(&mut changes, "connect");
+                }
+                if oi != ni {
+                    note(&mut changes, "idle_timeout");
+                }
+                if oe != ne {
+                    note(&mut changes, "exit_kiss_on_disconnect");
+                }
+            }
+            (
                 PortKind::Serial {
                     tnc: ot,
                     model: om,

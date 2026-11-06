@@ -225,6 +225,7 @@ impl Scan {
             command: Command::BluetoothScan {
                 adapter: self.adapter.clone(),
                 seconds: Some(SCAN_SECS),
+                transport: None,
             },
             then: Then::Scan,
         }
@@ -1928,6 +1929,7 @@ pub(crate) mod tests {
                     adapter: "builtin (2C:CF:67:6E:2E:BC)".into(),
                     paired: Some(true),
                 }),
+                ble: None,
                 serial: None,
                 in_use_by: Some("ktbr1".into()),
                 source: "dynamic".into(),
@@ -2280,7 +2282,8 @@ pub(crate) mod tests {
             look.command,
             Command::BluetoothScan {
                 adapter: Some("2C:CF:67:6E:2E:BC".into()),
-                seconds: Some(SCAN_SECS)
+                seconds: Some(SCAN_SECS),
+                transport: None,
             }
         );
         app.sent(id - 1, &look.then);
@@ -2479,7 +2482,8 @@ pub(crate) mod tests {
             req.command,
             Command::BluetoothScan {
                 adapter: Some("2C:CF:67:6E:2E:BC".into()),
-                seconds: Some(SCAN_SECS)
+                seconds: Some(SCAN_SECS),
+                transport: None,
             }
         );
         assert_eq!(app.scan.as_ref().unwrap().title, "Scan on builtin (hci0)");

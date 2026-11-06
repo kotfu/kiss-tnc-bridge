@@ -51,9 +51,9 @@ use crate::config::{self, AdapterSel, Config, Listen, Mac, PortKind, Problem, So
 use crate::control::edit::{self, World};
 use crate::control::events::Hub;
 use crate::control::protocol::{
-    self, AdapterStatus, ApiError, BridgeStatus, ChangeResult, CheckResult, Command, ConfigText,
-    Counters, ErrorCode, PlanResult, PortStatus, PublicName, SerialStatus, SessionStatus,
-    SppStatus, Status, TncStatus, rfc3339,
+    self, AdapterStatus, ApiError, BleStatus, BridgeStatus, ChangeResult, CheckResult, Command,
+    ConfigText, Counters, ErrorCode, PlanResult, PortStatus, PublicName, SerialStatus,
+    SessionStatus, SppStatus, Status, TncStatus, rfc3339,
 };
 use crate::error::Error;
 use crate::port::tcp_server::{ServerState, TcpLive, TcpServerPort};
@@ -992,7 +992,11 @@ impl Daemon {
                 };
                 let _ = reply.send(res);
             }
-            Command::BluetoothScan { adapter, seconds } => {
+            Command::BluetoothScan {
+                adapter,
+                seconds,
+                transport,
+            } => {
                 let target = match self.bt_adapter(adapter.as_deref()).await {
                     Ok(a) => a,
                     Err(e) => {
@@ -1004,10 +1008,12 @@ impl Daemon {
                     .cfg
                     .tncs
                     .iter()
-                    .filter_map(|t| {
-                        t.spp
-                            .as_ref()
-                            .map(|s| (bluer::Address(s.address.0), t.id.clone()))
+                    .flat_map(|t| {
+                        let spp = t.spp.as_ref().map(|s| s.address);
+                        let ble = t.ble.as_ref().map(|b| b.address);
+                        spp.into_iter()
+                            .chain(ble)
+                            .map(|a| (bluer::Address(a.0), t.id.clone()))
                     })
                     .collect();
                 let (lock, scans) = (self.bt_busy.clone(), self.scans.clone());
@@ -1040,6 +1046,7 @@ impl Daemon {
                     };
                     let res = pairing::scan(
                         &target,
+                        transport.unwrap_or_default(),
                         secs,
                         stop.clone(),
                         |a| tncs.iter().find(|(x, _)| *x == a).map(|(_, id)| id.clone()),
@@ -1363,7 +1370,10 @@ impl Daemon {
         let tnc_for = |m: Mac| {
             cfg.tncs
                 .iter()
-                .find(|t| t.spp.as_ref().is_some_and(|s| s.address == m))
+                .find(|t| {
+                    t.spp.as_ref().is_some_and(|s| s.address == m)
+                        || t.ble.as_ref().is_some_and(|b| b.address == m)
+                })
                 .map(|t| t.id.clone())
         };
         let present = self.bt.adapter_details(&tnc_for).await;
@@ -1426,6 +1436,10 @@ impl Daemon {
                 name: t.name.clone(),
                 model: t.model.to_string(),
                 spp,
+                ble: t.ble.as_ref().map(|b| BleStatus {
+                    address: b.address.to_string(),
+                    adapter: cfg.describe_adapter(&b.adapter),
+                }),
                 serial: t.serial.as_ref().map(|s| SerialStatus {
                     path: s.path.clone(),
                     baud: s.baud,
@@ -1676,7 +1690,10 @@ impl Daemon {
                     }
                 }
             }
-            PortKind::TcpClient { .. } | PortKind::SppClient { .. } | PortKind::Serial { .. } => {
+            PortKind::TcpClient { .. }
+            | PortKind::SppClient { .. }
+            | PortKind::BleClient { .. }
+            | PortKind::Serial { .. } => {
                 tracing::warn!(bridge = %b.id, port = %p.id, "a {} app port isn't supported yet; skipping", p.type_name());
                 return;
             }
@@ -1894,6 +1911,14 @@ impl Daemon {
                     Err(msg)
                 }
             },
+            PortKind::BleClient { .. } => match self.bt.ble_connector(tnc).await {
+                Ok(c) => Ok(c),
+                Err(e) => {
+                    let msg = e.to_string();
+                    self.bluez_errors.push(e);
+                    Err(msg)
+                }
+            },
             PortKind::TcpServer { .. } | PortKind::BleServer { .. } => Err(format!(
                 "bridge {}: a {} TNC port isn't supported",
                 b.id,
@@ -2050,6 +2075,10 @@ fn radio_entry(r: &config::RadioInfo) -> protocol::RadioEntry {
             pairing_mode: b.pairing_mode.to_string(),
             pairing: b.pairing.to_string(),
         }),
+        ble: r.ble.as_ref().map(|b| protocol::RadioBleEntry {
+            name_prefix: b.name_prefix.to_string(),
+            setup: b.setup.to_string(),
+        }),
         usb: r.usb.as_ref().map(|u| protocol::RadioUsbEntry {
             usb_id: u.id.map(|(v, p)| format!("{v:04x}:{p:04x}")),
             setup: u.setup.to_string(),
@@ -2085,6 +2114,13 @@ fn port_settings(cfg: &Config, p: &config::Port) -> Value {
             v
         }
         PortKind::SppClient {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        }
+        | PortKind::BleClient {
             tnc,
             connect,
             idle_timeout,
@@ -2131,6 +2167,10 @@ fn settings_for(b: &config::Bridge) -> Option<TncSettings> {
     let (connect, idle_timeout) = tnc.connect_policy()?;
     let exit_kiss_on_disconnect = match &tnc.kind {
         PortKind::SppClient {
+            exit_kiss_on_disconnect,
+            ..
+        }
+        | PortKind::BleClient {
             exit_kiss_on_disconnect,
             ..
         }
@@ -2287,6 +2327,22 @@ impl Bt {
         )))
     }
 
+    async fn ble_connector(&mut self, p: &config::Port) -> Result<Box<dyn TncConnector>, Error> {
+        let PortKind::BleClient {
+            tnc, model, ble, ..
+        } = &p.kind
+        else {
+            return Err(Error::Config("not a ble-client port".into()));
+        };
+        let session = self.session().await?;
+        Ok(Box::new(crate::port::ble_client::connector(
+            session,
+            tnc.clone(),
+            ble.clone(),
+            *model,
+        )))
+    }
+
     async fn add_ble(
         &mut self,
         slot: BleSlot,
@@ -2400,6 +2456,10 @@ impl Bt {
 impl Bt {
     async fn spp_connector(&mut self, _p: &config::Port) -> Result<Box<dyn TncConnector>, Error> {
         Err(Error::Config("spp-client ports need Linux".into()))
+    }
+
+    async fn ble_connector(&mut self, _p: &config::Port) -> Result<Box<dyn TncConnector>, Error> {
+        Err(Error::Config("ble-client ports need Linux".into()))
     }
 
     async fn add_ble(

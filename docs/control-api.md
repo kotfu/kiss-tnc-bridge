@@ -269,7 +269,7 @@ immediately. `status` shows a held link in the port's `detail`.
 ### TNCs and adapters
 
 Dynamic ones. `tnc` names a TNC by id or name; `adapter` an adapter by id.
-Definitions use the keys of a `[[tnc]]` (with `spp` and `serial` objects)
+Definitions use the keys of a `[[tnc]]` (with `spp`, `ble` and `serial` objects)
 or an `[[adapter]]`.
 
 | Command | Parameters | Does |
@@ -321,7 +321,7 @@ the same table.
 ### Bluetooth: `bluetooth.scan`, `scan_stop`, `pair`, `unpair`
 
 Radios reach the bridge over Bluetooth Classic (RFCOMM), which needs them
-paired with the host; phones don't (see the README). A device is named by
+paired with the host; phones and BLE TNCs don't (see the README). A device is named by
 `tnc` (a TNC's id or name: its `spp` address and adapter) or by `address`
 and optionally `adapter` (id, MAC or `hciN`; the default adapter
 otherwise).
@@ -330,7 +330,9 @@ otherwise).
 `adapter` and returns what it found, known radios first. Radios have to be
 in pairing mode to be found. Only devices heard during the scan are
 listed, so a paired radio that's switched off isn't, though BlueZ still
-knows it.
+knows it. With `"transport": "le"` it looks over Bluetooth LE instead, for
+TNCs advertising the BLE KISS service (`ble-client` TNCs); the default is
+`"classic"`.
 
 ```jsonc
 [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,

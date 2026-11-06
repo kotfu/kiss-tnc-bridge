@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `ble-client` ports: TNCs on Bluetooth LE that follow the
+  [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md),
+  such as the Ailunce HA2, defined with a `[tnc.ble]` section. They aren't
+  paired; the bridge connects as a phone app would, and drops the link
+  when it lets go so the radio advertises again.
+- `ktbctl scan --le` lists BLE KISS TNCs in range, and `bluetooth.scan`
+  takes `transport = "le"`. `ktbctl setup` and the TUI's add forms offer
+  Bluetooth LE.
+- `status` shows a TNC's `ble` section, and `tnc.models` lists radios with
+  BLE TNCs.
+
 ## 1.0.0 (2 November 2026)
 
 A rewrite around bridges and ports, with a new TOML configuration and

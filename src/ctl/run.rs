@@ -36,7 +36,8 @@ use super::client::{Client, CtlError, DEFAULT_SOCKET, Message, result};
 use super::render;
 use crate::control::protocol::{
     BtDevice, ChangeResult, CheckResult, Command, ConfigText, ErrorCode, Event, ModelEntry,
-    ObjectKind, PairResult, PairingStep, PlanResult, ProblemJson, SerialEntry, Status, Topic,
+    ObjectKind, PairResult, PairingStep, PlanResult, ProblemJson, ScanTransport, SerialEntry,
+    Status, Topic,
 };
 
 /// How a run ended, for the exit status.
@@ -144,14 +145,25 @@ impl Ctl {
                 let l: Vec<SerialEntry> = c.call_as(Command::SerialList).await?;
                 self.print(&l, || render::serial(&l))
             }
-            Cmd::Scan { adapter, seconds } => {
+            Cmd::Scan {
+                adapter,
+                seconds,
+                le,
+            } => {
                 if !self.json {
-                    eprintln!(
-                        "Looking for {seconds} s. Radios have to be in pairing mode \
-                         (discoverable) to be found."
-                    );
+                    if le {
+                        eprintln!(
+                            "Looking for {seconds} s for BLE KISS TNCs. A TNC that something \
+                             else is connected to doesn't advertise, so it won't be found."
+                        );
+                    } else {
+                        eprintln!(
+                            "Looking for {seconds} s. Radios have to be in pairing mode \
+                             (discoverable) to be found."
+                        );
+                    }
                 }
-                self.scan(c, adapter, seconds).await
+                self.scan(c, adapter, seconds, le).await
             }
             Cmd::Pair(who) => self.pair(c, who).await,
             Cmd::Unpair(who) => self.unpair(c, who).await,
@@ -319,11 +331,13 @@ impl Ctl {
         c: &mut Client,
         adapter: Option<String>,
         seconds: u64,
+        le: bool,
     ) -> Result<(), CtlError> {
         let id = c
             .send(Command::BluetoothScan {
                 adapter,
                 seconds: Some(seconds),
+                transport: le.then_some(ScanTransport::Le),
             })
             .await?;
         let mut shown: Vec<String> = Vec::new();

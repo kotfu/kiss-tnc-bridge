@@ -56,7 +56,7 @@ port's state machine, the sessions on its app ports, and its counters.
               │                          │   Idle → Connecting → Connected → Backoff    │
               └──────────────────────────┴───────────────────────┬──────────────────────┘
                                                                  │
-                                        TCP socket | Bluetooth RFCOMM | serial device
+                       TCP socket | Bluetooth RFCOMM | BLE GATT client | serial device
 ```
 
 - **Apps to the TNC:** each session reassembles its own KISS frames, so
@@ -132,6 +132,22 @@ controllers from advertising. So the daemon drops the link of a phone it
 has served when that phone is still connected without a session: it checks
 every 10 seconds. After a crash, the next daemon drops links the last one
 left behind.
+
+### BLE TNCs
+
+A `ble-client` port plays the phone's part against a TNC that follows the
+same spec, such as an Ailunce HA2: it connects, subscribes to the RX
+characteristic, and writes to the TX characteristic, both through BlueZ's
+file-descriptor I/O (`AcquireNotify` and `AcquireWrite`), so the link is a
+byte stream like RFCOMM. Writes are split to the MTU; the TNC reassembles
+the frames. Nothing is paired.
+
+BlueZ forgets an unpaired LE device a little while after it last heard it,
+so a connect first scans for the TNC (filtered on the KISS service) when
+BlueZ doesn't know it. A TNC that something else is connected to doesn't
+advertise, and the connect fails and backs off as usual. When the bridge
+lets go of the link (idle, shutdown, a restart), it drops the LE connection
+too, so the TNC advertises again for phones.
 
 ## KISS framing
 

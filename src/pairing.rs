@@ -32,7 +32,8 @@ use futures::StreamExt;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
-use crate::control::protocol::{BtDevice, PairingStep};
+use crate::control::protocol::{BtDevice, PairingStep, ScanTransport};
+use crate::port::ble_server::KISS_SERVICE_UUID;
 
 /// How long a pairing may take, including someone pressing OK on the radio
 /// (the TH-D75 gives 30 s).
@@ -49,8 +50,8 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
     crate::config::radio_by_bluetooth_name(name?).map(|r| (r.name, r.model))
 }
 
-/// Look for Bluetooth Classic devices on `adapter` for `seconds`, or until
-/// `stop`. Each device goes to `found` as it's heard, and again when
+/// Look for devices on `adapter` for `seconds`, or until `stop`: Bluetooth
+/// Classic devices, or LE devices advertising the BLE KISS service. Each device goes to `found` as it's heard, and again when
 /// there's news about it (its name came in). Returns them all, likely TNCs
 /// first, then the strongest signal. `tnc_for` names the TNC already
 /// defined at an address.
@@ -60,15 +61,23 @@ pub fn known_tnc(name: Option<&str>) -> Option<(&'static str, &'static str)> {
 /// scan have a signal strength, so the others are left out.
 pub async fn scan(
     adapter: &Adapter,
+    transport: ScanTransport,
     seconds: u64,
     stop: CancellationToken,
     tnc_for: impl Fn(Address) -> Option<String>,
     mut found: impl FnMut(&BtDevice),
 ) -> Result<Vec<BtDevice>, String> {
     adapter
-        .set_discovery_filter(DiscoveryFilter {
-            transport: DiscoveryTransport::BrEdr,
-            ..Default::default()
+        .set_discovery_filter(match transport {
+            ScanTransport::Classic => DiscoveryFilter {
+                transport: DiscoveryTransport::BrEdr,
+                ..Default::default()
+            },
+            ScanTransport::Le => DiscoveryFilter {
+                transport: DiscoveryTransport::Le,
+                uuids: std::iter::once(KISS_SERVICE_UUID).collect(),
+                ..Default::default()
+            },
         })
         .await
         .map_err(|e| format!("can't scan on {}: {e}", adapter.name()))?;

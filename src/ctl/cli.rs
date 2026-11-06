@@ -72,6 +72,10 @@ pub enum Cmd {
         /// How long to look
         #[arg(long, default_value_t = 10)]
         seconds: u64,
+        /// Look for BLE KISS TNCs (for ble-client ports) instead of
+        /// Bluetooth Classic radios
+        #[arg(long)]
+        le: bool,
     },
     /// Pair with a radio over Bluetooth, and trust it
     Pair(BtWho),

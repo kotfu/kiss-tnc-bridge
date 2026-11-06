@@ -53,6 +53,24 @@ log_level = "info"
 #   id = "phones"
 #   type = "ble-server"
 
+# A TNC on Bluetooth LE (the BLE KISS API), such as an Ailunce HA2. It isn't
+# paired; ktbctl scan --le finds its address.
+# [[tnc]]
+# id = "ha2"
+# name = "Ailunce HA2"
+# ble = { address = "34:3E:27:3F:E0:10" }
+#
+# [[bridge]]
+# id = "ktbr2"
+# name = "HA2"
+#   [[bridge.port]]
+#   id = "radio"
+#   type = "ble-client"
+#   tnc = "ha2"
+#   [[bridge.port]]
+#   id = "phones"
+#   type = "ble-server"
+
 # A software TNC such as Dire Wolf or Graywolf, shared to phones over BLE and
 # to apps on this machine over TCP.
 # [[bridge]]

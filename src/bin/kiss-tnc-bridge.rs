@@ -147,6 +147,13 @@ fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
             exit_kiss_on_disconnect,
             ..
         }
+        | config::PortKind::BleClient {
+            tnc,
+            connect,
+            idle_timeout,
+            exit_kiss_on_disconnect,
+            ..
+        }
         | config::PortKind::Serial {
             tnc,
             connect,
@@ -154,10 +161,10 @@ fn describe_port(cfg: &config::Config, p: &config::Port) -> String {
             exit_kiss_on_disconnect,
             ..
         } => {
-            let via = if matches!(p.kind, config::PortKind::Serial { .. }) {
-                "serial"
-            } else {
-                "Bluetooth"
+            let via = match p.kind {
+                config::PortKind::Serial { .. } => "serial",
+                config::PortKind::BleClient { .. } => "BLE",
+                _ => "Bluetooth",
             };
             let mut s = format!(
                 "{tnc} over {via}{}",
@@ -231,6 +238,13 @@ fn print_summary(cfg: &config::Config, report: &config::Report) {
         );
         if let Some(spp) = &t.spp {
             println!("    spp     {}", describe_spp(cfg, spp));
+        }
+        if let Some(ble) = &t.ble {
+            println!(
+                "    ble     {} on {}",
+                ble.address,
+                cfg.describe_adapter(&ble.adapter)
+            );
         }
         if let Some(serial) = &t.serial {
             println!("    serial  {} at {} baud", serial.path, serial.baud);

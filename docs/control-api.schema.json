@@ -444,6 +444,21 @@
           ],
           "type": "string"
         },
+        "ScanTransport": {
+          "description": "What a `bluetooth.scan` listens on.",
+          "oneOf": [
+            {
+              "const": "classic",
+              "description": "Bluetooth Classic: radios in pairing mode, for `spp-client`.",
+              "type": "string"
+            },
+            {
+              "const": "le",
+              "description": "Bluetooth LE: TNCs advertising the BLE KISS service, for\n`ble-client`.",
+              "type": "string"
+            }
+          ]
+        },
         "Topic": {
           "oneOf": [
             {
@@ -1085,7 +1100,7 @@
           "type": "object"
         },
         {
-          "description": "Look for Bluetooth Classic devices for `seconds` (default 10), likely\nTNCs first. Radios have to be in pairing mode to be found, and only\ndevices heard during the scan are listed. Meanwhile the daemon sends\nthis connection a `found` event for each device as it turns up.",
+          "description": "Look for devices for `seconds` (default 10), likely TNCs first. Over\nBluetooth Classic (the default), radios have to be in pairing mode\nto be found; over LE, only TNCs offering the BLE KISS service are\nlisted. Only devices heard during the scan are listed. Meanwhile the\ndaemon sends this connection a `found` event for each device as it\nturns up.",
           "properties": {
             "adapter": {
               "type": [
@@ -1103,6 +1118,16 @@
               "type": [
                 "integer",
                 "null"
+              ]
+            },
+            "transport": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ScanTransport"
+                },
+                {
+                  "type": "null"
+                }
               ]
             }
           },
@@ -2082,6 +2107,23 @@
           ],
           "type": "object"
         },
+        "BleStatus": {
+          "description": "A TNC reached over BLE. It isn't paired: BLE KISS TNCs take any\ncentral, like a phone.",
+          "properties": {
+            "adapter": {
+              "description": "As configured, like [`SppStatus::adapter`].",
+              "type": "string"
+            },
+            "address": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "address",
+            "adapter"
+          ],
+          "type": "object"
+        },
         "BridgeStatus": {
           "properties": {
             "counters": {
@@ -2367,6 +2409,16 @@
         },
         "TncStatus": {
           "properties": {
+            "ble": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BleStatus"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "editable": {
               "type": "boolean"
             },
@@ -2484,6 +2536,23 @@
           ],
           "type": "object"
         },
+        "RadioBleEntry": {
+          "properties": {
+            "name_prefix": {
+              "description": "The start of the name it advertises.",
+              "type": "string"
+            },
+            "setup": {
+              "description": "What to do on the radio before the bridge can use its TNC.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name_prefix",
+            "setup"
+          ],
+          "type": "object"
+        },
         "RadioBluetoothEntry": {
           "properties": {
             "name_prefix": {
@@ -2514,6 +2583,17 @@
         "RadioEntry": {
           "description": "A radio the daemon knows, as `tnc.models` lists it.",
           "properties": {
+            "ble": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RadioBleEntry"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Present when it has a TNC over Bluetooth LE."
+            },
             "bluetooth": {
               "anyOf": [
                 {
