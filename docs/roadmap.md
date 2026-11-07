@@ -1,0 +1,426 @@
+# kiss-tnc-bridge family roadmap
+
+Status: decided 7 November 2026; nothing built yet
+
+## Goal
+
+Grow kiss-tnc-bridge from one Linux daemon into a small family of products
+that share one protocol:
+
+- **kiss-tnc-bridge**, the daemon, on a Raspberry Pi or other Linux machine.
+- **Firmware for the M5Stack ATOM Lite**, a pocket-sized Bluetooth Classic to
+  BLE bridge for a radio's built-in TNC. It replaces the discontinued B.B.
+  Link adapter.
+- **Firmware for the M5Stack Core2 v1.3**, the same bridge with a screen,
+  buttons and a built-in battery. Wi-Fi is added later if it proves reliable.
+- **An iOS app** that configures all of them over Bluetooth.
+- **`ktbctl`**, which already manages the daemon, also manages the ESP32
+  devices.
+- **A web installer** that flashes either device from a Chromium browser. A
+  ham can buy an ATOM Lite or Core2 and have it bridging their radio in a few
+  minutes, with no development tools.
+
+```
+                         ┌──────────────── one management protocol ────────────────┐
+                         │                                                          │
+  iOS app ──BLE mgmt──┬──> ktb-gateway ──Unix socket──> kiss-tnc-bridge (Linux)     │
+                      ├──> ATOM Lite firmware                                       │
+                      └──> Core2 firmware                                           │
+                                                                                    │
+  ktbctl ──Unix socket──> kiss-tnc-bridge                                           │
+         ──USB serial──> ATOM Lite / Core2 (config, and flashing)                   │
+         ──BLE mgmt────> ATOM Lite / Core2 (on Linux)                               │
+                                                                                    │
+  web installer ──Web Serial──> ATOM Lite / Core2 (flashing, then first setup)      │
+                         └──────────────────────────────────────────────────────────┘
+```
+
+## Decisions
+
+1. **An iOS app configures kiss-tnc-bridge over Bluetooth.** It connects
+   through `ktb-gateway`'s BLE management service, so a headless Pi with no
+   network can be set up from a phone.
+2. **New firmware for the M5Stack ATOM Lite bridges Bluetooth Classic to
+   BLE.** It does everything [B.B. Link](https://github.com/islandmagic/bb-link)
+   does, but it's a re-implementation that belongs to the kiss-tnc-bridge
+   family: the same object model, protocol, terms and specs. It is not a fork
+   of B.B. Link.
+3. **The iOS app configures the ATOM Lite firmware**, and updates its
+   firmware, if over-the-air updates prove workable (see
+   [Firmware updates](#firmware-updates)).
+4. **A kiss-tnc-bridge tool configures the ATOM Lite firmware.** That's
+   either a new CLI program or part of an existing one; see
+   [Device management from the CLI](#device-management-from-the-cli).
+5. **A web page flashes firmware onto an ATOM Lite**, so a ham radio operator
+   can buy one and have it working in a few minutes with nothing but a
+   Chromium-based browser.
+6. **New firmware for the M5Stack Core2 v1.3 bridges at least Bluetooth
+   Classic to BLE.** Wi-Fi is added only if Wi-Fi, Classic and BLE together
+   prove reliable. It shares the ATOM Lite firmware's architecture and adds
+   features for the Core2's screen and buttons.
+7. **The iOS app manages the Core2**, including firmware updates if they
+   prove workable.
+8. **A kiss-tnc-bridge tool configures the Core2**, probably the same one as
+   for the ATOM Lite.
+9. **A web page flashes firmware onto a Core2.** It's probably the same page
+   as the ATOM Lite's, with a choice of board.
+
+## Non-goals
+
+- **Android app.** The protocol is published with a JSON Schema, so a Kotlin
+  app is possible later, but it's not planned.
+- **Safari, Firefox and phones for the web installer.** They don't support
+  Web Serial, so a computer running Chrome, Edge or Opera is needed for the
+  first install.
+- **Wi-Fi on the ATOM Lite.** It needs Classic and BLE at the same time, and
+  its 4 MB flash and lack of PSRAM leave no room to spare.
+- **Boards without Bluetooth Classic.** The ESP32-S3, C3, C6, H2 and C5 are
+  BLE-only, so they can't talk to a TH-D74 or TH-D75 over SPP. That rules out
+  the M5StickS3 and similar boards.
+- **The M5StickC Plus2.** It would fit well, but it's end-of-life and
+  unavailable.
+- **Compatibility with B.B. Link Configurator.** The new iOS app replaces it.
+  The firmware doesn't need to answer the Configurator's commands. The
+  in-band commands RadioMail sends are a separate question; see
+  [Open questions](#open-questions).
+
+---
+
+## Shared architecture
+
+### One management protocol
+
+The [control API](control-api.md) is the management protocol for every
+member of the family, not just the daemon. The firmware implements a subset
+of it, using the same JSON messages, error codes and JSON Schema.
+
+| Member | Transports |
+|---|---|
+| kiss-tnc-bridge (daemon) | Unix socket. BLE management, the LAN and the web go through `ktb-gateway` |
+| ATOM Lite firmware | BLE management GATT service, USB serial |
+| Core2 firmware | BLE management GATT service, USB serial. Wi-Fi later, if it's added |
+
+The BLE management service is the one already planned for `ktb-gateway` (see
+[plan-1.0.md, `ktb-gateway`](plan-1.0.md#ktb-gateway-1x)): its own 128-bit
+service UUID, separate from the KISS service, with a write characteristic and
+a notify characteristic carrying length-prefixed messages split into MTU-sized
+chunks. Specifying it once means the iOS app has one Bluetooth code path for
+a Pi, an ATOM Lite and a Core2.
+
+Over USB serial, the firmware speaks the same newline-delimited JSON as the
+Unix socket.
+
+### A device is a bridge that can't be rebuilt
+
+The firmware presents itself in the daemon's terms: one fixed bridge, `ktbr0`,
+with a `spp-client` TNC port and a `ble-server` app port, plus a
+`tcp-server` port on a Core2 with Wi-Fi. Its TNC is a `[[tnc]]` object with a
+model (`th-d74`, `th-d75`, `generic`) that selects the KISS init sequence,
+exactly as on the daemon.
+
+- `status`, `subscribe`, `scan.start` / `scan.stop`, `pair` / `unpair`, and
+  `tnc.update` work the same as on the daemon.
+- Commands that build or remove bridges, ports and adapters fail with a
+  stable error code such as `not_supported`.
+- New, additive v1 commands cover what only devices have. The names are
+  provisional:
+  - `device.info`: board, hardware revision, firmware version, protocol
+    version, capabilities, and the largest message it accepts.
+  - `device.settings.get` / `device.settings.set`: per-device settings (see
+    below).
+  - `device.reboot` and `device.factory_reset`.
+  - `firmware.update.*`: see [Firmware updates](#firmware-updates).
+- Clients decide what to show from `device.info`'s capabilities, not from the
+  board name, so a new board doesn't need app changes for features it shares.
+
+### Device settings
+
+B.B. Link fixes most of its behavior at compile time. The new firmware keeps
+these in NVS and makes them settings, so the app, `ktbctl` and the web page
+can change them without a rebuild:
+
+| Setting | Why |
+|---|---|
+| Public name | The BLE name apps show, as `public_name` on the daemon |
+| TNC model | KISS init sequence for the radio |
+| CPU clock: 240, 160 or 80 MHz | The ATOM Lite on an M5Stack Tail Bat needs 240 MHz (see [Hardware notes](#hardware-notes)). Other power sources can save power at 80 MHz |
+| Bluetooth transmit power | Range against battery life |
+| LED or screen brightness | Battery life, and not lighting up a dark tent |
+| Rig control on or off | If RadioMail frequency control is kept (see [Open questions](#open-questions)) |
+
+Pairing (the radio's address and keys) stays in the TNC object and in the
+Bluetooth stack's own storage, as on the daemon.
+
+### Security
+
+These devices control a transmitter under your callsign, so the firmware uses
+the same model planned for `ktb-gateway`:
+
+- **Authentication inside the protocol, not Bluetooth pairing.** A setup code
+  is exchanged once for a stored credential. The ATOM Lite has no screen, so
+  its code comes from the web installer, `ktbctl` over USB, or a label. The
+  Core2 shows its code on screen.
+- **Management window.** New phones are accepted only for a few minutes after
+  power-on or after a button press: a long press on the ATOM Lite, or a menu
+  item on the Core2.
+- **Firmware updates are signed** and checked before the device boots them.
+
+### Relationship to B.B. Link
+
+B.B. Link's source (GPL-3.0) and ios-bblink-config (Apache-2.0) are
+references for behavior: the TH-D74/D75 SPP details, KISS-mode init,
+reconnect timing, and what RadioMail expects. The new code is written for
+this family rather than adapted. B.B. Link's in-band KISS `SetHardware`
+configuration commands aren't the management protocol; the control API is.
+
+---
+
+## Workstreams
+
+### Protocol (in this repo)
+
+- [ ] Specify the BLE management GATT service in
+      [control-api.md](control-api.md): UUIDs, chunking, and the largest
+      message size.
+- [ ] Add the device subset and the `device.*` and `firmware.update.*`
+      commands to `src/control/protocol.rs` and the published JSON Schema.
+- [ ] Specify the setup-code exchange and the management window, shared by
+      `ktb-gateway` and the firmware.
+
+### `ktb-gateway` BLE management (decision 1)
+
+This is Phase 6 in [plan-1.0.md](plan-1.0.md#phase-6-ktb-gateway-1x). The iOS
+app needs at least its BLE management transport, setup codes and management
+window to reach the daemon. The HTTP, WebSocket and LAN transports can follow
+later.
+
+### iOS app (decisions 1, 3, 7)
+
+A new SwiftUI app in its own repository, with types generated from the
+published JSON Schema.
+
+- [ ] Discover devices advertising the BLE management service: Pis running
+      `ktb-gateway`, ATOM Lites and Core2s.
+- [ ] Enter a setup code, and store the credential per device.
+- [ ] Status: bridges, ports, TNC state, connected apps, activity.
+- [ ] Scan for and pair a radio, and set its TNC model.
+- [ ] Daemon management: enable, disable and switch bridges. Create and edit
+      dynamic bridges.
+- [ ] Device settings.
+- [ ] Firmware updates for the ATOM Lite and Core2, if they prove workable.
+
+ios-bblink-config can be borrowed from, since Apache-2.0 allows it, but it's
+UIKit with storyboards and knows only B.B. Link's protocol, so starting fresh
+is simpler. The app's license has to be compatible with the App Store, which
+GPL-3.0 generally isn't. The app shares no code with the daemon, so it can use
+Apache-2.0 or MIT.
+
+### ATOM Lite firmware (decisions 2, 3, 4)
+
+B.B. Link parity:
+
+- [ ] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
+      automatic reconnect.
+- [ ] Put the radio's TNC into KISS mode, using the TNC model.
+- [ ] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+      service, the same one the daemon's `ble-server` ports use.
+- [ ] Scan for and pair a radio.
+- [ ] Factory reset.
+- [ ] RGB LED status and button controls.
+- [ ] RadioMail frequency control, if it's kept (see
+      [Open questions](#open-questions)).
+
+Family features:
+
+- [ ] Control API subset over BLE management and USB serial.
+- [ ] Device settings in NVS.
+- [ ] Setup code and management window.
+- [ ] Two app partitions for over-the-air updates, with rollback.
+
+### Device management from the CLI (decisions 4, 8)
+
+The device speaks the control API, so managing it is the same as managing the
+daemon over a different transport. The recommendation is to extend `ktbctl`
+rather than add a program: a transport option such as `--device
+/dev/ttyUSB0` or `--device ble:<name>`, plus device-only subcommands (`ktbctl
+device info`, `settings`, `flash`, `update`). A separate binary is the
+fallback if the device commands make `ktbctl` confusing.
+
+- [ ] USB serial on Linux, macOS and Windows.
+- [ ] BLE management, on Linux first. `bluer` is Linux-only, so macOS would
+      need another Bluetooth library.
+- [ ] `ktbctl device flash`: write firmware over USB. The
+      [espflash](https://github.com/esp-rs/espflash) crate does this from
+      Rust, so the web installer isn't the only way to flash.
+- [ ] `ktbctl device update`: an over-the-air update over BLE, using the same
+      `firmware.update.*` commands as the iOS app.
+
+### Web installer (decisions 5, 9)
+
+A static page on GitHub Pages using
+[ESP Web Tools](https://esphome.github.io/esp-web-tools/), or Espressif's
+`esptool-js` directly for more control. Both flash over Web Serial.
+
+- [ ] CI builds each board's firmware on every release and publishes the
+      images and a manifest per board.
+- [ ] One page with a choice of board: ATOM Lite or Core2.
+- [ ] After flashing, the same page connects to the device over Web Serial and
+      runs first setup over the control API: name the device, show or set its
+      setup code, pick the TNC model, and choose the CPU clock for a Tail Bat.
+- [ ] Explain the "erase device" choice: a clean install wipes the radio
+      pairing and settings.
+- [ ] Link to USB-to-serial drivers for Windows machines that need them.
+
+Limits: Chrome, Edge and Opera on a desktop or laptop only. Safari, Firefox,
+iPhone and iPad don't support Web Serial. The installer is published from the
+new firmware's repository.
+
+### Core2 v1.3 firmware (decisions 6, 7, 8)
+
+The same firmware core as the ATOM Lite, built for a second board, plus:
+
+- [ ] Status screen: TNC state, connected apps, battery, and recently heard
+      stations, decoded for display only, as `ktbctl monitor` does.
+- [ ] On-device setup: scan for and pair a radio, show the setup code, open
+      the management window, change settings.
+- [ ] Battery level and charging through M5Unified, with a power-off menu
+      item.
+- [ ] Wi-Fi, if it passes the soak test below: station mode only, a
+      `tcp-server` port announced with DNS-SD as `_kiss-tnc._tcp`, matching
+      the daemon.
+
+---
+
+## Firmware updates
+
+Decisions 3 and 7 say "if we can figure it out". Here's what's known.
+
+- **Over USB it's solved.** The web installer, `ktbctl device flash`, and the
+  Arduino IDE can all reflash a device. A bad update can always be fixed over
+  USB.
+- **Over BLE it's feasible, and was done before.** B.B. Link's history has a
+  hardened BLE OTA, added in commit `748bc8c` and later removed. It required a
+  3-second button hold, opened a 5-minute window, wrote through an encrypted
+  characteristic, marked the new image valid only after it initialized, and
+  rolled back otherwise.
+- **The ATOM Lite has room, barely.** Its 4 MB flash holds two app
+  partitions of about 1.9 MB each. B.B. Link's image is about 1.4 MB, so the
+  new firmware has to stay under 1.9 MB. The Core2's 16 MB flash has plenty
+  of room.
+- **Rollback and signature checks need ESP-IDF configuration** that the
+  stock Arduino ESP32 builds don't turn on. That pushes the toolchain choice
+  toward ESP-IDF, or Arduino as an ESP-IDF component (see
+  [Open questions](#open-questions)).
+- **Time.** A 1.5 MB image over BLE takes from under a minute to a few
+  minutes, depending on the phone and connection parameters. The device
+  should stop bridging during an update to free memory and radio time.
+- **Where images come from.** GitHub Releases. The app and `ktbctl` check the
+  signature, the board and the version before sending an image, and the
+  device checks them again before booting it.
+
+The first spike below answers whether this is workable on the ATOM Lite.
+
+---
+
+## Hardware notes
+
+### M5Stack ATOM Lite
+
+- ESP32-PICO-D4 with Bluetooth Classic and BLE, 4 MB flash, 520 KB SRAM, and
+  no PSRAM. Memory is the tightest limit with Classic, BLE and a management
+  service all running.
+- **Tail Bat power cut-off.** The Tail Bat's IP5303 power chip switches its
+  output off when the load stays under 45 mA for 32 seconds. At 80 MHz the
+  ATOM Lite's idle draw sits right at that line, so the default for a Tail
+  Bat has to be 240 MHz. Deep sleep can't be used on a Tail Bat: power is cut,
+  and the ATOM's button can't turn it back on.
+
+### M5Stack Core2 v1.3
+
+- ESP32-D0WDQ6-V3 with Bluetooth Classic and BLE, 16 MB flash, 8 MB PSRAM, a
+  320×240 touchscreen with three touch buttons below it, and a 500 mAh
+  battery.
+- **Wi-Fi with Classic and BLE together.** Espressif's coexistence table
+  lists Wi-Fi station mode with BLE and station mode with Classic as
+  supported, but has no entry for all three. A soft access point with
+  connected clients is marked unstable. So Wi-Fi means station mode only,
+  and only after a soak test passes.
+
+---
+
+## Phases
+
+This is the proposed order. Each phase leaves something usable.
+
+### Phase A: spikes
+
+- [ ] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
+      BLE management service all running, during a bridged session.
+- [ ] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
+      iPhone, rollback after a failed boot, and a signature check.
+- [ ] **Toolchain:** Arduino, ESP-IDF, or Arduino as an ESP-IDF component,
+      decided from the two spikes above.
+- [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
+      client and a TCP KISS client together for 24 hours, with no dropped
+      links and stable heap.
+
+### Phase B: protocol
+
+The BLE management transport, the device subset, the `device.*` and
+`firmware.update.*` commands, and the setup-code exchange. Published in
+[control-api.md](control-api.md) and the schema.
+
+### Phase C: ATOM Lite firmware and web installer
+
+B.B. Link parity, management over USB serial, device settings, and the web
+installer with first setup. At the end of this phase a ham can buy an ATOM
+Lite and set it up from a browser, with no app.
+
+### Phase D: `ktbctl` device support
+
+Device management over USB serial, `ktbctl device flash`, then BLE
+management on Linux.
+
+### Phase E: iOS app and `ktb-gateway` BLE management
+
+BLE management in the ATOM Lite firmware and in `ktb-gateway`, and the iOS
+app's first release, managing both.
+
+### Phase F: firmware updates over BLE
+
+In the ATOM Lite firmware, the iOS app and `ktbctl`, if Phase A showed it's
+workable.
+
+### Phase G: Core2 firmware
+
+The shared core on the Core2, the screen and button features, a Core2 choice
+on the web installer, and Core2 support in the app and `ktbctl`.
+
+### Phase H: Core2 Wi-Fi
+
+Only if the Phase A soak test passed: station mode, a `tcp-server` port, and
+DNS-SD.
+
+---
+
+## Open questions
+
+1. **RadioMail frequency control.** B.B. Link answers in-band KISS
+   `SetHardware` commands from RadioMail that set and restore the radio's
+   frequency. Does the new firmware keep them, and should the daemon get the
+   same feature for parity? B.B. Link forks also advertise the name `B.B.
+   Link`. Does RadioMail need that name to enable the feature? This needs
+   testing, or a question to RadioMail's developer.
+2. **Toolchain.** Arduino with M5Unified is quickest. ESP-IDF gives
+   rollback, signed images and finer memory control. Decided in Phase A.
+3. **Repositories and names.** Likely one firmware repository with a shared
+   core and a target per board, hosting the web installer on its GitHub
+   Pages, plus a repository for the iOS app. The names of the firmware, the
+   app and the devices' default BLE names are still open.
+4. **`ktbctl` or a new program** for device management. `ktbctl` is the
+   recommendation.
+5. **Firmware signing keys:** where the private key lives, and how CI signs
+   releases without exposing it.
+6. **More boards later.** The LILYGO T-Display (original ESP32, 1.14" screen)
+   fits the same architecture for people willing to add their own battery and
+   case.

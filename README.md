@@ -1638,6 +1638,9 @@ and `ktbctl` talks to the daemon over a Unix socket. The details are in
   daemon, newline-delimited JSON over a Unix socket, for anyone writing
   another client or a script. Its messages are described by a
   [JSON Schema](docs/control-api.schema.json).
+- [Roadmap](docs/roadmap.md): where the project goes next. An iOS app,
+  firmware for the M5Stack ATOM Lite and Core2, and a web installer, all
+  managed through the same protocol.
 - [Contributing](CONTRIBUTING.md): building from source, cross builds for
   the Pi, hardware tests, and making a release.
 
