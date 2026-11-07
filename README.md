@@ -728,6 +728,8 @@ ports and sessions, TNCs and adapters (with scanning and pairing), and
 frames. It works over SSH at 80×24, with or without colour. The keys that
 work on the selected row are shown at the bottom. Type '?' for help.
 
+![ktbctl tui showing a TH-D75 bridge with two phones on BLE, one app on TCP, and APRS frames passing through](docs/images/ktbctl-tui.png)
+
 The protocol `ktbctl` speaks is described in
 [docs/control-api.md](docs/control-api.md), for anyone writing another
 client.
