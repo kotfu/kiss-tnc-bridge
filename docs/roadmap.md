@@ -1,6 +1,7 @@
 # kiss-tnc-bridge family roadmap
 
-Status: decided 7 November 2026; nothing built yet
+Status: decided 7 November 2026, firmware toolchain 8 November 2026; nothing
+built yet
 
 ## Goal
 
@@ -64,6 +65,17 @@ that share one protocol:
    for the ATOM Lite.
 9. **A web page flashes firmware onto a Core2.** It's probably the same page
    as the ATOM Lite's, with a choice of board.
+10. **The firmware builds with ESP-IDF**, not the stock Arduino ESP32 core.
+    Arduino compiles its ESP-IDF configuration into precompiled libraries, so
+    a project can't change it, and the firmware has to: Bluedroid trimmed to
+    fit the ATOM Lite's memory, and signed images for firmware updates.
+    Libraries such as M5Unified are added as ESP-IDF components.
+11. **The firmware is written in C++.** It's the well-trodden path for
+    ESP-IDF: Espressif's Bluetooth APIs and SPP examples, M5Unified and
+    B.B. Link are all C or C++. Rust with `esp-idf-svc` would share protocol
+    types with the daemon, but its support for Classic SPP is unproven and
+    its binaries are large for the ATOM Lite's 1.9 MB app partitions. The
+    published JSON Schema keeps the firmware and the daemon in step instead.
 
 ## Non-goals
 
@@ -295,8 +307,8 @@ The same firmware core as the ATOM Lite, built for a second board, plus:
 
 Decisions 3 and 7 say "if we can figure it out". Here's what's known.
 
-- **Over USB it's solved.** The web installer, `ktbctl device flash`, and the
-  Arduino IDE can all reflash a device. A bad update can always be fixed over
+- **Over USB it's solved.** The web installer, `ktbctl device flash`, and
+  `idf.py flash` can all reflash a device. A bad update can always be fixed over
   USB.
 - **Over BLE it's feasible, and was done before.** B.B. Link's history has a
   hardened BLE OTA, added in commit `748bc8c` and later removed. It required a
@@ -307,10 +319,9 @@ Decisions 3 and 7 say "if we can figure it out". Here's what's known.
   partitions of about 1.9 MB each. B.B. Link's image is about 1.4 MB, so the
   new firmware has to stay under 1.9 MB. The Core2's 16 MB flash has plenty
   of room.
-- **Rollback and signature checks need ESP-IDF configuration** that the
-  stock Arduino ESP32 builds don't turn on. That pushes the toolchain choice
-  toward ESP-IDF, or Arduino as an ESP-IDF component (see
-  [Open questions](#open-questions)).
+- **Rollback and signature checks are ESP-IDF configuration.** The firmware
+  builds with ESP-IDF (decision 10), so it can turn both on in the bootloader
+  and the app.
 - **Time.** A 1.5 MB image over BLE takes from under a minute to a few
   minutes, depending on the phone and connection parameters. The device
   should stop bridging during an update to free memory and radio time.
@@ -354,12 +365,14 @@ This is the proposed order. Each phase leaves something usable.
 
 ### Phase A: spikes
 
+The spikes are written in C++ against ESP-IDF's own APIs (decisions 10 and
+11), with Bluedroid trimmed to the profiles the firmware uses, so their
+numbers are the best case.
+
 - [ ] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
       BLE management service all running, during a bridged session.
 - [ ] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
       iPhone, rollback after a failed boot, and a signature check.
-- [ ] **Toolchain:** Arduino, ESP-IDF, or Arduino as an ESP-IDF component,
-      decided from the two spikes above.
 - [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
       client and a TCP KISS client together for 24 hours, with no dropped
       links and stable heap.
@@ -411,8 +424,11 @@ DNS-SD.
    same feature for parity? B.B. Link forks also advertise the name `B.B.
    Link`. Does RadioMail need that name to enable the feature? This needs
    testing, or a question to RadioMail's developer.
-2. **Toolchain.** Arduino with M5Unified is quickest. ESP-IDF gives
-   rollback, signed images and finer memory control. Decided in Phase A.
+2. **Arduino as an ESP-IDF component.** The firmware builds with ESP-IDF in
+   C++ (decisions 10 and 11). Adding Arduino as a component would bring its
+   libraries, at a cost in memory and flash that the ATOM Lite may not
+   have. Decided after the Phase A spikes show how much room is left; the
+   default is no.
 3. **Repositories and names.** Likely one firmware repository with a shared
    core and a target per board, hosting the web installer on its GitHub
    Pages, plus a repository for the iOS app. The names of the firmware, the
