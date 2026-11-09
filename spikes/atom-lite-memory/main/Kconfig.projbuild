@@ -1,0 +1,37 @@
+menu "ATOM Lite memory spike"
+
+    config SPIKE_RADIO_ADDR
+        string "Radio Bluetooth address"
+        default "40:79:12:E4:95:9D"
+        help
+            The TH-D74/D75 to connect to over SPP. The default is the dev TH-D75.
+
+    config SPIKE_DEVICE_NAME
+        string "Device name"
+        default "KTB ATOM spike"
+        help
+            Classic name (what the radio shows when pairing) and BLE
+            advertised name.
+
+    config SPIKE_NO_SNIFF
+        bool "Keep the radio link out of sniff mode"
+        default y
+        help
+            Bluedroid parks an idle SPP link in sniff mode (500 ms interval)
+            to save power. With this on, sniff is cleared from the radio
+            link's policy as soon as SPP opens, so the link stays active.
+            The TH-D75 sometimes doesn't answer a sniff exit, and the link
+            then drops (see README.md), so this is on by default.
+
+    config SPIKE_REPORT_INTERVAL_S
+        int "Seconds between heap reports"
+        default 10
+
+    config SPIKE_MGMT_MAX_MESSAGE
+        int "Largest management message, bytes"
+        default 4096
+        help
+            Each BLE connection reserves a reassembly buffer of this size,
+            as the real management service would.
+
+endmenu

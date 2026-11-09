@@ -1,0 +1,9 @@
+# The layout the firmware needs on a 4 MB ATOM Lite: two app partitions of
+# 0x1E0000 (1.875 MB) for over-the-air updates. The spike only boots ota_0,
+# but building against this layout keeps the image-size check honest.
+# Name,   Type, SubType, Offset,   Size
+nvs,      data, nvs,     0x9000,   0x4000
+otadata,  data, ota,     0xd000,   0x2000
+phy_init, data, phy,     0xf000,   0x1000
+ota_0,    app,  ota_0,   0x10000,  0x1E0000
+ota_1,    app,  ota_1,   0x1F0000, 0x1E0000

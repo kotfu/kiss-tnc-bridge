@@ -1,7 +1,7 @@
 # kiss-tnc-bridge family roadmap
 
-Status: decided 7 November 2026, firmware toolchain 8 November 2026; nothing
-built yet
+Status: decided 7 November 2026; firmware toolchain, eFuses, USB flashing
+and web home 8 November 2026; nothing built yet
 
 ## Goal
 
@@ -76,14 +76,29 @@ that share one protocol:
     types with the daemon, but its support for Classic SPP is unproven and
     its binaries are large for the ATOM Lite's 1.9 MB app partitions. The
     published JSON Schema keeps the firmware and the daemon in step instead.
+12. **No eFuses: no hardware secure boot and no flash encryption**, in the
+    spikes or the firmware. Burning eFuses can't be undone, and a device
+    that only accepts signed bootloaders can't be recovered or reflashed by
+    its owner. Firmware updates over BLE are still signed, using ESP-IDF's
+    signed app images without secure boot, which need no eFuses. USB stays
+    the way to reflash anything.
+13. **`ktbctl` writes firmware over USB**, so the first install works from a
+    Linux machine with no browser. The web installer is the other way in.
+14. **The project's web home is
+    [www.k0tfu.org/kiss-tnc-bridge](https://www.k0tfu.org/kiss-tnc-bridge)**:
+    documentation, install pages and the web installer. The source code
+    stays on GitHub. The site is a Rails app, so it can serve the setup
+    link (`https://www.k0tfu.org/ktb`, see
+    [Setup URIs](control-api.md#setup-uris)) and the files the iOS app's
+    Universal Links need.
 
 ## Non-goals
 
 - **Android app.** The protocol is published with a JSON Schema, so a Kotlin
   app is possible later, but it's not planned.
 - **Safari, Firefox and phones for the web installer.** They don't support
-  Web Serial, so a computer running Chrome, Edge or Opera is needed for the
-  first install.
+  Web Serial, so the first install needs a computer running Chrome, Edge or
+  Opera, or `ktbctl` (decision 13).
 - **Wi-Fi on the ATOM Lite.** It needs Classic and BLE at the same time, and
   its 4 MB flash and lack of PSRAM leave no room to spare.
 - **Boards without Bluetooth Classic.** The ESP32-S3, C3, C6, H2 and C5 are
@@ -163,19 +178,60 @@ can change them without a rebuild:
 Pairing (the radio's address and keys) stays in the TNC object and in the
 Bluetooth stack's own storage, as on the daemon.
 
+### Power saving
+
+Every power-saving mechanism trades something, usually latency, for battery
+life. A device on mains power gains nothing from that trade, so these are
+candidates for settings. They're probably better grouped under one power
+profile (battery or mains) than exposed one by one. This list collects them
+as they're found.
+
+| Mechanism | Saves | Costs | Spike default |
+|---|---|---|---|
+| CPU clock (240, 160 or 80 MHz) | CPU power | Processing headroom. On a Tail Bat, too little draw cuts the power | 240 MHz |
+| Classic sniff mode on the radio link | Radio time on an idle SPP link: Bluedroid parks it in sniff mode with a 500 ms interval and wakes it when there's traffic | Up to about 500 ms extra latency on the first frame after a quiet spell, in either direction. **With the TH-D75 it also drops the link**: 2 of 35 sniff exits went unanswered (see [Hardware notes](#hardware-notes)) | Off. Bluedroid's power-management table for SPP turns it on, and there's no Kconfig option or public API; the spike clears it from the link policy with `bta_sys_clear_policy`. A battery profile could only bring it back after testing a longer interval or sniff subrating |
+| Bluetooth controller modem sleep (`CONFIG_BTDM_CTRL_MODEM_SLEEP`) | Powers the radio down between scheduled Bluetooth events | A little wake-up latency. The ATOM Lite has no 32 kHz crystal, so it uses the main crystal as the sleep clock | On (ORIG mode, main crystal) |
+| BLE advertising interval | Advertising airtime | Phones take longer to find and reconnect to the device | 100–150 ms |
+| BLE connection interval and peripheral latency | Radio time on each phone link | Latency to and from the phone. The phone chooses, but the device can ask for different values | The phone's choice |
+| Bluetooth transmit power | Transmit current | Range | Default |
+| Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
+| Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
+| LED or screen brightness | LED or backlight current | Visibility | — |
+| Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
+
+The Tail Bat turns this upside down: its power chip switches off below
+45 mA (see [Hardware notes](#hardware-notes)), so a battery profile there
+has to keep the draw up rather than minimise it. The right profile depends
+on the power source, not just on whether there's a battery.
+
 ### Security
 
 These devices control a transmitter under your callsign, so the firmware uses
 the same model planned for `ktb-gateway`:
 
-- **Authentication inside the protocol, not Bluetooth pairing.** A setup code
-  is exchanged once for a stored credential. The ATOM Lite has no screen, so
-  its code comes from the web installer, `ktbctl` over USB, or a label. The
-  Core2 shows its code on screen.
-- **Management window.** New phones are accepted only for a few minutes after
-  power-on or after a button press: a long press on the ATOM Lite, or a menu
-  item on the Core2.
+- **Authentication inside the protocol, not Bluetooth pairing.** Each
+  device makes its own setup code, 80 random bits, and keeps it. A client
+  that knows the code enrolls once, with a Noise handshake, and is trusted
+  from then on by its own key. Every session is encrypted. The ATOM Lite has
+  no screen, so its code comes from the web installer or `ktbctl` over USB,
+  either as 16 characters or as a QR code with a URI in it. The Core2 shows
+  its QR code on screen. See [Authentication](control-api.md#authentication)
+  in the control API.
+- **The code is permanent.** It can be rotated over USB or by a trusted
+  client; clients already trusted keep working.
+- **One level of trusted clients**, and a trusted client can do everything.
+  Anyone with the device and a USB cable can reflash it anyway (decision
+  12), so owner and guest levels would add complexity without adding
+  protection.
+- **One enrollment flow** in the iOS app for every device: a Pi running
+  `ktb-gateway`, an ATOM Lite and a Core2.
+- **Management window.** New clients are accepted only for a few minutes
+  after a button press: a long press on the ATOM Lite (provisional; see
+  Phase C), or a menu item on the Core2. A trusted client can open it too.
 - **Firmware updates are signed** and checked before the device boots them.
+  This protects updates over BLE, not USB: with no eFuses burned (decision
+  12), anyone with the device and a USB cable can reflash it, which is also
+  how its owner recovers it.
 
 ### Relationship to B.B. Link
 
@@ -193,11 +249,14 @@ configuration commands aren't the management protocol; the control API is.
 
 - [ ] Specify the BLE management GATT service in
       [control-api.md](control-api.md): UUIDs, chunking, and the largest
-      message size.
-- [ ] Add the device subset and the `device.*` and `firmware.update.*`
-      commands to `src/control/protocol.rs` and the published JSON Schema.
+      message size. Drafted 8 November 2026.
+- [ ] Add the device subset and the `device.*`, `auth.*` and
+      `firmware.update.*` commands to `src/control/protocol.rs` and the
+      published JSON Schema. Specified in control-api.md; types not yet
+      written.
 - [ ] Specify the setup-code exchange and the management window, shared by
-      `ktb-gateway` and the firmware.
+      `ktb-gateway` and the firmware. Drafted 8 November 2026: a Noise
+      handshake keyed by an 80-bit setup code, then a key per client.
 
 ### `ktb-gateway` BLE management (decision 1)
 
@@ -247,7 +306,13 @@ Family features:
 - [ ] Control API subset over BLE management and USB serial.
 - [ ] Device settings in NVS.
 - [ ] Setup code and management window.
-- [ ] Two app partitions for over-the-air updates, with rollback.
+- [ ] Two app partitions for over-the-air updates, with rollback. The
+      partition table sits at 0xA000 with NVS at the end of flash, because a
+      bootloader that checks signatures doesn't fit before 0x8000. Updates
+      never replace the bootloader or the table, so this is fixed from the
+      first release.
+- [ ] A deadline for a new image to mark itself valid: a hang on first
+      boot doesn't roll back on its own.
 
 ### Device management from the CLI (decisions 4, 8)
 
@@ -261,31 +326,41 @@ fallback if the device commands make `ktbctl` confusing.
 - [ ] USB serial on Linux, macOS and Windows.
 - [ ] BLE management, on Linux first. `bluer` is Linux-only, so macOS would
       need another Bluetooth library.
-- [ ] `ktbctl device flash`: write firmware over USB. The
+- [ ] `ktbctl device flash`: write firmware over USB, including the first
+      install, so a Linux machine is all it takes (decision 13). The
       [espflash](https://github.com/esp-rs/espflash) crate does this from
-      Rust, so the web installer isn't the only way to flash.
+      Rust.
 - [ ] `ktbctl device update`: an over-the-air update over BLE, using the same
       `firmware.update.*` commands as the iOS app.
 
 ### Web installer (decisions 5, 9)
 
-A static page on GitHub Pages using
+A page on the project's web home (decision 14) using
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/), or Espressif's
-`esptool-js` directly for more control. Both flash over Web Serial.
+`esptool-js` directly for more control. Both flash over Web Serial, which
+needs HTTPS. The firmware images and manifests are served from the same
+site: a browser probably can't fetch GitHub release assets directly,
+because GitHub doesn't send CORS headers for them.
 
 - [ ] CI builds each board's firmware on every release and publishes the
       images and a manifest per board.
 - [ ] One page with a choice of board: ATOM Lite or Core2.
 - [ ] After flashing, the same page connects to the device over Web Serial and
-      runs first setup over the control API: name the device, show or set its
-      setup code, pick the TNC model, and choose the CPU clock for a Tail Bat.
+      runs first setup over the control API: name the device, show its setup
+      code (16 characters and the QR code), pick the TNC model, and choose
+      the CPU clock for a Tail Bat.
 - [ ] Explain the "erase device" choice: a clean install wipes the radio
       pairing and settings.
 - [ ] Link to USB-to-serial drivers for Windows machines that need them.
+- [ ] Serve `/ktb`, the setup link in QR codes, and
+      `/.well-known/apple-app-site-association` for the iOS app's
+      Universal Links, on `www.k0tfu.org`, with bare `k0tfu.org`
+      redirecting to it.
 
 Limits: Chrome, Edge and Opera on a desktop or laptop only. Safari, Firefox,
-iPhone and iPad don't support Web Serial. The installer is published from the
-new firmware's repository.
+iPhone and iPad don't support Web Serial. The installer's code lives in the
+firmware's repository, and CI publishes it with each release to the web
+home.
 
 ### Core2 v1.3 firmware (decisions 6, 7, 8)
 
@@ -321,15 +396,22 @@ Decisions 3 and 7 say "if we can figure it out". Here's what's known.
   of room.
 - **Rollback and signature checks are ESP-IDF configuration.** The firmware
   builds with ESP-IDF (decision 10), so it can turn both on in the bootloader
-  and the app.
-- **Time.** A 1.5 MB image over BLE takes from under a minute to a few
-  minutes, depending on the phone and connection parameters. The device
-  should stop bridging during an update to free memory and radio time.
+  and the app. Signatures use signed app images without secure boot, so no
+  eFuses are burned (decision 12). The ATOM Lite's chip is revision 1.1,
+  which rules out the RSA scheme (revision 3 and later); the ECDSA scheme
+  works on every ESP32 revision, so one key can sign both boards' images.
+- **Time.** A 960 KB image takes about 30 s from Linux at a 15 ms
+  connection interval, which is also the shortest interval iOS allows. BLE
+  is the limit, not flash. The radio link can stay up during an update: an
+  idle bridged link made no difference that stood out from run-to-run
+  noise. The update buffer (24 KB) should be allocated only during an
+  update.
 - **Where images come from.** GitHub Releases. The app and `ktbctl` check the
   signature, the board and the version before sending an image, and the
   device checks them again before booting it.
 
-The first spike below answers whether this is workable on the ATOM Lite.
+The Phase A update spike showed this works on the ATOM Lite:
+[spikes/atom-lite-update](../spikes/atom-lite-update/README.md).
 
 ---
 
@@ -338,8 +420,12 @@ The first spike below answers whether this is workable on the ATOM Lite.
 ### M5Stack ATOM Lite
 
 - ESP32-PICO-D4 with Bluetooth Classic and BLE, 4 MB flash, 520 KB SRAM, and
-  no PSRAM. Memory is the tightest limit with Classic, BLE and a management
-  service all running.
+  no PSRAM. Memory turned out not to be a limit: with Classic, BLE, a
+  management service and two phones all running, the heap never fell below
+  134.6 KB (Phase A memory spike).
+- **The radio link has to stay out of sniff mode.** The TH-D75 sometimes
+  doesn't answer a sniff exit, and the link drops with a supervision timeout
+  (2 of 35 exits in the spike). With sniff off, an hour ran without a drop.
 - **Tail Bat power cut-off.** The Tail Bat's IP5303 power chip switches its
   output off when the load stays under 45 mA for 32 seconds. At 80 MHz the
   ATOM Lite's idle draw sits right at that line, so the default for a Tail
@@ -369,10 +455,18 @@ The spikes are written in C++ against ESP-IDF's own APIs (decisions 10 and
 11), with Bluedroid trimmed to the profiles the firmware uses, so their
 numbers are the best case.
 
-- [ ] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
+- [x] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
       BLE management service all running, during a bridged session.
-- [ ] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
+      Done 8 November 2026: never below 134.6 KB with two phones, and it also
+      found the D75's sniff-mode drops. See
+      [spikes/atom-lite-memory](../spikes/atom-lite-memory/README.md).
+- [x] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
       iPhone, rollback after a failed boot, and a signature check.
+      Done 8 November 2026 from Linux, with a Rust client for `ktbctl`:
+      signed updates, rollback, and rejection of corrupt and wrongly signed
+      images all work; about 30 s for a 960 KB image. The iPhone's
+      throughput waits for the app. See
+      [spikes/atom-lite-update](../spikes/atom-lite-update/README.md).
 - [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
       client and a TCP KISS client together for 24 hours, with no dropped
       links and stable heap.
@@ -388,6 +482,25 @@ The BLE management transport, the device subset, the `device.*` and
 B.B. Link parity, management over USB serial, device settings, and the web
 installer with first setup. At the end of this phase a ham can buy an ATOM
 Lite and set it up from a browser, with no app.
+
+- [ ] **Design the ATOM Lite's user interface first.** Its only controls are
+      one button and one RGB LED. Decide:
+  - **What you can do on the device alone:** at least pair a radio, open
+    the management window, and factory reset.
+  - **How you do each one:** short and long presses, double presses,
+    holding the button while powering on. The control API calls the
+    management window gesture a long press, provisionally. The button can
+    tell any timing pattern apart, but a double press delays a single
+    press by 300–400 ms, and nobody remembers more than a few gestures.
+  - **The feedback:** LED colors and patterns for each state (radio
+    linked, phones connected, window open, pairing, updating, error), and
+    while the button is held, so you can see which action you'll get when
+    you let go.
+  - **Whether power-on opens the management window.** Convenient, but
+    anyone who can unplug the device gets a window.
+  - **Recovery when every trusted client and the setup code are lost:**
+    reading the code over USB, and what a factory reset clears (settings,
+    the radio pairing, trusted clients, the setup code).
 
 ### Phase D: `ktbctl` device support
 
@@ -430,9 +543,10 @@ DNS-SD.
    have. Decided after the Phase A spikes show how much room is left; the
    default is no.
 3. **Repositories and names.** Likely one firmware repository with a shared
-   core and a target per board, hosting the web installer on its GitHub
-   Pages, plus a repository for the iOS app. The names of the firmware, the
-   app and the devices' default BLE names are still open.
+   core and a target per board, plus a repository for the iOS app. The web
+   installer and documentation live on the web home (decision 14). The
+   names of the firmware, the app and the devices' default BLE names are
+   still open.
 4. **`ktbctl` or a new program** for device management. `ktbctl` is the
    recommendation.
 5. **Firmware signing keys:** where the private key lives, and how CI signs

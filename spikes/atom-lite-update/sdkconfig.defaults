@@ -1,0 +1,58 @@
+CONFIG_IDF_TARGET="esp32"
+
+# ATOM Lite: ESP32-PICO-D4, 4 MB flash, no PSRAM
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+# The signature-checking bootloader needs more than the default 28 KB.
+CONFIG_PARTITION_TABLE_OFFSET=0xA000
+
+# 240 MHz, the Tail Bat default (see docs/roadmap.md, Hardware notes)
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# Task stack high-water marks in the report
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+
+# Bluetooth: Bluedroid, dual-mode controller
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BTDM=y
+
+# One Classic link (the radio) and two BLE links (phones)
+CONFIG_BTDM_CTRL_BR_EDR_MAX_ACL_CONN=1
+CONFIG_BTDM_CTRL_BLE_MAX_CONN=2
+CONFIG_BT_ACL_CONNECTIONS=3
+
+# Classic: SPP only
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_SPP_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=n
+CONFIG_BT_HFP_ENABLE=n
+CONFIG_BT_HID_ENABLED=n
+CONFIG_BT_L2CAP_ENABLED=n
+
+# BLE: GATT server only, 4.2 features (the ESP32 has no BLE 5)
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=n
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+# One handle block per service: Bluedroid's own GAP and GATT, then KISS and
+# management. 2 leaves none for ours.
+CONFIG_BT_GATT_MAX_SR_PROFILES=4
+
+# Updates: roll back to the previous app unless the new one marks itself
+# valid on its first boot.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Signed app images without hardware secure boot: no eFuses are burned
+# (roadmap decision 12). The ATOM Lite's chip is revision 1.1, so ECDSA
+# (the V1 scheme) is the only one available. The app checks an update's
+# signature before switching to it; the bootloader checks again at boot.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+CONFIG_SECURE_BOOT_SIGNING_KEY="signing_key.pem"

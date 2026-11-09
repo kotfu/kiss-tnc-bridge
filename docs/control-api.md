@@ -1,14 +1,29 @@
 # kiss-tnc-bridge control API, version 1
 
-The daemon is managed through one API: a Unix socket speaking
-newline-delimited JSON. `ktbctl` (the CLI and TUI) is its client, and so
-will be `ktb-gateway`, which carries the same messages to web and phone
-apps. The types are defined once, in
-[`src/control/protocol.rs`](../src/control/protocol.rs), and published as a
-JSON Schema in [`control-api.schema.json`](control-api.schema.json) for
-apps in other languages.
+Every member of the family is managed through one API: the daemon, and the
+ATOM Lite and Core2 firmware (see the [roadmap](roadmap.md)). `ktbctl` (the
+CLI and TUI) is a client, and so will be `ktb-gateway`, which carries the
+same messages to web and phone apps, and the iOS app. The types are defined
+once, in [`src/control/protocol.rs`](../src/control/protocol.rs), and
+published as a JSON Schema in
+[`control-api.schema.json`](control-api.schema.json) for apps in other
+languages.
 
-## Transport
+The device transports, [authentication](#authentication) and the
+[device commands](#devices) are a draft for the firmware (roadmap Phase B):
+nothing implements them yet, and parts marked provisional may change.
+
+## Transports
+
+The same messages travel over three transports:
+
+| Transport | Served by | Who can use it |
+|---|---|---|
+| [Unix socket](#unix-socket) | The daemon | Members of its group |
+| [USB serial](#usb-serial) | The ATOM Lite and Core2 firmware | Anyone with the device and a cable |
+| [BLE management](#ble-management) | The firmware, and `ktb-gateway` on a Pi | Trusted clients, over an encrypted session (see [Authentication](#authentication)) |
+
+### Unix socket
 
 - The socket is `/run/kiss-tnc-bridge/control.sock` (the runtime
   directory), or wherever the daemon's `--socket` option puts it. `ktbctl`
@@ -21,9 +36,72 @@ apps in other languages.
   or over BLE reaches this API except through `ktb-gateway`, which does
   its own authentication.
 
+### USB serial
+
+- The board's USB serial port at 115200 baud, 8N1, speaking the same
+  newline-delimited JSON as the socket.
+- The port also carries the firmware's log. Protocol messages are the
+  lines that start with `{`; clients skip the others.
+- **Opening the port must not toggle DTR or RTS.** On both boards they
+  drive the ESP32's reset and boot pins, so toggling them reboots the
+  device or puts it in its download mode. Clients open the port with both
+  deasserted.
+- No authentication. Anyone with the device and a cable can reflash it
+  anyway (roadmap decision 12), so USB is trusted. It's also how a lost
+  setup code is recovered (`auth.code`).
+- Firmware updates don't use this transport: `ktbctl device flash` writes
+  the flash directly, as the web installer does.
+
+### BLE management
+
+One GATT service, with the same UUIDs on the firmware and on
+`ktb-gateway`, so the iOS app has one code path for every device:
+
+| UUID | Characteristic | Properties | Carries |
+|---|---|---|---|
+| `e3370001-156d-4ba6-90dd-14075e7ca557` | (the service) | | |
+| `e3370002-156d-4ba6-90dd-14075e7ca557` | TX | write, write without response | Records from the client |
+| `e3370003-156d-4ba6-90dd-14075e7ca557` | RX | notify | Records from the device |
+| `e3370004-156d-4ba6-90dd-14075e7ca557` | Data | write without response | Firmware image bytes during an update (see [`firmware.update`](#firmwareupdate)) |
+
+**Records.** Each way, the bytes form a stream of records. A record is a
+2-byte big-endian length and then that many bytes, the first of which is
+its type:
+
+| Type | Record | Rest of the record | Sent |
+|---|---|---|---|
+| `0x01` | Session handshake | A Noise handshake message | Both ways, to start a session |
+| `0x02` | Enrollment handshake | A Noise handshake message | Both ways, to enroll a new client |
+| `0x03` | Message | A Noise transport message: one encrypted request, response or event, as JSON | Both ways, once a handshake is done |
+| `0x04` | Refusal | JSON in the clear: `{"code": "…", "message": "…"}` | By the device, before closing the connection |
+
+- Records are split across writes and notifications of at most the ATT
+  MTU less 3 bytes, and one write or notification can hold the end of one
+  record and the start of the next. The receiver reassembles them by
+  length. Devices offer an MTU of 517; clients should ask for the largest
+  they can.
+- A record is at most 65,535 bytes, so one JSON message is at most 65,518
+  bytes (less the type byte and Noise's 16-byte tag). Devices take smaller
+  requests: `device.info` gives the largest as `max_message`.
+- One session per connection. Devices allow only a few BLE connections in
+  all (the ATOM Lite two, shared with KISS apps), so clients disconnect
+  when they're done.
+- `activity` and `frames` events are throttled over BLE.
+
+**Advertising (provisional).** Devices put the [BLE KISS
+API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+service UUID in their advertising data, so KISS apps find them as before,
+and the management service UUID in their scan response, with as much of the
+name as fits. The full name is the GAP Device Name. Clients find
+manageable devices by the management service UUID. A 31-byte advertisement
+can't hold two 128-bit UUIDs and a long name, so this layout needs testing
+with KISS apps in Phase C. `ktb-gateway` advertises the management service
+in its own advertisement.
+
 ## Framing
 
-One JSON object per line, each way. Every message carries `"v": 1`.
+One JSON object per line each way on the socket and USB serial, and one per
+message record over BLE. Every message carries `"v": 1`.
 
 ```jsonc
 → {"v":1,"id":1,"cmd":"status"}
@@ -45,16 +123,170 @@ One JSON object per line, each way. Every message carries `"v": 1`.
   answered by its id when it's done, which for a scan or a pairing can be
   a while after the requests behind it.
 - An **event** has `event` and no `id`; it arrives only on a connection
-  that subscribed to its topic, except `pairing` and `found` events, which
-  go to the connection whose `bluetooth.pair` or `bluetooth.scan` they
-  belong to.
-- A request line can be up to 1 MiB.
+  that subscribed to its topic, except `pairing`, `found` and `update`
+  events, which go to the connection whose `bluetooth.pair`,
+  `bluetooth.scan` or firmware update they belong to.
+- Over the socket a request line can be up to 1 MiB. Devices take less;
+  see `max_message` in [`device.info`](#deviceinfo).
 
 **Versioning.** Additive changes (a new command, a new optional field, a
 new error code, a new event field) stay in version 1, so clients should
 ignore fields they don't know. Anything that would break a version 1
 client needs version 2. A request with another `v` gets
 `unsupported_version`.
+
+## Authentication
+
+Over BLE, management is authenticated and encrypted inside the protocol,
+not by Bluetooth pairing. An ATOM Lite or a headless Pi has no screen to
+show a passkey, Just Works pairing gives no protection against an attacker
+in the middle, and bonding phones causes trouble with BlueZ on a Pi. So
+clients connect without pairing, and run a
+[Noise](https://noiseprotocol.org/noise.html) handshake inside the
+management service instead. The Unix socket and USB serial don't use any of
+this: their access is controlled by who can reach them.
+
+### Keys and setup codes
+
+- **The device's key.** Each device, and `ktb-gateway`, makes an X25519
+  key pair the first time it starts, and keeps it. Its **fingerprint** is
+  the first 10 bytes of the SHA-256 of the public key, written like a setup
+  code.
+- **The setup code.** Each device also makes a setup code: 80 random bits,
+  written as 16 [Crockford base32](https://www.crockford.com/base32.html)
+  characters in groups of four, such as `7KQ2-M9XD-4TPA-W3HN`. Clients
+  ignore case and dashes, and read `O` as `0` and `I` and `L` as `1`. The
+  code is permanent: `auth.rotate_code` makes a new one, and clients that
+  are already trusted keep working.
+- **Clients' keys.** Each client makes its own X25519 key pair and keeps
+  it: the iOS app in the keychain, `ktbctl` in its configuration directory.
+- **Trusted clients.** The device keeps the public key of each client it
+  trusts, with the client's name, when it enrolled and when it was last
+  seen. There's one level: a trusted client can do everything, including
+  revoking other clients. Anyone with the device and a USB cable can
+  reflash it anyway, so separate owner and guest levels wouldn't protect
+  anything. The ATOM Lite keeps up to 8 (provisional).
+
+### The management window
+
+A client can enroll only while the management window is open, for 5
+minutes (provisional) after it's opened by:
+
+- a long press on the ATOM Lite's button (provisional: Phase C designs the
+  button and LED)
+- a menu item on the Core2
+- `ktbctl gateway open` on a Pi, or the Pi starting up
+- `auth.window`, from a trusted client
+
+The window stays open until its time runs out, so several clients can
+enroll in one window; `auth.window` with `seconds: 0` closes it early.
+
+### Handshakes
+
+The client starts the handshake. Both patterns use the prologue
+`ktb-mgmt/1` (ASCII), and the payloads are JSON:
+
+```
+-> e
+<- e, ee, s, es    payload: {"fingerprint": "…", "name": "…", "board": "atom-lite", "protocol": 1}
+-> s, se           payload: {"name": "Pat's iPhone"}
+```
+
+- **Enrolling** a new client uses enrollment records (`0x02`) and
+  `Noise_XXpsk3_25519_ChaChaPoly_SHA256`. The PSK is the SHA-256 of the
+  ASCII string `ktb-setup-code/1` followed by the setup code's 10 bytes.
+  If the client's key is already trusted, enrolling again only updates its
+  name.
+- **A session** for a trusted client uses session records (`0x01`) and
+  `Noise_XX_25519_ChaChaPoly_SHA256`.
+
+Either way, when the handshake is done the connection carries message
+records (`0x03`) under the keys it produced. An enrollment doesn't need a
+new connection or a second handshake.
+
+The device refuses with a refusal record and closes the connection when:
+
+| `code` | Why |
+|---|---|
+| `window_closed` | An enrollment handshake while the window is closed. Sent in answer to the first message |
+| `bad_code` | The enrollment's last message didn't decrypt: the client's setup code is wrong |
+| `not_trusted` | A session handshake from a client the device doesn't trust (never enrolled, or revoked) |
+| `too_many_clients` | An enrollment when the trusted list is full; revoke one first |
+| `handshake_failed` | Anything else wrong with the handshake |
+
+The client checks the device too:
+
+- **In a session**, the device's static key (in its handshake message) must
+  be the one the client saw when it enrolled. If not, the client stops: the
+  device was factory reset, or it isn't the same device.
+- **When enrolling** from a setup URI, the device's key must match the
+  fingerprint in the URI.
+
+The X25519, ChaCha20-Poly1305 and SHA-256 this needs are in CryptoKit on
+iOS, mbedTLS on the ESP32, and the [`snow`](https://crates.io/crates/snow)
+crate in Rust.
+
+### Setup URIs
+
+QR codes carry an `https` URI on the project's web home, so a phone's
+camera can open the iOS app straight at enrollment, already knowing which
+device it's for:
+
+```
+https://www.k0tfu.org/ktb#code=7KQ2M9XD4TPAW3HN&fp=Q4M8ZC2V7XKD1B6N
+```
+
+`code` is the setup code and `fp` the device's fingerprint. The device's
+name isn't in it: the client learns that from the handshake, and leaving it
+out keeps the QR code at 37×37 modules (error correction level M), which a
+terminal draws in 41 columns and 21 lines. A client given only the 16
+characters enrolls without the fingerprint check, with whichever device in
+its window accepts the code.
+
+- **It's a Universal Link.** The iOS app claims `www.k0tfu.org/ktb` in its
+  Associated Domains, and the site serves
+  `/.well-known/apple-app-site-association` naming the app and that path,
+  directly, with no redirect. With the app installed, scanning the code
+  opens the app; without it, Safari opens the page, which explains what
+  the code is for and links to the app. The rest of the site opens in
+  Safari as usual.
+- **The code and fingerprint go after `#`**, which browsers never send to a
+  server. A phone without the app doesn't put the setup code in the site's
+  logs. `/ktb` can redirect anywhere on the site: a browser keeps the
+  fragment through a redirect whose target has none of its own.
+- **The URI is permanent.** Printed codes keep it for the life of the
+  device, so `/ktb` has to keep working. Clients that parse it (the app's
+  own scanner, `ktbctl`) read the fragment and ignore the host.
+
+### Getting the code to a client
+
+| Device | Where the code comes from | To the iOS app | To `ktbctl` on another machine |
+|---|---|---|---|
+| Core2 | Its screen, as a QR code and 16 characters | Scan the screen | Type the 16 characters |
+| ATOM Lite or Core2, installed from the web | The installer reads it over Web Serial right after flashing | Scan the QR code on the page | Type the 16 characters |
+| ATOM Lite or Core2, installed with `ktbctl` | `ktbctl` reads it over USB, and also enrolls itself (`auth.add`), so it never needs the code | `ktbctl device code` shows a QR code in the terminal | Type the 16 characters |
+| Any device already set up | `ktbctl device code` over USB, or `auth.code` from a trusted client | A QR code in the terminal or the app | Type the 16 characters |
+| A Pi with `ktb-gateway` | `ktbctl gateway code` on the Pi, locally or over ssh | A QR code in the terminal | Not needed: `ktbctl` on the Pi uses the Unix socket |
+
+Terminal QR codes are drawn with Unicode half blocks, which phone cameras
+read from a terminal, over ssh too. Every path still needs the management
+window open when the client enrolls.
+
+### `auth` commands
+
+The firmware serves these over USB serial and BLE sessions. `ktb-gateway`
+serves them on its own local interface (Phase 6); the daemon's socket
+doesn't. Public keys are base64, fingerprints and codes as above.
+
+| Command | Parameters | Result |
+|---|---|---|
+| `auth.info` | | `fingerprint`, `public_key`, `window` (`open`, `seconds_left`), and `clients`, how many are trusted |
+| `auth.code` | | The setup code and its URI: `{"code": "7KQ2-M9XD-4TPA-W3HN", "uri": "https://www.k0tfu.org/ktb#code=…"}` |
+| `auth.rotate_code` | | A new setup code and URI. Trusted clients keep working |
+| `auth.window` | `seconds` (default 300; 0 closes it) | `open`, `seconds_left` |
+| `auth.clients` | | The trusted clients: `fingerprint`, `name`, `enrolled`, `last_seen`, and `this: true` for the one asking |
+| `auth.add` | `public_key`, `name` | Trusts a client directly, without the code or the window: how `ktbctl` enrolls itself over USB. Returns the client's `fingerprint` and the device's `public_key`, which the client keeps for its sessions |
+| `auth.revoke` | `client` (a fingerprint) | Stops trusting a client and closes its sessions. Returns `{}` |
 
 ## Errors
 
@@ -82,7 +314,9 @@ and `data` carries detail for some codes.
 | `revision_conflict` | `config.put` with a revision that's no longer current |
 | `changed_on_disk` | `dynamic.toml` was edited by hand since the daemon read it; `reload` first |
 | `failed` | A Bluetooth scan or pairing was tried and failed; the message says why (for a pairing, often what to do at the radio) |
-| `busy` | Another Bluetooth scan or pairing is running; one runs at a time |
+| `busy` | Another Bluetooth scan or pairing is running, or another firmware update; one runs at a time |
+| `not_supported` | A command this server doesn't do, such as `bridge.create` on a device, or `firmware.update.begin` over USB |
+| `image_rejected` | A firmware image failed a check: its SHA-256, board, size or signature. The message says which |
 | `internal` | Something went wrong in the daemon |
 
 A **problem** (a config error or warning) is `{"source": "static:
@@ -406,6 +640,7 @@ One scan or pairing runs at a time; another gets `busy`.
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
 | — | `pairing` | A step of this connection's `bluetooth.pair` (see above) |
 | — | `found` | A device found by this connection's `bluetooth.scan` (see above) |
+| — | `update` | A step of this connection's firmware update (see [`firmware.update`](#firmwareupdate)) |
 
 State events are hints: after one, read `status` for the whole picture.
 Frames are decoded for display only; the daemon never acts on what's in
@@ -418,6 +653,133 @@ doesn't read its events loses them rather than slowing the daemon.
    "ax25":{"source":"W1AW-9","destination":"APDR16","path":["WIDE1-1*","WIDE2-1"]},
    "summary":"W1AW-9>APDR16,WIDE1-1*,WIDE2-1:!4237.14N/07120.83W>"}}
 ```
+
+## Devices
+
+The ATOM Lite and Core2 firmware present themselves in the daemon's terms:
+one fixed bridge, `ktbr0`, with an `spp-client` TNC port, `radio`, to the
+radio's TNC, and a `ble-server` app port, `phones`, serving the BLE KISS
+API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
+as on the daemon. A client can tell a device from the daemon by
+`device.info`, which the daemon doesn't answer.
+
+### What's the same, and what isn't
+
+| Commands | On a device |
+|---|---|
+| `status`, `subscribe` | The same, with one bridge, one TNC and the device's one adapter |
+| `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
+| `tnc.models` | The same, for the models the firmware knows |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only. The TH-D75's `confirm` step goes to the client as on the daemon |
+| `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same |
+| `auth.*` | See [Authentication](#authentication) |
+| `device.*`, `firmware.update.*` | Devices only; below |
+| `reload`, `config.*`, `bridge.*`, `port.add`, `port.update`, `port.remove`, `tnc.create`, `tnc.delete`, `adapter.*`, `serial.list` | `not_supported`: a device's bridge can't be rebuilt |
+
+A device's `status`, trimmed:
+
+```jsonc
+{"version": "0.1.0",
+ "adapters": [{"id": "builtin", "mac": "B8:7B:4D:18:F2:72", "present": true, "powered": true}],
+ "tncs": [{"id": "radio", "name": "TH-D75", "model": "th-d75",
+           "spp": {"address": "40:79:12:E4:95:9D", "adapter": "builtin", "paired": true},
+           "in_use_by": "ktbr0", "editable": true}],
+ "bridges": [{"id": "ktbr0", "name": "TH-D75 bridge", "enabled": true,
+   "public_name": {"configured": "TH-D75 bridge", "effective": "TH-D75 bridge"},
+   "ports": [{"id": "radio", "type": "spp-client", "role": "tnc", "state": "connected", "sessions": []},
+             {"id": "phones", "type": "ble-server", "role": "app", "state": "advertising",
+              "sessions": [{"id": "ktbr0/phones/40:53:99:D1:B5:60", "since": "2026-11-08T02:27:00Z"}]}],
+   "counters": {"frames_up": 2, "frames_down": 18, "dropped": 0, "tnc_connects": 1}}]}
+```
+
+### `device.info`
+
+```jsonc
+{"board": "atom-lite",                 // or "core2"
+ "firmware": {"version": "0.1.0", "built": "2026-11-08T02:00:00Z",
+              "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
+              "rolled_back": "0.2.0"},                  // present when the last update was rolled back
+ "protocol": 1,
+ "capabilities": ["spp-client", "ble-server", "firmware-update"],
+ "max_message": 4096,
+ "fingerprint": "Q4M8ZC2V7XKD1B6N",
+ "bluetooth": {"address": "B8:7B:4D:18:F2:72"}}
+```
+
+Clients decide what to offer from `capabilities`, not from `board`, so a new
+board needs no app changes for the features it shares. The capability
+names are provisional; a Core2 adds `screen` and `battery`, and later
+`wifi`. `max_message` is the largest request the device accepts, in bytes.
+
+### `device.settings.get` and `device.settings.set`
+
+Settings live in the device's NVS. `get` returns them all; `set` takes the
+ones to change and returns them all again, with `reboot_required` listing
+any that take effect only after `device.reboot`:
+
+```jsonc
+→ {"v":1,"id":7,"cmd":"device.settings.set","settings":{"cpu_mhz":80}}
+← {"v":1,"id":7,"ok":true,"result":{"settings":{"public_name":"TH-D75 bridge","cpu_mhz":80,
+     "tx_power":9,"led_brightness":40},"reboot_required":["cpu_mhz"]}}
+```
+
+The keys are provisional, from the roadmap's device settings and power
+saving tables:
+
+| Key | Values |
+|---|---|
+| `public_name` | The BLE name KISS apps show, as `public_name` on the daemon |
+| `cpu_mhz` | 240, 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
+| `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
+| `led_brightness` | 0–100. On the Core2, the screen's brightness |
+
+Unknown keys and bad values fail with `bad_request`, and nothing changes.
+
+### `device.reboot` and `device.factory_reset`
+
+Both answer `{}` and then act. `device.factory_reset` erases the device's
+settings and data and reboots. Exactly what it erases (settings, the radio
+pairing, trusted clients, the setup code) is decided with the ATOM Lite's
+user interface in Phase C.
+
+### `firmware.update`
+
+Over BLE only; over USB, `ktbctl device flash` and the web installer write
+the flash directly. One update runs at a time (`busy`), and a disconnect
+aborts it.
+
+1. **Check the image.** Before sending, the client checks the image's
+   signature, its board and its version. The device checks them again.
+2. **`firmware.update.begin`** with `size`, `sha256` (hex) and `version`.
+   The device erases the space for the image, then answers with
+   `{"partition": "ota_1", "window": 22784, "chunk_max": 508, "ack_every":
+   4096}`. Erasing takes about 2 s on an ATOM Lite.
+3. **Write the image** to the Data characteristic, in order. Each write is
+   the image offset (4 bytes, little-endian) and then at most `chunk_max`
+   bytes of image. The client keeps at most `window` bytes beyond the last
+   acknowledgement in flight. The device sends this connection `update`
+   events, each with the `request` id of its `firmware.update.begin`:
+
+   | `step` | Fields | Means |
+   |---|---|---|
+   | `ack` | `written` | That many bytes are in flash; sent every `ack_every` bytes and at the end |
+   | `nak` | `expected` | A write was lost or didn't fit; resend from `expected` |
+
+   The image bytes aren't encrypted. They're accepted only on the
+   connection whose session sent `firmware.update.begin`, and the SHA-256
+   sent there, inside the session, protects them.
+4. **`firmware.update.finish`** once everything is acknowledged. The device
+   checks the size, the SHA-256, that the image is for this board, and its
+   signature, then makes it the one to boot next. It answers `{"version":
+   "0.2.0", "partition": "ota_1"}`, or fails with `image_rejected`.
+5. **`device.reboot`.** The new image starts as `pending_verify`, marks
+   itself valid once it's running properly, and is rolled back if it
+   resets first. `device.info` shows the outcome.
+
+`firmware.update.abort` stops an update at any point and answers `{}`. The
+device asks for a 15 ms connection interval during an update; from Linux a
+960 KB image then takes about 30 s (see
+[spikes/atom-lite-update](../spikes/atom-lite-update/README.md)).
 
 ## Trying it by hand
 
