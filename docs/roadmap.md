@@ -163,6 +163,32 @@ can change them without a rebuild:
 Pairing (the radio's address and keys) stays in the TNC object and in the
 Bluetooth stack's own storage, as on the daemon.
 
+### Power saving
+
+Every power-saving mechanism trades something, usually latency, for battery
+life. A device on mains power gains nothing from that trade, so these are
+candidates for settings. They're probably better grouped under one power
+profile (battery or mains) than exposed one by one. This list collects them
+as they're found.
+
+| Mechanism | Saves | Costs | Spike default |
+|---|---|---|---|
+| CPU clock (240, 160 or 80 MHz) | CPU power | Processing headroom. On a Tail Bat, too little draw cuts the power | 240 MHz |
+| Classic sniff mode on the radio link | Radio time on an idle SPP link: Bluedroid parks it in sniff mode with a 500 ms interval and wakes it when there's traffic | Up to about 500 ms extra latency on the first frame after a quiet spell, in either direction. **With the TH-D75 it also drops the link**: 2 of 35 sniff exits went unanswered (see [Hardware notes](#hardware-notes)) | Off. Bluedroid's power-management table for SPP turns it on, and there's no Kconfig option or public API; the spike clears it from the link policy with `bta_sys_clear_policy`. A battery profile could only bring it back after testing a longer interval or sniff subrating |
+| Bluetooth controller modem sleep (`CONFIG_BTDM_CTRL_MODEM_SLEEP`) | Powers the radio down between scheduled Bluetooth events | A little wake-up latency. The ATOM Lite has no 32 kHz crystal, so it uses the main crystal as the sleep clock | On (ORIG mode, main crystal) |
+| BLE advertising interval | Advertising airtime | Phones take longer to find and reconnect to the device | 100–150 ms |
+| BLE connection interval and peripheral latency | Radio time on each phone link | Latency to and from the phone. The phone chooses, but the device can ask for different values | The phone's choice |
+| Bluetooth transmit power | Transmit current | Range | Default |
+| Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
+| Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
+| LED or screen brightness | LED or backlight current | Visibility | — |
+| Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
+
+The Tail Bat turns this upside down: its power chip switches off below
+45 mA (see [Hardware notes](#hardware-notes)), so a battery profile there
+has to keep the draw up rather than minimise it. The right profile depends
+on the power source, not just on whether there's a battery.
+
 ### Security
 
 These devices control a transmitter under your callsign, so the firmware uses
@@ -338,8 +364,12 @@ The first spike below answers whether this is workable on the ATOM Lite.
 ### M5Stack ATOM Lite
 
 - ESP32-PICO-D4 with Bluetooth Classic and BLE, 4 MB flash, 520 KB SRAM, and
-  no PSRAM. Memory is the tightest limit with Classic, BLE and a management
-  service all running.
+  no PSRAM. Memory turned out not to be a limit: with Classic, BLE, a
+  management service and two phones all running, the heap never fell below
+  134.6 KB (Phase A memory spike).
+- **The radio link has to stay out of sniff mode.** The TH-D75 sometimes
+  doesn't answer a sniff exit, and the link drops with a supervision timeout
+  (2 of 35 exits in the spike). With sniff off, an hour ran without a drop.
 - **Tail Bat power cut-off.** The Tail Bat's IP5303 power chip switches its
   output off when the load stays under 45 mA for 32 seconds. At 80 MHz the
   ATOM Lite's idle draw sits right at that line, so the default for a Tail
@@ -369,8 +399,11 @@ The spikes are written in C++ against ESP-IDF's own APIs (decisions 10 and
 11), with Bluedroid trimmed to the profiles the firmware uses, so their
 numbers are the best case.
 
-- [ ] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
+- [x] **ATOM Lite memory:** free heap with SPP, the BLE KISS service and the
       BLE management service all running, during a bridged session.
+      Done 8 November 2026: never below 134.6 KB with two phones, and it also
+      found the D75's sniff-mode drops. See
+      [spikes/atom-lite-memory](../spikes/atom-lite-memory/README.md).
 - [ ] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
       iPhone, rollback after a failed boot, and a signature check.
 - [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS

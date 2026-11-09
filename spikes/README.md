@@ -1,11 +1,24 @@
-# Phase 0 spikes
+# Spikes
 
-Throwaway code and procedures for the Phase 0 checklist in
+Throwaway code and procedures. Nothing here ships.
+
+## Phase A (ESP32 firmware)
+
+For the Phase A checklist in
+[docs/roadmap.md](../docs/roadmap.md#phase-a-spikes). Each spike is an
+ESP-IDF project with its procedure and findings in its own README.
+
+- [`atom-lite-memory`](atom-lite-memory/README.md): heap on an ATOM Lite
+  with SPP, the BLE KISS service and a management service all running.
+
+## Phase 0 (the daemon)
+
+For the Phase 0 checklist in
 [docs/plan-1.0.md](../docs/plan-1.0.md#phase-0-spikes-before-committing).
 Results go in [FINDINGS.md](FINDINGS.md); the condensed version is appended
-to the plan when Phase 0 closes. Nothing here ships.
+to the plan when Phase 0 closes.
 
-## `spp-spike`
+### `spp-spike`
 
 One binary with everything the Bluetooth and serial questions need. It is
 Linux-only (bluer) and is cross-built for the Pi:
@@ -31,7 +44,7 @@ clearing rfkill if an adapter shows `PowerState: off-blocked`
 
 `-v` adds raw bytes.
 
-## `ble-relay`
+### `ble-relay`
 
 A BLE man in the middle for learning a radio's GATT protocol from its own
 app (Linux-only, cross-built like `spp-spike` with
@@ -58,7 +71,7 @@ tail 0, full duplex off) at connect; the radio transmits without them. Its
 `ff00` service isn't used for KISS. The full write-up is
 [docs/td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md).
 
-## Coexistence test (BLE GATT + RFCOMM on one controller)
+### Coexistence test (BLE GATT + RFCOMM on one controller)
 
 Today's daemon is unchanged and sits in front of the spike's TCP server, so
 the chain is the real Phase 1 data path minus the code:
@@ -77,7 +90,7 @@ TH-D75 ──SPP──> spp-spike (hci0, --listen 127.0.0.1:8002) <──TCP─�
 4. Repeat with `-a hci1` on the daemon side (edit `adapter` in the conf) for
    the two-adapter case: radio on the built-in chip, phones on the dongle.
 
-## USB
+### USB
 
 With the D75 plugged in, `ssh pi sh ktb-dev/spike/usb-inspect.sh` dumps
 `lsusb`, `/dev/serial/by-id`, the udev properties of each tty and the kernel
