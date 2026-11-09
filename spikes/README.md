@@ -10,6 +10,10 @@ ESP-IDF project with its procedure and findings in its own README.
 
 - [`atom-lite-memory`](atom-lite-memory/README.md): heap on an ATOM Lite
   with SPP, the BLE KISS service and a management service all running.
+- [`atom-lite-update`](atom-lite-update/README.md): firmware updates over
+  BLE, with rollback and signed images, and their throughput. Its Linux
+  client is [`ble-update`](ble-update), Rust with `bluer`, cross-built like
+  the Phase 0 spikes (`spikes/ble-update/deploy.sh`).
 
 ## Phase 0 (the daemon)
 

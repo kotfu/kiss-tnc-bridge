@@ -1,0 +1,50 @@
+menu "ATOM Lite update spike"
+
+    config SPIKE_RADIO_ADDR
+        string "Radio Bluetooth address"
+        default "40:79:12:E4:95:9D"
+        help
+            The TH-D74/D75 to connect to over SPP. The default is the dev TH-D75.
+
+    config SPIKE_DEVICE_NAME
+        string "Device name"
+        default "KTB ATOM spike"
+        help
+            Classic name (what the radio shows when pairing) and BLE
+            advertised name.
+
+    config SPIKE_NO_SNIFF
+        bool "Keep the radio link out of sniff mode"
+        default y
+        help
+            The TH-D75 sometimes doesn't answer a sniff exit, and the link
+            then drops (see the atom-lite-memory spike), so this is on.
+
+    config SPIKE_REPORT_INTERVAL_S
+        int "Seconds between heap reports"
+        default 10
+
+    config SPIKE_MGMT_MAX_MESSAGE
+        int "Largest management message, bytes"
+        default 4096
+
+    config SPIKE_UPDATE_BUFFER
+        int "Update receive buffer, bytes"
+        default 24576
+        help
+            Image chunks wait here between the GATT callback and the task
+            that writes them to flash. The client's window has to fit.
+
+    config SPIKE_UPDATE_ACK_EVERY
+        int "Acknowledge every N bytes written"
+        default 4096
+
+    config SPIKE_BREAK_SELF_TEST
+        bool "Fail the self-test on purpose"
+        default n
+        help
+            An image built with this crashes on its first boot instead of
+            marking itself valid, so the bootloader should roll back to the
+            previous app. For the rollback test only.
+
+endmenu

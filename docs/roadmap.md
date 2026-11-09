@@ -1,7 +1,7 @@
 # kiss-tnc-bridge family roadmap
 
-Status: decided 7 November 2026, firmware toolchain 8 November 2026; nothing
-built yet
+Status: decided 7 November 2026, firmware toolchain, eFuses and USB flashing
+8 November 2026; nothing built yet
 
 ## Goal
 
@@ -76,14 +76,22 @@ that share one protocol:
     types with the daemon, but its support for Classic SPP is unproven and
     its binaries are large for the ATOM Lite's 1.9 MB app partitions. The
     published JSON Schema keeps the firmware and the daemon in step instead.
+12. **No eFuses: no hardware secure boot and no flash encryption**, in the
+    spikes or the firmware. Burning eFuses can't be undone, and a device
+    that only accepts signed bootloaders can't be recovered or reflashed by
+    its owner. Firmware updates over BLE are still signed, using ESP-IDF's
+    signed app images without secure boot, which need no eFuses. USB stays
+    the way to reflash anything.
+13. **`ktbctl` writes firmware over USB**, so the first install works from a
+    Linux machine with no browser. The web installer is the other way in.
 
 ## Non-goals
 
 - **Android app.** The protocol is published with a JSON Schema, so a Kotlin
   app is possible later, but it's not planned.
 - **Safari, Firefox and phones for the web installer.** They don't support
-  Web Serial, so a computer running Chrome, Edge or Opera is needed for the
-  first install.
+  Web Serial, so the first install needs a computer running Chrome, Edge or
+  Opera, or `ktbctl` (decision 13).
 - **Wi-Fi on the ATOM Lite.** It needs Classic and BLE at the same time, and
   its 4 MB flash and lack of PSRAM leave no room to spare.
 - **Boards without Bluetooth Classic.** The ESP32-S3, C3, C6, H2 and C5 are
@@ -202,6 +210,9 @@ the same model planned for `ktb-gateway`:
   power-on or after a button press: a long press on the ATOM Lite, or a menu
   item on the Core2.
 - **Firmware updates are signed** and checked before the device boots them.
+  This protects updates over BLE, not USB: with no eFuses burned (decision
+  12), anyone with the device and a USB cable can reflash it, which is also
+  how its owner recovers it.
 
 ### Relationship to B.B. Link
 
@@ -273,7 +284,13 @@ Family features:
 - [ ] Control API subset over BLE management and USB serial.
 - [ ] Device settings in NVS.
 - [ ] Setup code and management window.
-- [ ] Two app partitions for over-the-air updates, with rollback.
+- [ ] Two app partitions for over-the-air updates, with rollback. The
+      partition table sits at 0xA000 with NVS at the end of flash, because a
+      bootloader that checks signatures doesn't fit before 0x8000. Updates
+      never replace the bootloader or the table, so this is fixed from the
+      first release.
+- [ ] A deadline for a new image to mark itself valid: a hang on first
+      boot doesn't roll back on its own.
 
 ### Device management from the CLI (decisions 4, 8)
 
@@ -287,9 +304,10 @@ fallback if the device commands make `ktbctl` confusing.
 - [ ] USB serial on Linux, macOS and Windows.
 - [ ] BLE management, on Linux first. `bluer` is Linux-only, so macOS would
       need another Bluetooth library.
-- [ ] `ktbctl device flash`: write firmware over USB. The
+- [ ] `ktbctl device flash`: write firmware over USB, including the first
+      install, so a Linux machine is all it takes (decision 13). The
       [espflash](https://github.com/esp-rs/espflash) crate does this from
-      Rust, so the web installer isn't the only way to flash.
+      Rust.
 - [ ] `ktbctl device update`: an over-the-air update over BLE, using the same
       `firmware.update.*` commands as the iOS app.
 
@@ -347,15 +365,22 @@ Decisions 3 and 7 say "if we can figure it out". Here's what's known.
   of room.
 - **Rollback and signature checks are ESP-IDF configuration.** The firmware
   builds with ESP-IDF (decision 10), so it can turn both on in the bootloader
-  and the app.
-- **Time.** A 1.5 MB image over BLE takes from under a minute to a few
-  minutes, depending on the phone and connection parameters. The device
-  should stop bridging during an update to free memory and radio time.
+  and the app. Signatures use signed app images without secure boot, so no
+  eFuses are burned (decision 12). The ATOM Lite's chip is revision 1.1,
+  which rules out the RSA scheme (revision 3 and later); the ECDSA scheme
+  works on every ESP32 revision, so one key can sign both boards' images.
+- **Time.** A 960 KB image takes about 30 s from Linux at a 15 ms
+  connection interval, which is also the shortest interval iOS allows. BLE
+  is the limit, not flash. The radio link can stay up during an update: an
+  idle bridged link made no difference that stood out from run-to-run
+  noise. The update buffer (24 KB) should be allocated only during an
+  update.
 - **Where images come from.** GitHub Releases. The app and `ktbctl` check the
   signature, the board and the version before sending an image, and the
   device checks them again before booting it.
 
-The first spike below answers whether this is workable on the ATOM Lite.
+The Phase A update spike showed this works on the ATOM Lite:
+[spikes/atom-lite-update](../spikes/atom-lite-update/README.md).
 
 ---
 
@@ -404,8 +429,13 @@ numbers are the best case.
       Done 8 November 2026: never below 134.6 KB with two phones, and it also
       found the D75's sniff-mode drops. See
       [spikes/atom-lite-memory](../spikes/atom-lite-memory/README.md).
-- [ ] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
+- [x] **ATOM Lite BLE update:** two 1.9 MB app partitions, throughput from an
       iPhone, rollback after a failed boot, and a signature check.
+      Done 8 November 2026 from Linux, with a Rust client for `ktbctl`:
+      signed updates, rollback, and rejection of corrupt and wrongly signed
+      images all work; about 30 s for a 960 KB image. The iPhone's
+      throughput waits for the app. See
+      [spikes/atom-lite-update](../spikes/atom-lite-update/README.md).
 - [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
       client and a TCP KISS client together for 24 hours, with no dropped
       links and stable heap.

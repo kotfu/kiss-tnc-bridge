@@ -1,0 +1,2 @@
+# For the rollback test: an image that crashes on its first boot.
+CONFIG_SPIKE_BREAK_SELF_TEST=y
