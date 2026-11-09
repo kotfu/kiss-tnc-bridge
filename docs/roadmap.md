@@ -155,7 +155,7 @@ exactly as on the daemon.
     version, capabilities, and the largest message it accepts.
   - `device.settings.get` / `device.settings.set`: per-device settings (see
     below).
-  - `device.reboot` and `device.factory_reset`.
+  - `device.reboot` and `device.reset`.
   - `firmware.update.*`: see [Firmware updates](#firmware-updates).
 - Clients decide what to show from `device.info`'s capabilities, not from the
   board name, so a new board doesn't need app changes for features it shares.
@@ -225,9 +225,10 @@ the same model planned for `ktb-gateway`:
   protection.
 - **One enrollment flow** in the iOS app for every device: a Pi running
   `ktb-gateway`, an ATOM Lite and a Core2.
-- **Management window.** New clients are accepted only for a few minutes
+- **Management window.** A new client is accepted only for a few minutes
   after a button press: a long press on the ATOM Lite (provisional; see
   Phase C), or a menu item on the Core2. A trusted client can open it too.
+  Each window lets in one client.
 - **Firmware updates are signed** and checked before the device boots them.
   This protects updates over BLE, not USB: with no eFuses burned (decision
   12), anyone with the device and a USB cable can reflash it, which is also
@@ -296,7 +297,7 @@ B.B. Link parity:
 - [ ] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
       service, the same one the daemon's `ble-server` ports use.
 - [ ] Scan for and pair a radio.
-- [ ] Factory reset.
+- [ ] Reset: clear all settings, the radio pairing and trusted clients.
 - [ ] RGB LED status and button controls.
 - [ ] RadioMail frequency control, if it's kept (see
       [Open questions](#open-questions)).
@@ -483,24 +484,20 @@ B.B. Link parity, management over USB serial, device settings, and the web
 installer with first setup. At the end of this phase a ham can buy an ATOM
 Lite and set it up from a browser, with no app.
 
-- [ ] **Design the ATOM Lite's user interface first.** Its only controls are
-      one button and one RGB LED. Decide:
-  - **What you can do on the device alone:** at least pair a radio, open
-    the management window, and factory reset.
-  - **How you do each one:** short and long presses, double presses,
-    holding the button while powering on. The control API calls the
-    management window gesture a long press, provisionally. The button can
-    tell any timing pattern apart, but a double press delays a single
-    press by 300–400 ms, and nobody remembers more than a few gestures.
-  - **The feedback:** LED colors and patterns for each state (radio
-    linked, phones connected, window open, pairing, updating, error), and
-    while the button is held, so you can see which action you'll get when
-    you let go.
-  - **Whether power-on opens the management window.** Convenient, but
-    anyone who can unplug the device gets a window.
-  - **Recovery when every trusted client and the setup code are lost:**
-    reading the code over USB, and what a factory reset clears (settings,
-    the radio pairing, trusted clients, the setup code).
+- [ ] **Design the ATOM Lite's user interface first**, in
+      [atom-lite-ui.md](atom-lite-ui.md). Its only controls are one button
+      and one RGB LED.
+  - [x] What you can do on the device alone: pair a radio, open the
+        management window, and reset (clear all settings; the firmware,
+        the device key and the setup code stay). Everything else goes to a trusted client, USB, or
+        unplugging.
+  - [x] One enrollment per management window.
+  - [x] Dark mode for the LED, and the wake rule: while the LED is dark, a
+        press only wakes it.
+  - [ ] The gesture for each action, and the LED's feedback while the
+        button is held. The control API calls the window's gesture a long
+        press, provisionally.
+  - [ ] The LED's colors and patterns for each state.
 
 ### Phase D: `ktbctl` device support
 

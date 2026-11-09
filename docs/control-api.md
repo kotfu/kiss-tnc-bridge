@@ -178,8 +178,13 @@ minutes (provisional) after it's opened by:
 - `ktbctl gateway open` on a Pi, or the Pi starting up
 - `auth.window`, from a trusted client
 
-The window stays open until its time runs out, so several clients can
-enroll in one window; `auth.window` with `seconds: 0` closes it early.
+One window lets in one client: it closes after the first successful
+enrollment, including a client that was already trusted and enrolled
+again, so enrolling two clients takes two windows. A wrong code doesn't
+close it, but 3 failed enrollments (provisional) do. Otherwise it stays open
+until its time runs out; `auth.window` with `seconds: 0` closes it early.
+The rule is the same however the window was opened (see
+[atom-lite-ui.md](atom-lite-ui.md#the-management-window)).
 
 ### Handshakes
 
@@ -218,7 +223,7 @@ The client checks the device too:
 
 - **In a session**, the device's static key (in its handshake message) must
   be the one the client saw when it enrolled. If not, the client stops: the
-  device was factory reset, or it isn't the same device.
+  device was erased and reinstalled, or it isn't the same device.
 - **When enrolling** from a setup URI, the device's key must match the
   fingerprint in the URI.
 
@@ -732,15 +737,17 @@ saving tables:
 | `cpu_mhz` | 240, 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
+| `led_normal` | `on` or `dark`: whether the LED shows the normal state or stays off until a press (see [atom-lite-ui.md](atom-lite-ui.md#the-led)) |
+| `led_wake_seconds` | In dark mode, how long a press lights the LED |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
-### `device.reboot` and `device.factory_reset`
+### `device.reboot` and `device.reset`
 
-Both answer `{}` and then act. `device.factory_reset` erases the device's
-settings and data and reboots. Exactly what it erases (settings, the radio
-pairing, trusted clients, the setup code) is decided with the ATOM Lite's
-user interface in Phase C.
+Both answer `{}` and then act. `device.reset` does what the button's reset
+does, then reboots: every setting goes back to its default, and the radio
+pairing and every trusted client are removed. The firmware, the device's
+key and the setup code stay (see [atom-lite-ui.md](atom-lite-ui.md#reset)).
 
 ### `firmware.update`
 
