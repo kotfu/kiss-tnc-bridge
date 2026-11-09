@@ -91,6 +91,17 @@ that share one protocol:
     link (`https://www.k0tfu.org/ktb`, see
     [Setup URIs](control-api.md#setup-uris)) and the files the iOS app's
     Universal Links need.
+15. **The firmware has its own semver releases, and the major version
+    says what works together.** Firmware is tagged `firmware-v<version>`,
+    starting at `firmware-v1.0.0`; the daemon and its tools keep
+    `v<version>`, and each tag has its own CI. One firmware version covers
+    every board. Firmware 1.x works with software 1.x (from the first
+    `ktbctl` with device support), and neither works with the other's 2.x:
+    the major version is the control API's protocol version, so the two
+    move together. Within a major, a new feature is announced by a
+    capability in `device.info`, and clients check for it, so neither side
+    needs a minimum version of the other to keep working. See
+    [Compatibility](control-api.md#compatibility).
 
 ## Non-goals
 
@@ -155,7 +166,7 @@ exactly as on the daemon.
     version, capabilities, and the largest message it accepts.
   - `device.settings.get` / `device.settings.set`: per-device settings (see
     below).
-  - `device.reboot` and `device.reset`.
+  - `device.reboot`, `device.reset` and `device.identify`.
   - `firmware.update.*`: see [Firmware updates](#firmware-updates).
 - Clients decide what to show from `device.info`'s capabilities, not from the
   board name, so a new board doesn't need app changes for features it shares.
@@ -170,7 +181,7 @@ can change them without a rebuild:
 |---|---|
 | Public name | The BLE name apps show, as `public_name` on the daemon |
 | TNC model | KISS init sequence for the radio |
-| CPU clock: 240, 160 or 80 MHz | The ATOM Lite on an M5Stack Tail Bat needs 240 MHz (see [Hardware notes](#hardware-notes)). Other power sources can save power at 80 MHz |
+| CPU clock: 240, 160 or 80 MHz | The ATOM Lite on an M5Stack Tail Bat needs 240 MHz (see [Hardware notes](#hardware-notes)). Other power sources can save power at 80 MHz. The default is 240, and nothing offers to change it until Phase D or E |
 | Bluetooth transmit power | Range against battery life |
 | LED or screen brightness | Battery life, and not lighting up a dark tent |
 | Rig control on or off | If RadioMail frequency control is kept (see [Open questions](#open-questions)) |
@@ -226,8 +237,8 @@ the same model planned for `ktb-gateway`:
 - **One enrollment flow** in the iOS app for every device: a Pi running
   `ktb-gateway`, an ATOM Lite and a Core2.
 - **Management window.** A new client is accepted only for a few minutes
-  after a button press: a long press on the ATOM Lite (provisional; see
-  Phase C), or a menu item on the Core2. A trusted client can open it too.
+  after a button press: a long press on the ATOM Lite (see
+  [atom-lite-ui.md](atom-lite-ui.md)), or a menu item on the Core2. A trusted client can open it too.
   Each window lets in one client.
 - **Firmware updates are signed** and checked before the device boots them.
   This protects updates over BLE, not USB: with no eFuses burned (decision
@@ -336,20 +347,22 @@ fallback if the device commands make `ktbctl` confusing.
 
 ### Web installer (decisions 5, 9)
 
-A page on the project's web home (decision 14) using
-[ESP Web Tools](https://esphome.github.io/esp-web-tools/), or Espressif's
-`esptool-js` directly for more control. Both flash over Web Serial, which
-needs HTTPS. The firmware images and manifests are served from the same
-site: a browser probably can't fetch GitHub release assets directly,
-because GitHub doesn't send CORS headers for them.
+A page on the project's web home (decision 14), specified in
+[web-installer.md](web-installer.md) and built in the site's repository.
+It flashes over Web Serial, which needs HTTPS. The firmware images and
+manifests are served from the same site: a browser can't fetch GitHub
+release assets, because GitHub doesn't send CORS headers for them (checked
+9 November 2026).
 
+- [ ] Write the page's functional spec. Drafted:
+      [web-installer.md](web-installer.md).
 - [ ] CI builds each board's firmware on every release and publishes the
       images and a manifest per board.
 - [ ] One page with a choice of board: ATOM Lite or Core2.
 - [ ] After flashing, the same page connects to the device over Web Serial and
-      runs first setup over the control API: name the device, show its setup
-      code (16 characters and the QR code), pick the TNC model, and choose
-      the CPU clock for a Tail Bat.
+      runs first setup over the control API: show the setup code, name the
+      device, and choose the LED mode. Pairing is on the device's button,
+      and the radio's model comes from its Bluetooth name.
 - [ ] Explain the "erase device" choice: a clean install wipes the radio
       pairing and settings.
 - [ ] Link to USB-to-serial drivers for Windows machines that need them.
@@ -359,9 +372,9 @@ because GitHub doesn't send CORS headers for them.
       redirecting to it.
 
 Limits: Chrome, Edge and Opera on a desktop or laptop only. Safari, Firefox,
-iPhone and iPad don't support Web Serial. The installer's code lives in the
-firmware's repository, and CI publishes it with each release to the web
-home.
+iPhone and iPad don't support Web Serial. The page's code lives in the
+site's repository, in the site's design; this repository publishes the
+firmware and the spec the page follows.
 
 ### Core2 v1.3 firmware (decisions 6, 7, 8)
 
@@ -489,15 +502,18 @@ Lite and set it up from a browser, with no app.
       and one RGB LED.
   - [x] What you can do on the device alone: pair a radio, open the
         management window, and reset (clear all settings; the firmware,
-        the device key and the setup code stay). Everything else goes to a trusted client, USB, or
-        unplugging.
+        the device key and the setup code stay). Everything else goes to
+        a trusted client, USB, or unplugging.
   - [x] One enrollment per management window.
-  - [x] Dark mode for the LED, and the wake rule: while the LED is dark, a
-        press only wakes it.
-  - [ ] The gesture for each action, and the LED's feedback while the
-        button is held. The control API calls the window's gesture a long
-        press, provisionally.
-  - [ ] The LED's colors and patterns for each state.
+  - [x] The LED's states and events, in precedence order, with `solid`,
+        `breathe` and `dark` modes for the normal states, and the wake
+        rule: while the LED is dark, a press only wakes it.
+  - [x] Reset: hold the button at power-on, through a 3-second warning.
+  - [x] Gestures: a single press wakes the LED in dark mode, cancels
+        pairing or closes the management window; a double press pairs; a
+        long press opens the window.
+  - [ ] The LED's timing and the gestures' durations, judged on a
+        device.
 
 ### Phase D: `ktbctl` device support
 
@@ -523,6 +539,32 @@ on the web installer, and Core2 support in the app and `ktbctl`.
 
 Only if the Phase A soak test passed: station mode, a `tcp-server` port, and
 DNS-SD.
+
+### Phase I: USB TNC and USB app ports
+
+After Phase F, when BLE management works everywhere: the ATOM Lite and
+Core2 can use their USB serial port for KISS, in one of two modes, chosen
+at setup. Firmware 1.5 or 2.0, depending on what the API needs.
+
+- **USB TNC:** the TNC is software on the computer serving KISS on a serial
+  port, and phones connect to the device over BLE. The device is a BLE
+  KISS dongle for TNC software on macOS and Windows, where the daemon
+  doesn't run, or on a Linux machine without usable BLE. Bluetooth Classic
+  isn't used.
+- **USB app:** a KISS program on the computer reaches the radio through the
+  device, over Bluetooth Classic.
+
+In both modes the USB port carries only KISS: no log and no control API,
+which would mix badly with KISS. The device is managed over BLE, and
+reset (holding the button at power-on) brings back the control API over
+USB. To work out:
+
+- [ ] KISS software that drives RTS (hardware flow control, or RTS for
+      PTT) resets the ESP32 or puts it in download mode. Document what
+      works, and test the programs people use.
+- [ ] The baud rate, as a setting.
+- [ ] How setup chooses the mode, and whether both modes, or USB and the
+      radio together, make sense in one bridge.
 
 ---
 
