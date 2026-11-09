@@ -1,7 +1,7 @@
 # kiss-tnc-bridge family roadmap
 
-Status: decided 7 November 2026, firmware toolchain, eFuses and USB flashing
-8 November 2026; nothing built yet
+Status: decided 7 November 2026; firmware toolchain, eFuses, USB flashing
+and web home 8 November 2026; nothing built yet
 
 ## Goal
 
@@ -84,6 +84,13 @@ that share one protocol:
     the way to reflash anything.
 13. **`ktbctl` writes firmware over USB**, so the first install works from a
     Linux machine with no browser. The web installer is the other way in.
+14. **The project's web home is
+    [www.k0tfu.org/kiss-tnc-bridge](https://www.k0tfu.org/kiss-tnc-bridge)**:
+    documentation, install pages and the web installer. The source code
+    stays on GitHub. The site is a Rails app, so it can serve the setup
+    link (`https://www.k0tfu.org/ktb`, see
+    [Setup URIs](control-api.md#setup-uris)) and the files the iOS app's
+    Universal Links need.
 
 ## Non-goals
 
@@ -202,13 +209,25 @@ on the power source, not just on whether there's a battery.
 These devices control a transmitter under your callsign, so the firmware uses
 the same model planned for `ktb-gateway`:
 
-- **Authentication inside the protocol, not Bluetooth pairing.** A setup code
-  is exchanged once for a stored credential. The ATOM Lite has no screen, so
-  its code comes from the web installer, `ktbctl` over USB, or a label. The
-  Core2 shows its code on screen.
-- **Management window.** New phones are accepted only for a few minutes after
-  power-on or after a button press: a long press on the ATOM Lite, or a menu
-  item on the Core2.
+- **Authentication inside the protocol, not Bluetooth pairing.** Each
+  device makes its own setup code, 80 random bits, and keeps it. A client
+  that knows the code enrolls once, with a Noise handshake, and is trusted
+  from then on by its own key. Every session is encrypted. The ATOM Lite has
+  no screen, so its code comes from the web installer or `ktbctl` over USB,
+  either as 16 characters or as a QR code with a URI in it. The Core2 shows
+  its QR code on screen. See [Authentication](control-api.md#authentication)
+  in the control API.
+- **The code is permanent.** It can be rotated over USB or by a trusted
+  client; clients already trusted keep working.
+- **One level of trusted clients**, and a trusted client can do everything.
+  Anyone with the device and a USB cable can reflash it anyway (decision
+  12), so owner and guest levels would add complexity without adding
+  protection.
+- **One enrollment flow** in the iOS app for every device: a Pi running
+  `ktb-gateway`, an ATOM Lite and a Core2.
+- **Management window.** New clients are accepted only for a few minutes
+  after a button press: a long press on the ATOM Lite (provisional; see
+  Phase C), or a menu item on the Core2. A trusted client can open it too.
 - **Firmware updates are signed** and checked before the device boots them.
   This protects updates over BLE, not USB: with no eFuses burned (decision
   12), anyone with the device and a USB cable can reflash it, which is also
@@ -230,11 +249,14 @@ configuration commands aren't the management protocol; the control API is.
 
 - [ ] Specify the BLE management GATT service in
       [control-api.md](control-api.md): UUIDs, chunking, and the largest
-      message size.
-- [ ] Add the device subset and the `device.*` and `firmware.update.*`
-      commands to `src/control/protocol.rs` and the published JSON Schema.
+      message size. Drafted 8 November 2026.
+- [ ] Add the device subset and the `device.*`, `auth.*` and
+      `firmware.update.*` commands to `src/control/protocol.rs` and the
+      published JSON Schema. Specified in control-api.md; types not yet
+      written.
 - [ ] Specify the setup-code exchange and the management window, shared by
-      `ktb-gateway` and the firmware.
+      `ktb-gateway` and the firmware. Drafted 8 November 2026: a Noise
+      handshake keyed by an 80-bit setup code, then a key per client.
 
 ### `ktb-gateway` BLE management (decision 1)
 
@@ -313,23 +335,32 @@ fallback if the device commands make `ktbctl` confusing.
 
 ### Web installer (decisions 5, 9)
 
-A static page on GitHub Pages using
+A page on the project's web home (decision 14) using
 [ESP Web Tools](https://esphome.github.io/esp-web-tools/), or Espressif's
-`esptool-js` directly for more control. Both flash over Web Serial.
+`esptool-js` directly for more control. Both flash over Web Serial, which
+needs HTTPS. The firmware images and manifests are served from the same
+site: a browser probably can't fetch GitHub release assets directly,
+because GitHub doesn't send CORS headers for them.
 
 - [ ] CI builds each board's firmware on every release and publishes the
       images and a manifest per board.
 - [ ] One page with a choice of board: ATOM Lite or Core2.
 - [ ] After flashing, the same page connects to the device over Web Serial and
-      runs first setup over the control API: name the device, show or set its
-      setup code, pick the TNC model, and choose the CPU clock for a Tail Bat.
+      runs first setup over the control API: name the device, show its setup
+      code (16 characters and the QR code), pick the TNC model, and choose
+      the CPU clock for a Tail Bat.
 - [ ] Explain the "erase device" choice: a clean install wipes the radio
       pairing and settings.
 - [ ] Link to USB-to-serial drivers for Windows machines that need them.
+- [ ] Serve `/ktb`, the setup link in QR codes, and
+      `/.well-known/apple-app-site-association` for the iOS app's
+      Universal Links, on `www.k0tfu.org`, with bare `k0tfu.org`
+      redirecting to it.
 
 Limits: Chrome, Edge and Opera on a desktop or laptop only. Safari, Firefox,
-iPhone and iPad don't support Web Serial. The installer is published from the
-new firmware's repository.
+iPhone and iPad don't support Web Serial. The installer's code lives in the
+firmware's repository, and CI publishes it with each release to the web
+home.
 
 ### Core2 v1.3 firmware (decisions 6, 7, 8)
 
@@ -452,6 +483,25 @@ B.B. Link parity, management over USB serial, device settings, and the web
 installer with first setup. At the end of this phase a ham can buy an ATOM
 Lite and set it up from a browser, with no app.
 
+- [ ] **Design the ATOM Lite's user interface first.** Its only controls are
+      one button and one RGB LED. Decide:
+  - **What you can do on the device alone:** at least pair a radio, open
+    the management window, and factory reset.
+  - **How you do each one:** short and long presses, double presses,
+    holding the button while powering on. The control API calls the
+    management window gesture a long press, provisionally. The button can
+    tell any timing pattern apart, but a double press delays a single
+    press by 300–400 ms, and nobody remembers more than a few gestures.
+  - **The feedback:** LED colors and patterns for each state (radio
+    linked, phones connected, window open, pairing, updating, error), and
+    while the button is held, so you can see which action you'll get when
+    you let go.
+  - **Whether power-on opens the management window.** Convenient, but
+    anyone who can unplug the device gets a window.
+  - **Recovery when every trusted client and the setup code are lost:**
+    reading the code over USB, and what a factory reset clears (settings,
+    the radio pairing, trusted clients, the setup code).
+
 ### Phase D: `ktbctl` device support
 
 Device management over USB serial, `ktbctl device flash`, then BLE
@@ -493,9 +543,10 @@ DNS-SD.
    have. Decided after the Phase A spikes show how much room is left; the
    default is no.
 3. **Repositories and names.** Likely one firmware repository with a shared
-   core and a target per board, hosting the web installer on its GitHub
-   Pages, plus a repository for the iOS app. The names of the firmware, the
-   app and the devices' default BLE names are still open.
+   core and a target per board, plus a repository for the iOS app. The web
+   installer and documentation live on the web home (decision 14). The
+   names of the firmware, the app and the devices' default BLE names are
+   still open.
 4. **`ktbctl` or a new program** for device management. `ktbctl` is the
    recommendation.
 5. **Firmware signing keys:** where the private key lives, and how CI signs
