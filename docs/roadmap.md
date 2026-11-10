@@ -122,7 +122,8 @@ that share one protocol:
   BLE-only, so they can't talk to a TH-D74 or TH-D75 over SPP. That rules out
   the M5StickS3 and similar boards.
 - **The M5StickC Plus2.** It would fit well, but it's end-of-life and
-  unavailable.
+  unavailable. The M5StickC Plus SE is a candidate in its place (see
+  [Open questions](#open-questions)).
 - **Compatibility with B.B. Link Configurator.** The new iOS app replaces it.
   The firmware doesn't need to answer the Configurator's commands. The
   in-band commands RadioMail sends are a separate question; see
@@ -485,6 +486,26 @@ The Phase A update spike showed this works on the ATOM Lite:
   connected clients is marked unstable. So Wi-Fi means station mode only,
   and only after a soak test passes.
 
+### M5StickC Plus SE (candidate)
+
+Not yet tested on a device; from M5Stack's specifications.
+
+- ESP32-PICO-D4, the ATOM Lite's chip: Bluetooth Classic and BLE, 4 MB
+  flash, 520 KB SRAM and no PSRAM. M5Stack's page lists only Wi-Fi, but the
+  chip has both kinds of Bluetooth. The bridge, the flash layout and the
+  control API should carry over unchanged, and the ATOM Lite's heap
+  headroom (at least 134.6 KB free) leaves room for a screen.
+- An AXP192 power chip, set up over I2C before the screen has power. The
+  first Core2 revisions use the same chip.
+- A 1.14" 135×240 colour screen (ST7789v2) and one red LED in place of the
+  ATOM's RGB LED, so the LED design doesn't carry over: it needs a small
+  status screen, close to the Core2's.
+- Two buttons and a power button on the AXP192, against the ATOM's one.
+- A built-in 120 mAh battery behind the AXP192, so no low-current cut-off
+  like the Tail Bat's, but only an hour or two of running, less with the
+  screen lit.
+- The StickC Plus without the IMU, which the bridge doesn't use.
+
 ---
 
 ## Phases
@@ -616,6 +637,9 @@ USB. To work out:
    still open.
 4. **`ktbctl` or a new program** for device management. `ktbctl` is the
    recommendation.
-5. **More boards later.** The LILYGO T-Display (original ESP32, 1.14" screen)
-   fits the same architecture for people willing to add their own battery and
-   case.
+5. **More boards later.** The leading candidate is the M5StickC Plus SE
+   (see [Hardware notes](#m5stickc-plus-se-candidate)): the ATOM Lite's
+   chip with a screen and a battery, in stock at about $19. It needs a
+   spike on a device before it gets a phase. The LILYGO T-Display (original
+   ESP32, 1.14" screen) fits the same architecture for people willing to add
+   their own battery and case.
