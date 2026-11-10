@@ -548,9 +548,9 @@ impl Daemon {
                 ErrorCode::Internal,
                 "Bluetooth commands are run by Daemon::bluetooth",
             )),
-            Command::Subscribe { .. } => Err(ApiError::new(
+            Command::Subscribe { .. } | Command::Unsubscribe { .. } => Err(ApiError::new(
                 ErrorCode::BadRequest,
-                "subscribe is handled by the connection",
+                "subscribe and unsubscribe are handled by the connection",
             )),
             Command::ConfigGet { kind, object } => self.config_get(kind.map(Into::into), object),
             Command::ConfigPut {

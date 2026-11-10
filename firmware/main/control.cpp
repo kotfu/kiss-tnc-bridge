@@ -1,7 +1,7 @@
 #include "control.h"
 
+#include <atomic>
 #include <cstring>
-#include <functional>
 #include <string>
 #include <vector>
 
@@ -9,6 +9,7 @@
 #include "board.h"
 #include "cJSON.h"
 #include "console.h"
+#include "control_internal.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
@@ -27,40 +28,31 @@ namespace {
 constexpr const char *TAG = "control";
 constexpr int protocol_version = 1;
 
-// What a command produces: a result, or an error code and message. `after`
-// runs once the response is on its way (a reboot, say).
-struct Reply {
-    cJSON *result = nullptr;
-    const char *code = nullptr;
-    std::string message;
-    std::function<void()> after;
-
-    static Reply ok(cJSON *r) { return Reply{r, nullptr, {}, {}}; }
-    static Reply empty() { return ok(cJSON_CreateObject()); }
-    static Reply error(const char *code, std::string message)
-    {
-        return Reply{nullptr, code, std::move(message), {}};
-    }
+// The USB serial port, the one connection so far.
+class UsbConn : public Conn {
+public:
+    void send_line(const char *text, size_t len) override { console::write_line(text, len); }
+    std::atomic<uint32_t> topics{0};
 };
+UsbConn usb;
 
-using Handler = Reply (*)(const cJSON *req);
-
-void send(cJSON *msg)
+void send(Conn *conn, cJSON *msg)
 {
     char *text = cJSON_PrintUnformatted(msg);
     if (text) {
-        console::write_line(text, strlen(text));
+        conn->send_line(text, strlen(text));
         cJSON_free(text);
     }
     cJSON_Delete(msg);
 }
 
-void send_reply(const cJSON *id, Reply &r)
+// id is null when the request had none to echo.
+void send_response(Conn *conn, const double *id, Reply &r)
 {
     cJSON *msg = cJSON_CreateObject();
     cJSON_AddNumberToObject(msg, "v", protocol_version);
     if (id) {
-        cJSON_AddItemToObject(msg, "id", cJSON_Duplicate(id, true));
+        cJSON_AddNumberToObject(msg, "id", *id);
     } else {
         cJSON_AddNullToObject(msg, "id");
     }
@@ -75,7 +67,7 @@ void send_reply(const cJSON *id, Reply &r)
         cJSON_AddItemToObject(msg, "result", r.result ? r.result : cJSON_CreateObject());
         r.result = nullptr;
     }
-    send(msg);
+    send(conn, msg);
 }
 
 void reboot_soon()
@@ -106,7 +98,7 @@ cJSON *window_json()
 
 // device.*
 
-Reply device_info(const cJSON *)
+Reply device_info(const cJSON *, const Pending &)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "board", board::name);
@@ -122,14 +114,14 @@ Reply device_info(const cJSON *)
     return Reply::ok(o);
 }
 
-Reply settings_get(const cJSON *)
+Reply settings_get(const cJSON *, const Pending &)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddItemToObject(o, "settings", settings::to_json());
     return Reply::ok(o);
 }
 
-Reply settings_set(const cJSON *req)
+Reply settings_set(const cJSON *req, const Pending &)
 {
     std::string error;
     std::vector<std::string> reboot_required;
@@ -146,7 +138,7 @@ Reply settings_set(const cJSON *req)
     return Reply::ok(o);
 }
 
-Reply device_reboot(const cJSON *)
+Reply device_reboot(const cJSON *, const Pending &)
 {
     ESP_LOGI(TAG, "rebooting");
     Reply r = Reply::empty();
@@ -154,7 +146,7 @@ Reply device_reboot(const cJSON *)
     return r;
 }
 
-Reply device_reset(const cJSON *)
+Reply device_reset(const cJSON *, const Pending &)
 {
     Reply r = Reply::empty();
     r.after = [] {
@@ -166,7 +158,7 @@ Reply device_reset(const cJSON *)
     return r;
 }
 
-Reply device_identify(const cJSON *)
+Reply device_identify(const cJSON *, const Pending &)
 {
     ui::post(ui::Event::identify);
     return Reply::empty();
@@ -174,7 +166,7 @@ Reply device_identify(const cJSON *)
 
 // auth.*
 
-Reply auth_info(const cJSON *)
+Reply auth_info(const cJSON *, const Pending &)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "fingerprint", auth::fingerprint().c_str());
@@ -192,9 +184,9 @@ Reply code_reply()
     return Reply::ok(o);
 }
 
-Reply auth_code(const cJSON *) { return code_reply(); }
+Reply auth_code(const cJSON *, const Pending &) { return code_reply(); }
 
-Reply auth_rotate_code(const cJSON *)
+Reply auth_rotate_code(const cJSON *, const Pending &)
 {
     if (!auth::rotate_code()) {
         return Reply::error("internal", "couldn't save a new setup code; the old one still works");
@@ -202,7 +194,7 @@ Reply auth_rotate_code(const cJSON *)
     return code_reply();
 }
 
-Reply auth_window(const cJSON *req)
+Reply auth_window(const cJSON *req, const Pending &)
 {
     const cJSON *s = cJSON_GetObjectItemCaseSensitive(req, "seconds");
     uint32_t seconds = auth::window_default_seconds;
@@ -217,7 +209,7 @@ Reply auth_window(const cJSON *req)
     return Reply::ok(window_json());
 }
 
-Reply auth_clients(const cJSON *)
+Reply auth_clients(const cJSON *, const Pending &)
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddArrayToObject(o, "clients"); // enrollment comes in Phase E
@@ -225,20 +217,25 @@ Reply auth_clients(const cJSON *)
 }
 
 #if CONFIG_KTB_DEBUG_COMMANDS
-// debug.* fake what milestone 1 doesn't have yet, to try the LED.
+// debug.* fake what the LED shows (the radio's state, phones, an error, an
+// update) and frames, to try the LED without them.
 
-Reply debug_set(const cJSON *req)
+Reply debug_set(const cJSON *req, const Pending &)
 {
     if (const cJSON *r = cJSON_GetObjectItemCaseSensitive(req, "radio")) {
         const char *s = cJSON_GetStringValue(r);
-        if (s && strcmp(s, "none") == 0) {
-            radio::debug_set_link(radio::Link::none);
+        // What the LED shows, not the real link: "real" goes back to it.
+        if (s && strcmp(s, "real") == 0) {
+            radio::debug_override_link(false, radio::Link::none);
+        } else if (s && strcmp(s, "none") == 0) {
+            radio::debug_override_link(true, radio::Link::none);
         } else if (s && strcmp(s, "down") == 0) {
-            radio::debug_set_link(radio::Link::down);
+            radio::debug_override_link(true, radio::Link::down);
         } else if (s && strcmp(s, "connected") == 0) {
-            radio::debug_set_link(radio::Link::connected);
+            radio::debug_override_link(true, radio::Link::connected);
         } else {
-            return Reply::error("bad_request", "radio must be \"none\", \"down\" or \"connected\"");
+            return Reply::error("bad_request",
+                                "radio must be \"none\", \"down\", \"connected\" or \"real\"");
         }
     }
     if (const cJSON *p = cJSON_GetObjectItemCaseSensitive(req, "phones")) {
@@ -256,7 +253,7 @@ Reply debug_set(const cJSON *req)
     return Reply::empty();
 }
 
-Reply debug_frame(const cJSON *req)
+Reply debug_frame(const cJSON *req, const Pending &)
 {
     const char *dir = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "direction"));
     if (dir && strcmp(dir, "to_phone") == 0) {
@@ -269,20 +266,7 @@ Reply debug_frame(const cJSON *req)
     return Reply::empty();
 }
 
-Reply debug_pairing_result(const cJSON *req)
-{
-    if (!radio::pairing()) {
-        return Reply::error("failed", "not pairing");
-    }
-    radio::debug_finish_pairing(cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(req, "succeeded")));
-    return Reply::empty();
-}
 #endif
-
-struct Command {
-    const char *name;
-    Handler handler;
-};
 
 const Command commands[] = {
     {"device.info", device_info},
@@ -299,7 +283,6 @@ const Command commands[] = {
 #if CONFIG_KTB_DEBUG_COMMANDS
     {"debug.set", debug_set},
     {"debug.frame", debug_frame},
-    {"debug.pairing_result", debug_pairing_result},
 #endif
 };
 
@@ -319,11 +302,16 @@ bool daemon_only(const char *cmd)
     return strncmp(cmd, "bridge.", 7) == 0 || strncmp(cmd, "adapter.", 8) == 0;
 }
 
-Reply dispatch(const cJSON *req, const char *cmd)
+Reply dispatch(const cJSON *req, const char *cmd, const Pending &p)
 {
     for (const Command &c : commands) {
         if (strcmp(cmd, c.name) == 0) {
-            return c.handler(req);
+            return c.handler(req, p);
+        }
+    }
+    for (size_t i = 0; i < radio_command_count; i++) {
+        if (strcmp(cmd, radio_commands[i].name) == 0) {
+            return radio_commands[i].handler(req, p);
         }
     }
     if (daemon_only(cmd)) {
@@ -339,16 +327,86 @@ Reply dispatch(const cJSON *req, const char *cmd)
         known += known.empty() ? "" : ", ";
         known += c.name;
     }
+    for (size_t i = 0; i < radio_command_count; i++) {
+        known += ", ";
+        known += radio_commands[i].name;
+    }
     return Reply::error("unknown_command", std::string("no command ") + cmd + "; known: " + known);
 }
 
 } // namespace
 
+void reply_ok(const Pending &p, cJSON *result)
+{
+    if (!p.valid()) {
+        cJSON_Delete(result);
+        return;
+    }
+    Reply r = Reply::ok(result);
+    send_response(p.conn, &p.id, r);
+}
+
+void reply_error(const Pending &p, const char *code, const std::string &message)
+{
+    if (!p.valid()) {
+        return;
+    }
+    Reply r = Reply::error(code, message);
+    send_response(p.conn, &p.id, r);
+}
+
+void send_event(Conn *conn, cJSON *event)
+{
+    if (!conn) {
+        cJSON_Delete(event);
+        return;
+    }
+    // "v" first, as in every other message
+    cJSON *msg = cJSON_CreateObject();
+    cJSON_AddNumberToObject(msg, "v", protocol_version);
+    while (event->child) {
+        cJSON *item = cJSON_DetachItemViaPointer(event, event->child);
+        cJSON_AddItemToObject(msg, item->string, item);
+    }
+    cJSON_Delete(event);
+    send(conn, msg);
+}
+
+bool subscribed(Topic topic)
+{
+    return (usb.topics & topic) != 0;
+}
+
+void publish(Topic topic, cJSON *event)
+{
+    if (usb.topics & topic) {
+        send_event(&usb, event);
+    } else {
+        cJSON_Delete(event);
+    }
+}
+
+uint32_t subscribe(Conn *conn, uint32_t topics)
+{
+    if (conn == &usb) {
+        return usb.topics |= topics;
+    }
+    return 0;
+}
+
+uint32_t unsubscribe(Conn *conn, uint32_t topics)
+{
+    if (conn == &usb) {
+        return usb.topics &= ~topics;
+    }
+    return 0;
+}
+
 void handle_line(char *line, size_t len)
 {
     if (!line) {
         Reply r = Reply::error("bad_request", "request longer than 4096 bytes");
-        send_reply(nullptr, r);
+        send_response(&usb, nullptr, r);
         return;
     }
     if (line[0] != '{') {
@@ -358,16 +416,20 @@ void handle_line(char *line, size_t len)
     if (!cJSON_IsObject(req)) {
         cJSON_Delete(req);
         Reply r = Reply::error("bad_request", "not a JSON object");
-        send_reply(nullptr, r);
+        send_response(&usb, nullptr, r);
         return;
     }
 
     const cJSON *id = cJSON_GetObjectItemCaseSensitive(req, "id");
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(req, "v");
     const char *cmd = cJSON_GetStringValue(cJSON_GetObjectItemCaseSensitive(req, "cmd"));
+    Pending p;
+    if (cJSON_IsNumber(id)) {
+        p.conn = &usb;
+        p.id = id->valuedouble;
+    }
     Reply r;
-    if (!cJSON_IsNumber(id)) {
-        id = nullptr;
+    if (!p.valid()) {
         r = Reply::error("bad_request", "a request needs a numeric id");
     } else if (!cJSON_IsNumber(v)) {
         r = Reply::error("bad_request", "a request needs \"v\": 1");
@@ -377,9 +439,11 @@ void handle_line(char *line, size_t len)
         r = Reply::error("bad_request", "a request needs a cmd");
     } else {
         ESP_LOGI(TAG, "%s", cmd);
-        r = dispatch(req, cmd);
+        r = dispatch(req, cmd, p);
     }
-    send_reply(id, r);
+    if (!r.deferred) {
+        send_response(&usb, p.valid() ? &p.id : nullptr, r);
+    }
     auto after = std::move(r.after);
     cJSON_Delete(req);
     if (after) {

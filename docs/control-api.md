@@ -460,6 +460,13 @@ Everything at once. No parameters.
 events on those topics on this connection until it closes. Subscribing
 again adds topics. The result lists the topics now subscribed.
 
+`{"cmd": "unsubscribe", "topics": ["frames"]}` stops those topics, or every
+topic when `topics` is missing or empty, and lists the topics still
+subscribed. A socket's subscriptions end when it closes, but a device's
+USB serial port never tells the device it closed: there, a client
+unsubscribes when it's done, or the events go on until the device
+restarts.
+
 ### `reload`
 
 Re-read the config from disk and apply what changed. Parameters:
@@ -699,10 +706,11 @@ as on the daemon. A client can tell a device from the daemon by
 
 | Commands | On a device |
 |---|---|
-| `status`, `subscribe` | The same, with one bridge, one TNC and the device's one adapter |
+| `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock |
+| `subscribe`, `unsubscribe` | The same, for the `state` and `frames` topics; `activity` comes with the BLE KISS service. Frame events have no `at` |
 | `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
-| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only. The TH-D75's `confirm` step goes to the client as on the daemon |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the client as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
 | `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |

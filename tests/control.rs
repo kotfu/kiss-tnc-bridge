@@ -272,6 +272,46 @@ async fn events_follow_state_frames_and_activity() {
 }
 
 #[tokio::test]
+async fn unsubscribe_stops_a_topic() {
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    let sub = c
+        .call(json!({"cmd": "subscribe", "topics": ["state", "frames"]}))
+        .await;
+    assert_eq!(sub["result"]["topics"], json!(["state", "frames"]));
+
+    let app = TcpStream::connect(("127.0.0.1", r.lan)).await.unwrap();
+    let mut app = KissConnection::new(app);
+    let (tnc, _) = timeout(T, r.tnc.accept()).await.unwrap().unwrap();
+    let mut tnc = KissConnection::new(tnc);
+    c.event(|e| e["event"] == "state" && e["what"] == "tnc" && e["state"] == "connected")
+        .await;
+
+    let unsub = c
+        .call(json!({"cmd": "unsubscribe", "topics": ["frames"]}))
+        .await;
+    assert_eq!(unsub["result"]["topics"], json!(["state"]));
+
+    // A frame goes through, but no frame event comes before the state
+    // event for the app leaving.
+    tnc.write_frame(&ui("quiet")).await.unwrap();
+    assert_eq!(app.read_frame().await.unwrap(), ui("quiet"));
+    drop(app);
+    loop {
+        let msg = c.recv().await;
+        assert_ne!(msg["event"], "frame", "a frame event after unsubscribing");
+        if msg["event"] == "state" && msg["what"] == "session" && msg["state"] == "closed" {
+            break;
+        }
+    }
+
+    // No topics: everything.
+    let unsub = c.call(json!({"cmd": "unsubscribe"})).await;
+    assert_eq!(unsub["result"]["topics"], json!([]));
+    r.shutdown.cancel();
+}
+
+#[tokio::test]
 async fn config_check_and_reload() {
     let r = rig().await;
     let mut c = Client::connect(&r.socket).await;

@@ -305,14 +305,17 @@ Phase C.
 
 B.B. Link parity:
 
-- [ ] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
-      automatic reconnect.
-- [ ] Put the radio's TNC into KISS mode, using the TNC model.
+- [x] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
+      automatic reconnect (milestone 2).
+- [x] Put the radio's TNC into KISS mode, using the TNC model
+      (milestone 2).
 - [ ] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
       service, the same one the daemon's `ble-server` ports use.
-- [ ] Scan for and pair a radio.
-- [ ] Reset: clear all settings, the radio pairing and trusted clients.
-- [ ] RGB LED status and button controls.
+- [x] Scan for and pair a radio: with a double press, or over USB
+      (milestone 2).
+- [x] Reset: clear all settings, the radio pairing and trusted clients
+      (milestone 1).
+- [x] RGB LED status and button controls (milestone 1).
 - [ ] RadioMail frequency control, if it's kept (see
       [Open questions](#open-questions)).
 

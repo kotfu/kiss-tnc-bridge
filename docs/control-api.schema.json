@@ -516,6 +516,26 @@
           "type": "object"
         },
         {
+          "description": "Stops events on the given topics on this connection, or on every\ntopic if none are given. For connections that can't close, such as\na device's USB serial port.",
+          "properties": {
+            "cmd": {
+              "const": "unsubscribe",
+              "type": "string"
+            },
+            "topics": {
+              "default": [],
+              "items": {
+                "$ref": "#/$defs/Topic"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
           "description": "Re-read the config from disk and apply it. With `non_disruptive`, a\nplan that would disrupt anyone is refused with\n`reload_would_disrupt` and nothing is applied.",
           "properties": {
             "cmd": {

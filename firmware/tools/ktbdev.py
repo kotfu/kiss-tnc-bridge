@@ -68,11 +68,20 @@ class Device:
                 line, self.buf = self.buf.split(b"\n", 1)
                 yield line.rstrip(b"\r").decode("utf-8", "replace")
 
-    def request(self, cmd, timeout=3.0, **params):
+    def send(self, cmd, **params):
         rid = self.next_id
         self.next_id += 1
         msg = {"v": 1, "id": rid, "cmd": cmd, **params}
         self.s.write((json.dumps(msg) + "\n").encode())
+        return rid
+
+    def request(self, cmd, timeout=3.0, on_event=None, **params):
+        """Sends a request and returns its response. Events go to on_event
+        (which may send requests of its own) or are printed."""
+        rid = self.send(cmd, **params)
+        return self.wait(rid, cmd, timeout, on_event)
+
+    def wait(self, rid, cmd, timeout, on_event=None):
         for line in self.lines(time.monotonic() + timeout):
             if not line.startswith("{"):
                 if self.verbose:
@@ -85,8 +94,32 @@ class Device:
                 continue
             if reply.get("id") == rid:
                 return reply
-            print("  other:", line, file=sys.stderr)
+            if "event" in reply:
+                if on_event:
+                    on_event(reply)
+                else:
+                    print_event(reply)
+                continue
+            if self.verbose:
+                print("  other:", line, file=sys.stderr)
         sys.exit(f"no answer to {cmd} within {timeout} s")
+
+
+def print_event(e):
+    kind = e.get("event")
+    if kind == "frame":
+        d = e.get("decoded", {})
+        print(f"frame {e.get('dir')}: {d.get('summary') or e.get('kiss')}", flush=True)
+    elif kind == "state":
+        print(f"state: {e.get('object')} {e.get('state')}", flush=True)
+    elif kind == "found":
+        dev = e["device"]
+        extra = f" ({dev['known_tnc']})" if "known_tnc" in dev else ""
+        print(f"found {dev['address']} {dev.get('name', '?')}{extra} rssi {dev.get('rssi', '?')}", flush=True)
+    elif kind == "pairing":
+        print("pairing:", e.get("step"), e.get("name") or e.get("passkey") or "", flush=True)
+    else:
+        print("event:", json.dumps(e), flush=True)
 
 
 def parse_value(text):
@@ -132,19 +165,35 @@ def main():
     p = sub.add_parser("raw", help="send a command with JSON parameters")
     p.add_argument("cmd")
     p.add_argument("params", nargs="?", default="{}")
-    p = sub.add_parser("debug", help="debug.set radio=none|down|connected phones=N error=true updating=true")
+    p = sub.add_parser("debug", help="debug.set radio=none|down|connected|real phones=N error=true updating=true")
     p.add_argument("pairs", nargs="+")
     p = sub.add_parser("frames", help="debug.frame: COUNT frames to_phone or to_radio")
     p.add_argument("direction", choices=["to_phone", "to_radio"])
     p.add_argument("count", nargs="?", type=int, default=1)
     p.add_argument("--every", type=float, default=0.5, help="seconds between frames")
-    p = sub.add_parser("pairing-result", help="debug.pairing_result: finish the stand-in pairing")
-    p.add_argument("result", choices=["ok", "fail"])
     p = sub.add_parser("demo", help="show every LED state and event in turn (debug build)")
     p.add_argument("--seconds", type=float, default=5, help="how long to show each")
     p.add_argument("--breathe-seconds", type=float, default=20,
                    help="how long to show each breathing color (a breath is 8 s)")
     sub.add_parser("monitor", help="print everything the device sends")
+    sub.add_parser("status", help="status")
+    sub.add_parser("models", help="tnc.models")
+    p = sub.add_parser("scan", help="bluetooth.scan for SECONDS (default 10)")
+    p.add_argument("seconds", nargs="?", type=int, default=10)
+    p = sub.add_parser("pair", help="bluetooth.pair ADDRESS (default: the radio's), confirming the number")
+    p.add_argument("address", nargs="?")
+    p.add_argument("--yes", action="store_true", help="accept the number without asking")
+    p = sub.add_parser("unpair", help="bluetooth.unpair ADDRESS (default: the radio)")
+    p.add_argument("address", nargs="?")
+    p = sub.add_parser("tnc", help="tnc.update model=th-d75 address=40:79:12:E4:95:9D")
+    p.add_argument("pairs", nargs="+")
+    p.add_argument("--non-disruptive", action="store_true")
+    p = sub.add_parser("port", help="port.connect, port.disconnect or port.release for the radio")
+    p.add_argument("action", choices=["connect", "disconnect", "release"])
+    p = sub.add_parser("watch", help="subscribe and print events (default topics: state frames)")
+    p.add_argument("topics", nargs="*", default=["state", "frames"])
+    p = sub.add_parser("unsubscribe", help="unsubscribe from TOPICS (default: all)")
+    p.add_argument("topics", nargs="*")
     args = ap.parse_args()
 
     port = args.port or find_port()
@@ -196,11 +245,76 @@ def main():
             if i + 1 < args.count:
                 time.sleep(args.every)
         return 0
-    if w == "pairing-result":
-        return show(d.request("debug.pairing_result", succeeded=args.result == "ok"))
+    if w == "status":
+        return show(d.request("status"))
+    if w == "models":
+        return show(d.request("tnc.models"))
+    if w == "scan":
+        return show(d.request("bluetooth.scan", timeout=args.seconds + 10, seconds=args.seconds))
+    if w == "pair":
+        return pair(d, args.address, args.yes)
+    if w == "unpair":
+        params = {"address": args.address} if args.address else {}
+        return show(d.request("bluetooth.unpair", timeout=10, **params))
+    if w == "tnc":
+        kv = key_values(args.pairs)
+        definition = {}
+        if "model" in kv:
+            definition["model"] = kv.pop("model")
+        if "address" in kv:
+            definition["spp"] = {"address": kv.pop("address")}
+        if kv:
+            sys.exit("tnc takes model= and address=")
+        return show(d.request("tnc.update", timeout=10, tnc="radio", definition=definition,
+                              non_disruptive=args.non_disruptive))
+    if w == "port":
+        return show(d.request("port." + args.action, timeout=10, bridge="ktbr0", port="radio"))
+    if w == "watch":
+        reply = d.request("subscribe", topics=args.topics)
+        if not reply.get("ok"):
+            return show(reply)
+        print("watching", ", ".join(reply["result"]["topics"]), "(Ctrl-C to stop)", flush=True)
+        try:
+            while True:
+                for line in d.lines(time.monotonic() + 1):
+                    if line.startswith("{"):
+                        try:
+                            print_event(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+                    elif args.verbose:
+                        print("  log:", line, file=sys.stderr)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            # USB serial can't tell the device the connection closed.
+            d.send("unsubscribe", topics=args.topics)
+            time.sleep(0.2)
+        return 0
+    if w == "unsubscribe":
+        params = {"topics": args.topics} if args.topics else {}
+        return show(d.request("unsubscribe", **params))
     if w == "demo":
         return demo(d, args.seconds, args.breathe_seconds)
     return 2
+
+
+def pair(d, address, yes):
+    """bluetooth.pair, answering the radio's number."""
+
+    rid_holder = {}
+
+    def on_event(e):
+        print_event(e)
+        if e.get("event") == "pairing" and e.get("step") == "confirm":
+            accept = yes or input(f"Does the radio show {e['passkey']}? [y/n] ").strip().lower() == "y"
+            if accept:
+                print("Press OK on the radio now.", flush=True)
+            d.send("bluetooth.pair_reply", request=rid_holder["id"], accept=accept)
+
+    params = {"address": address} if address else {}
+    rid_holder["id"] = d.send("bluetooth.pair", **params)
+    return show(d.wait(rid_holder["id"], "bluetooth.pair", 120, on_event))
 
 
 def demo(d, seconds, breathe_seconds):
@@ -251,11 +365,10 @@ def demo(d, seconds, breathe_seconds):
         step("state: error (red, fast)", "debug.set", error=True)
         d.request("debug.set", error=False)
         step("event: identify", "device.identify")
-        d.request("debug.set", radio="none")
     finally:
         d.request("device.settings.set", settings={"led_normal": original})
-    print("Pairing: double press, then single press to cancel (yellow flashes);")
-    print("double press again and run 'pairing-result ok' for the green flashes.")
+        d.request("debug.set", radio="real", phones=0)
+    print("Pairing: double press (blue), then a single press cancels it (yellow flashes).")
     return 0
 
 

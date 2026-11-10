@@ -56,6 +56,7 @@ void init()
 bool reset()
 {
     ESP_LOGW(TAG, "reset: clearing settings, the radio pairing and trusted clients");
+    radio::remove_all_bonds();
     bool ok = erase_namespace(settings::nvs_namespace);
     ok = erase_namespace(radio::nvs_namespace) && ok;
     ok = erase_namespace(auth::clients_namespace) && ok;
