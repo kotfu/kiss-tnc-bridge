@@ -262,22 +262,21 @@ Not errors, because retrying or the button fixes them:
 An event is a brief flash on top of the state. Their order doesn't matter.
 
 Most events end with a **dark gap**, the LED off for a moment, so the
-event is visibly separate from the state that follows it. Power-on and
-identify end dark for a slow blink's length instead, and identify starts
-dark too. The confirmations (the three quick flashes) start with a gap,
-to set them apart from the state before them: cancelling pairing, say,
+event is visibly separate from the state that follows it. Identify and
+the confirmations (the three quick flashes) start with the gap too, to
+set them apart from the state before them: cancelling pairing, say,
 goes from a blue blink to yellow flashes. Frames have no gap: they're a
 flick on top of the state, which carries on around them.
 
 | Event | Regular (`solid`, `dim`, `breathe`) | Dark |
 |---|---|---|
-| **Power on** (the firmware has started) | Red, yellow, cyan, green, one straight after another, then dark; each step as long as a slow blink | Same |
+| **Power on** (the firmware has started) | Red, yellow, cyan, green, one straight after another, each as long as a slow blink, then the dark gap | Same |
 | **Frame from the radio to a phone** | A short dip in brightness | Nothing, unless the LED is awake |
 | **Frame from a phone to the radio** (the radio will transmit) | A short white flick | Nothing, unless the LED is awake |
 | **Pairing succeeded** | The dark gap, green, three quick flashes, then the dark gap | Same |
 | **Pairing failed** (no radio found, it refused, or you cancelled) | The dark gap, yellow, three quick flashes, then the dark gap | Same |
 | **Client enrolled** (the window closes) | The dark gap, green, three quick flashes, then the dark gap | Same |
-| **Identify** (a trusted client asked, with `device.identify`) | Dark, then magenta, blue, white, three times, one straight after another, then dark; each step as long as a slow blink | Same |
+| **Identify** (a trusted client asked, with `device.identify`) | The dark gap, then magenta, blue, white, three times, one straight after another, each as long as a slow blink, then the dark gap | Same |
 | **Reset warning** (the button held at power-on) | Steady white for 3 seconds (provisional); let go to cancel | Same |
 | **Reset done** (just before the reboot) | The dark gap, white, three quick flashes, then the dark gap | Same |
 | **Long press reached** (the button held for 3 s) | Steady magenta until you let go | Same: the LED is awake |
@@ -313,7 +312,7 @@ Judged by eye on an ATOM Lite (9 November 2026). The values are in
 | Slow blink | 800 ms on, 800 ms off |
 | Quick flashes | 250 ms on, 250 ms off, three times |
 | Dark gap | 1 s |
-| Power-on and identify | 800 ms for each color and each dark step |
+| Power-on and identify | 800 ms for each color |
 | Breathe | 8 s for one breath, down to 15% |
 | Dim | The normal states at 25% of their light, which looks like half |
 | Frame dip | 100 ms at 15% |
@@ -324,7 +323,7 @@ Judged by eye on an ATOM Lite (9 November 2026). The values are in
 
 The gestures' durations haven't been changed from the first draft; they
 may still change with use. A whole confirmation takes about 3.5 s,
-power-on about 4 s, and identify about 8.8 s.
+power-on about 4.2 s, and identify about 9.2 s.
 
 Dark mode works on a Tail Bat. At 240 MHz with the LED dark, a charged
 Tail Bat kept the ATOM running above its 45 mA cut-off with one phone

@@ -15,6 +15,7 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An error blinks red three times, then pauses, so it doesn't look like
   pairing's fast blink.
 - Identify shows magenta, blue and white three times instead of twice.
+- Identify and power-on use the same 1 s dark gap as the other events.
 
 ## 1.0.0-rc.1 (2026-11-10)
 

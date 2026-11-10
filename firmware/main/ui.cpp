@@ -29,7 +29,7 @@ constexpr uint32_t tick_ms = 20;
 constexpr uint32_t fast_ms = 250;         // fast blink: on, then off
 constexpr uint32_t slow_ms = 800;         // slow blink: on, then off
 constexpr uint32_t flash_ms = 250;        // the three quick flashes
-constexpr uint32_t gap_ms = 4 * fast_ms;  // the dark gap after an event
+constexpr uint32_t gap_ms = 4 * fast_ms;  // the dark gap around an event
 constexpr uint32_t breathe_ms = 8000;     // one breath
 constexpr float breathe_low = 0.15f;      // the bottom of a breath
 // led_normal dim: the normal states at half their brightness to the eye.
@@ -79,7 +79,7 @@ Sequence sequence_for(Event e)
         for (Rgb c : {led::red, led::yellow, led::cyan, led::green}) {
             s.add(c, slow_ms);
         }
-        s.add(led::off, slow_ms);
+        s.add(led::off, gap_ms);
         break;
     case Event::pairing_succeeded:
     case Event::client_enrolled:
@@ -92,14 +92,14 @@ Sequence sequence_for(Event e)
         three_flashes(led::white);
         break;
     case Event::identify:
-        // Dark, the colors straight after one another, dark.
-        s.add(led::off, slow_ms);
+        // The dark gap, the colors straight after one another, the gap.
+        s.add(led::off, gap_ms);
         for (int i = 0; i < 3; i++) {
             for (Rgb c : {led::magenta, led::blue, led::white}) {
                 s.add(c, slow_ms);
             }
         }
-        s.add(led::off, slow_ms);
+        s.add(led::off, gap_ms);
         break;
     default:
         break;
