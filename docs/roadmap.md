@@ -300,6 +300,9 @@ Apache-2.0 or MIT.
 
 ### ATOM Lite firmware (decisions 2, 3, 4)
 
+In [`firmware/`](../firmware/README.md), built in four milestones during
+Phase C.
+
 B.B. Link parity:
 
 - [ ] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
@@ -316,7 +319,7 @@ B.B. Link parity:
 Family features:
 
 - [ ] Control API subset over BLE management and USB serial.
-- [ ] Device settings in NVS.
+- [x] Device settings in NVS (milestone 1).
 - [ ] Setup code and management window.
 - [ ] Two app partitions for over-the-air updates, with rollback. The
       partition table sits at 0xA000 with NVS at the end of flash, because a
@@ -506,14 +509,14 @@ Lite and set it up from a browser, with no app.
         a trusted client, USB, or unplugging.
   - [x] One enrollment per management window.
   - [x] The LED's states and events, in precedence order, with `solid`,
-        `breathe` and `dark` modes for the normal states, and the wake
+        `dim`, `breathe` and `dark` modes for the normal states, and the wake
         rule: while the LED is dark, a press only wakes it.
   - [x] Reset: hold the button at power-on, through a 3-second warning.
   - [x] Gestures: a single press wakes the LED in dark mode, cancels
         pairing or closes the management window; a double press pairs; a
         long press opens the window.
-  - [ ] The LED's timing and the gestures' durations, judged on a
-        device.
+  - [x] The LED's timing, judged on a device (milestone 1). The
+        gestures' durations are the first draft's, unchanged so far.
 
 ### Phase D: `ktbctl` device support
 

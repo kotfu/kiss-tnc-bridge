@@ -1,0 +1,66 @@
+# kiss-tnc-bridge firmware, ATOM Lite. Most of this is from the Phase A
+# spikes (spikes/atom-lite-memory and spikes/atom-lite-update).
+CONFIG_IDF_TARGET="esp32"
+
+# ATOM Lite: ESP32-PICO-D4, 4 MB flash, no PSRAM
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
+
+# The flash layout is fixed for every device from its first install:
+# updates over BLE replace only the app, never the bootloader or the
+# partition table. See partitions.csv.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_PARTITION_TABLE_OFFSET=0xA000
+
+# 240 MHz, which a Tail Bat needs (docs/roadmap.md, Hardware notes)
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The USB serial port carries the log and the control API at 115200 baud.
+# Protocol lines start with '{', and log lines never do.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+CONFIG_LOG_COLORS=n
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+
+# Bluetooth: Bluedroid, dual-mode controller. Not started until milestone 2,
+# but configured now so the image's size is representative.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BTDM_CTRL_MODE_BTDM=y
+CONFIG_BTDM_CTRL_BR_EDR_MAX_ACL_CONN=1
+CONFIG_BTDM_CTRL_BLE_MAX_CONN=2
+CONFIG_BT_ACL_CONNECTIONS=3
+CONFIG_BT_CLASSIC_ENABLED=y
+CONFIG_BT_SPP_ENABLED=y
+CONFIG_BT_A2DP_ENABLE=n
+CONFIG_BT_HFP_ENABLE=n
+CONFIG_BT_HID_ENABLED=n
+CONFIG_BT_L2CAP_ENABLED=n
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_GATTS_ENABLE=y
+CONFIG_BT_GATTC_ENABLE=n
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_BLE_42_FEATURES_SUPPORTED=y
+CONFIG_BT_BLE_50_FEATURES_SUPPORTED=n
+CONFIG_BT_GATT_MAX_SR_PROFILES=4
+
+# Rollback: a new image boots as pending_verify and marks itself valid once
+# it's running properly; if it resets first, the bootloader boots the
+# previous one.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Signed app images without hardware secure boot: no eFuses are burned
+# (roadmap decision 12). The ATOM Lite's chip is revision 1.1, so ECDSA
+# (the V1 scheme) is the only one available. The app checks an update's
+# signature before switching to it; the bootloader checks at every boot.
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y
+CONFIG_SECURE_SIGNED_ON_BOOT_NO_SECURE_BOOT=y
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=y
+CONFIG_SECURE_BOOT_BUILD_SIGNED_BINARIES=y
+# A development key, made once with tools/dev-key.sh and never committed.
+# Release builds point this at the release key instead.
+CONFIG_SECURE_BOOT_SIGNING_KEY="dev_signing_key.pem"

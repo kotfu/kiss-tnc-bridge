@@ -1,0 +1,3 @@
+dependencies:
+  # cJSON left ESP-IDF in v6; the control API is JSON.
+  espressif/cjson: "^1.7.19"

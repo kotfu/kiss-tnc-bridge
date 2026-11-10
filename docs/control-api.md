@@ -45,7 +45,12 @@ The same messages travel over three transports:
 - **Opening the port must not toggle DTR or RTS.** On both boards they
   drive the ESP32's reset and boot pins, so toggling them reboots the
   device or puts it in its download mode. Clients open the port with both
-  deasserted.
+  deasserted. The order matters: the reset circuit pulls the ESP32's
+  enable pin low while RTS is asserted without DTR, and some systems
+  assert both when a port opens, so a client drops RTS first, or both in
+  one call (Web Serial's `setSignals`). Dropping DTR first reboots the
+  ATOM Lite; pyserial does that unless told otherwise (checked
+  9 November 2026, see [firmware/README.md](../firmware/README.md)).
 - No authentication. Anyone with the device and a cable can reflash it
   anyway (roadmap decision 12), so USB is trusted. It's also how a lost
   setup code is recovered (`auth.code`).
@@ -759,7 +764,7 @@ saving tables:
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
-| `led_normal` | What the LED shows while bridging: `solid`, `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
+| `led_normal` | What the LED shows while bridging: `solid`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.

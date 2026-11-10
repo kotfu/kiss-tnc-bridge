@@ -279,7 +279,7 @@ things, in this order:
    device's advertisement (provisional: see
    [advertising](control-api.md#ble-management)); apps that connect see
    the whole name.
-3. **The LED.** `led_normal`: `solid`, `breathe` or `dark`, with a sentence
+3. **The LED.** `led_normal`: `solid`, `dim`, `breathe` or `dark`, with a sentence
    on each (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)).
 
 Then it says what's next: put the radio in pairing mode and double press

@@ -1,0 +1,4 @@
+# Layered on sdkconfig.defaults for development builds (see README.md):
+# adds the debug.* commands, which fake the radio and phones so the LED
+# can be judged before the radio code exists.
+CONFIG_KTB_DEBUG_COMMANDS=y
