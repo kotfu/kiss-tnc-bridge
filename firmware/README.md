@@ -144,7 +144,9 @@ builds with the release key, from the `FIRMWARE_SIGNING_KEY` repository
 secret, and publishes a GitHub release, never marked latest (that stays
 the daemon's), with the files the
 [web installer](../docs/web-installer.md#what-a-release-publishes) reads.
-A version with a hyphen (`1.0.0-rc.1`) is a prerelease.
+A version with a hyphen is a prerelease. Betas and release candidates
+are numbered with no dot: `1.1.0-beta1`, `1.1.0-rc1`. (`1.0.0-rc.1` came
+before this convention.)
 
 To release:
 
