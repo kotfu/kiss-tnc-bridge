@@ -11,19 +11,18 @@ C++ on ESP-IDF 6.1, with Bluedroid. The Phase A spikes in
 
 ## Status
 
-Phase C, milestone 2 of 4:
+Phase C, milestone 3 of 4:
 
 | Milestone | What | State |
 |---|---|---|
 | 1 | Flash layout, signed images and rollback; settings in NVS; the device key and setup code; the control API over USB serial; the LED and button | Done |
 | 2 | The radio: SPP to the TH-D74/D75, KISS init, reconnect, pairing with the button and over USB | Done |
-| 3 | The BLE KISS service and bridging | |
+| 3 | The BLE KISS service and bridging | Done |
 | 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | |
 
-Until milestone 3 the radio's frames go nowhere but `frames` events over
-USB: there's no BLE KISS service yet. BLE management (Noise enrollment) is
-Phase E and updates over BLE are Phase F; until then the management window
-opens and closes, but nothing can enroll.
+The ATOM bridges the radio to up to two phones. BLE management (Noise
+enrollment) is Phase E and updates over BLE are Phase F; until then the
+management window opens and closes, but nothing can enroll.
 
 ## Layout
 
@@ -41,6 +40,8 @@ opens and closes, but nothing can enroll.
 | `main/ui.*`, `main/led.*` | Gestures, LED states and events, dark mode |
 | `main/radio.*` | The radio: one task for the SPP link, KISS init, reconnecting, scanning and pairing |
 | `main/kiss.*` | KISS framing, and AX.25 decoding for frame events |
+| `main/phones.*` | The BLE KISS service, advertising, and phones' sessions |
+| `main/activity.*` | The control API's activity events |
 | `main/storage.*` | NVS, and what reset clears |
 | `main/firmware.*` | The running image, rollback and the self-test deadline |
 | `tools/ktbdev.py` | A development client for the control API over USB |
@@ -77,6 +78,7 @@ tools/ktbdev.py demo                 # every LED state and event in turn
 tools/ktbdev.py debug radio=connected phones=1
 tools/ktbdev.py status
 tools/ktbdev.py watch                # state and frame events, decoded
+tools/ktbdev.py watch activity       # bytes per port and session
 tools/ktbdev.py scan 10              # bluetooth.scan
 tools/ktbdev.py pair                 # bluetooth.pair, asking you to compare the number
 tools/ktbdev.py port disconnect      # and connect, release
@@ -105,3 +107,18 @@ Opening the port must not reboot the device. The ATOM's reset circuit
 pulls EN low while RTS is asserted without DTR, so a client has to drop
 RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
 opens with DTR asserted and drops it after.
+
+## Phones
+
+KISS apps find the ATOM by the BLE KISS service, which its advertisement
+carries; the scan response carries the management service's UUID and the
+first 11 bytes of `public_name`. Apps that connect read the whole name.
+The ATOM takes two BLE connections. A phone that subscribes to KISS
+notifications is a session; its writes are rebuilt into whole frames
+before they go to the radio, and frames from the radio go to every session
+whole. Phones aren't bonded: one that asks for encryption gets it without
+a bond.
+
+iOS remembers a device's name by its address, so an ATOM that ran other
+firmware may show its old name in apps until the phone's Bluetooth cache
+is cleared.

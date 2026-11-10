@@ -16,6 +16,7 @@
 #include "firmware.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "phones.h"
 #include "radio.h"
 #include "settings.h"
 #include "storage.h"
@@ -123,11 +124,16 @@ Reply settings_get(const cJSON *, const Pending &)
 
 Reply settings_set(const cJSON *req, const Pending &)
 {
+    std::string name_before = settings::public_name();
     std::string error;
     std::vector<std::string> reboot_required;
     if (!settings::apply(cJSON_GetObjectItemCaseSensitive(req, "settings"), error,
                          reboot_required)) {
         return Reply::error("bad_request", error);
+    }
+    if (settings::public_name() != name_before) {
+        radio::name_changed(); // the name the radio sees
+        phones::name_changed(); // the name phones see
     }
     cJSON *o = cJSON_CreateObject();
     cJSON_AddItemToObject(o, "settings", settings::to_json());
@@ -239,8 +245,8 @@ Reply debug_set(const cJSON *req, const Pending &)
         }
     }
     if (const cJSON *p = cJSON_GetObjectItemCaseSensitive(req, "phones")) {
-        if (!cJSON_IsNumber(p) || p->valuedouble < 0 || p->valuedouble > 8) {
-            return Reply::error("bad_request", "phones must be 0 to 8");
+        if (!cJSON_IsNumber(p) || p->valuedouble < -1 || p->valuedouble > 8) {
+            return Reply::error("bad_request", "phones must be 0 to 8, or -1 for the real count");
         }
         radio::debug_set_phones(static_cast<int>(p->valuedouble));
     }

@@ -5,7 +5,9 @@
 #include "control.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "activity.h"
 #include "firmware.h"
+#include "phones.h"
 #include "radio.h"
 #include "settings.h"
 #include "storage.h"
@@ -36,6 +38,8 @@ extern "C" void app_main()
     bool have_key = auth::load();
     ui::start();
     radio::start();
+    phones::start();
+    activity::start();
     if (!have_key) {
         // Without its key the device can't be managed over BLE; USB still
         // works, and a clean install makes a new key.
@@ -45,9 +49,12 @@ extern "C" void app_main()
     console::serve(control::handle_line);
 
     // The self-test: settings loaded, the key in hand, Bluetooth up, the UI
-    // and the control API running. Milestone 3 adds BLE advertising. It
+    // and the control API running, and phones can find the device. It
     // doesn't wait for the radio, which may be off.
-    if (have_key) {
+    if (!phones::wait_advertising(10000)) {
+        ESP_LOGE(TAG, "not advertising: phones can't find the device");
+        ui::set_error(true);
+    } else if (have_key) {
         firmware::self_test_passed();
     }
     ESP_LOGI(TAG, "ready");

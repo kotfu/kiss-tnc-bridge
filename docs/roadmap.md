@@ -309,8 +309,9 @@ B.B. Link parity:
       automatic reconnect (milestone 2).
 - [x] Put the radio's TNC into KISS mode, using the TNC model
       (milestone 2).
-- [ ] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
-      service, the same one the daemon's `ble-server` ports use.
+- [x] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+      service, the same one the daemon's `ble-server` ports use
+      (milestone 3).
 - [x] Scan for and pair a radio: with a double press, or over USB
       (milestone 2).
 - [x] Reset: clear all settings, the radio pairing and trusted clients

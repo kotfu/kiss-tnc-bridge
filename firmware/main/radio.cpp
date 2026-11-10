@@ -20,7 +20,10 @@
 #include "freertos/semphr.h"
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
+#include "activity.h"
+#include "freertos/message_buffer.h"
 #include "kiss.h"
+#include "phones.h"
 #include "nvs.h"
 #include "settings.h"
 #include "ui.h"
@@ -223,7 +226,7 @@ std::string port_detail; // under state_lock
 std::atomic<bool> pairing_now{false};
 std::atomic<bool> busy_now{false}; // a scan or a pairing is running
 std::atomic<Hold> hold_state{Hold::none};
-std::atomic<int> phone_count{0};
+std::atomic<int> debug_phones{-1}; // debug.set phones=, until -1
 std::atomic<bool> override_on{false};
 std::atomic<Link> override_link{Link::none};
 
@@ -723,6 +726,9 @@ kiss::Splitter splitter;
 void frame_from_radio(const uint8_t *frame, size_t len)
 {
     counters.frames_down++;
+    if (activity::wanted()) {
+        activity::add("ktbr0/radio", activity::Dir::rx, len);
+    }
     if (control::subscribed(control::topic_frames)) {
         cJSON *e = cJSON_CreateObject();
         cJSON_AddStringToObject(e, "event", "frame");
@@ -734,8 +740,63 @@ void frame_from_radio(const uint8_t *frame, size_t len)
         }
         control::publish(control::topic_frames, e);
     }
-    if (phone_count > 0) {
+    if (phones::send_frame(frame, len) > 0) {
         ui::post(ui::Event::frame_to_phone);
+    }
+}
+
+// Frames from phones on their way to the radio: each message is the
+// session id's length (1 byte), the session id, then the frame (stuffed,
+// without FENDs).
+MessageBufferHandle_t to_radio;
+
+void frame_to_radio_event(const std::string &session, const uint8_t *frame, size_t len)
+{
+    cJSON *e = cJSON_CreateObject();
+    cJSON_AddStringToObject(e, "event", "frame");
+    cJSON_AddStringToObject(e, "object", "ktbr0/radio");
+    cJSON_AddStringToObject(e, "dir", "tx");
+    cJSON_AddStringToObject(e, "session", session.c_str());
+    cJSON_AddStringToObject(e, "kiss", kiss::hex(frame, len).c_str());
+    if (cJSON *d = kiss::decode(frame, len)) {
+        cJSON_AddItemToObject(e, "decoded", d);
+    }
+    control::publish(control::topic_frames, e);
+}
+
+// Writes phones' frames to the radio, whole. A frame that arrives while
+// the radio isn't bridging is dropped, as the daemon does.
+void writer_task(void *)
+{
+    static uint8_t msg[1 + 64 + kiss::Splitter::max_frame];
+    static uint8_t wire[kiss::Splitter::max_frame + 2];
+    for (;;) {
+        size_t n = xMessageBufferReceive(to_radio, msg, sizeof(msg), portMAX_DELAY);
+        if (n < 1 || n < 1u + msg[0]) {
+            continue;
+        }
+        std::string session(reinterpret_cast<char *>(msg + 1), msg[0]);
+        const uint8_t *frame = msg + 1 + msg[0];
+        size_t len = n - 1 - msg[0];
+        if (port_state != PortState::connected) {
+            counters.dropped++;
+            continue;
+        }
+        wire[0] = kiss::FEND;
+        memcpy(wire + 1, frame, len);
+        wire[len + 1] = kiss::FEND;
+        if (!spp_write_all(wire, len + 2)) {
+            counters.dropped++;
+            continue;
+        }
+        counters.frames_up++;
+        if (activity::wanted()) {
+            activity::add("ktbr0/radio", activity::Dir::tx, len);
+        }
+        if (control::subscribed(control::topic_frames)) {
+            frame_to_radio_event(session, frame, len);
+        }
+        ui::post(ui::Event::frame_to_radio);
     }
 }
 
@@ -1195,7 +1256,7 @@ void do_update(const Request &req)
     }
     bool changed = next.present != r.present || next.addr != r.addr || next.model != r.model;
     bool link_up = port_state == PortState::connected;
-    bool disruptive = changed && link_up && phone_count > 0;
+    bool disruptive = changed && link_up && phones() > 0;
 
     cJSON *res = cJSON_CreateObject();
     cJSON_AddStringToObject(res, "id", "radio");
@@ -1319,6 +1380,7 @@ void start()
     from_radio = xStreamBufferCreate(4096, 1);
     write_results = xQueueCreate(1, sizeof(WriteResult));
     write_mutex = xSemaphoreCreateMutex();
+    to_radio = xMessageBufferCreate(4096);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
@@ -1349,6 +1411,7 @@ void start()
     ESP_LOGI(TAG, "%s", r.present ? ("radio " + r.name + " " + r.addr.str() + ", model " + r.model).c_str()
                                   : "no radio paired");
     xTaskCreate(radio_task, "radio", 6144, nullptr, 5, nullptr);
+    xTaskCreate(writer_task, "radio_tx", 4096, nullptr, 5, nullptr);
 }
 
 Link link()
@@ -1364,7 +1427,27 @@ Link link()
 }
 
 bool pairing() { return pairing_now; }
-int phones() { return phone_count; }
+int phones()
+{
+    int d = debug_phones;
+    return d >= 0 ? d : phones::sessions();
+}
+
+void send_frame(const uint8_t *frame, size_t len, const std::string &session)
+{
+    uint8_t msg[1 + 64 + kiss::Splitter::max_frame];
+    size_t slen = std::min<size_t>(session.size(), 64);
+    if (len > kiss::Splitter::max_frame) {
+        counters.dropped++;
+        return;
+    }
+    msg[0] = static_cast<uint8_t>(slen);
+    memcpy(msg + 1, session.data(), slen);
+    memcpy(msg + 1 + slen, frame, len);
+    if (xMessageBufferSend(to_radio, msg, 1 + slen + len, 0) == 0) {
+        counters.dropped++; // the radio is slower than the phones
+    }
+}
 
 void start_pairing()
 {
@@ -1553,14 +1636,7 @@ cJSON *status_json()
     cJSON_AddArrayToObject(rp, "sessions");
     cJSON_AddItemToArray(ports, rp);
 
-    cJSON *ph = cJSON_CreateObject();
-    cJSON_AddStringToObject(ph, "id", "phones");
-    cJSON_AddStringToObject(ph, "type", "ble-server");
-    cJSON_AddStringToObject(ph, "role", "app");
-    cJSON_AddStringToObject(ph, "state", "stopped");
-    cJSON_AddStringToObject(ph, "detail", "the BLE KISS service comes in milestone 3");
-    cJSON_AddArrayToObject(ph, "sessions");
-    cJSON_AddItemToArray(ports, ph);
+    cJSON_AddItemToArray(ports, phones::port_json());
 
     cJSON *c = cJSON_AddObjectToObject(b, "counters");
     cJSON_AddNumberToObject(c, "frames_up", counters.frames_up);
@@ -1606,6 +1682,11 @@ cJSON *models_json()
     return list;
 }
 
+void name_changed()
+{
+    esp_bt_gap_set_device_name(settings::public_name().c_str());
+}
+
 void remove_all_bonds()
 {
     if (esp_bluedroid_get_status() != ESP_BLUEDROID_STATUS_ENABLED) {
@@ -1628,7 +1709,7 @@ void debug_override_link(bool on, Link l)
     override_link = l;
     override_on = on;
 }
-void debug_set_phones(int n) { phone_count = n; }
+void debug_set_phones(int n) { debug_phones = n; }
 #endif
 
 } // namespace ktb::radio

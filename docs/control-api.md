@@ -99,9 +99,14 @@ service UUID in their advertising data, so KISS apps find them as before,
 and the management service UUID in their scan response, with as much of the
 name as fits. The full name is the GAP Device Name. Clients find
 manageable devices by the management service UUID. A 31-byte advertisement
-can't hold two 128-bit UUIDs and a long name, so this layout needs testing
-with KISS apps in Phase C. `ktb-gateway` advertises the management service
-in its own advertisement.
+can't hold two 128-bit UUIDs and a long name: the scan response has room
+for 11 bytes of it, as a shortened name when it's longer. The ATOM Lite
+firmware advertises this way from Phase C, before it serves the
+management service. An iOS KISS app found it and bridged through it (9
+November 2026); iOS showed the advertised name once its cache of the
+device's old name was cleared. More KISS apps are still to try.
+`ktb-gateway` advertises the management service in its own
+advertisement.
 
 ## Framing
 
@@ -707,11 +712,11 @@ as on the daemon. A client can tell a device from the daemon by
 | Commands | On a device |
 |---|---|
 | `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock |
-| `subscribe`, `unsubscribe` | The same, for the `state` and `frames` topics; `activity` comes with the BLE KISS service. Frame events have no `at` |
+| `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
 | `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
 | `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the client as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
-| `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same |
+| `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same. A session is a phone subscribed to the BLE KISS service, `ktbr0/phones/<its address>`; a kicked phone may reconnect at once, as on the daemon |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |
 | `reload`, `config.*`, `bridge.*`, `port.add`, `port.update`, `port.remove`, `tnc.create`, `tnc.delete`, `adapter.*`, `serial.list` | `not_supported`: a device's bridge can't be rebuilt |

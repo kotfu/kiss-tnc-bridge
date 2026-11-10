@@ -5,6 +5,7 @@
 #include <string>
 
 #include "control_internal.h"
+#include "phones.h"
 #include "radio.h"
 
 namespace ktb::control {
@@ -48,7 +49,7 @@ bool parse_topics(const cJSON *req, bool all_if_missing, uint32_t &out, Reply &e
 {
     const cJSON *topics = cJSON_GetObjectItemCaseSensitive(req, "topics");
     if (!topics && all_if_missing) {
-        out = topic_state | topic_frames;
+        out = topic_state | topic_frames | topic_activity;
         return true;
     }
     if (!cJSON_IsArray(topics)) {
@@ -56,7 +57,7 @@ bool parse_topics(const cJSON *req, bool all_if_missing, uint32_t &out, Reply &e
         return false;
     }
     if (all_if_missing && cJSON_GetArraySize(topics) == 0) {
-        out = topic_state | topic_frames;
+        out = topic_state | topic_frames | topic_activity;
         return true;
     }
     out = 0;
@@ -68,11 +69,11 @@ bool parse_topics(const cJSON *req, bool all_if_missing, uint32_t &out, Reply &e
             out |= topic_state;
         } else if (name && strcmp(name, "frames") == 0) {
             out |= topic_frames;
+        } else if (name && strcmp(name, "activity") == 0) {
+            out |= topic_activity;
         } else {
-            err = Reply::error("bad_request",
-                               std::string("unknown topic ") + (name ? name : "?") +
-                                   "; this device has state and frames (activity comes with the BLE "
-                                   "KISS service)");
+            err = Reply::error("bad_request", std::string("unknown topic ") + (name ? name : "?") +
+                                                  "; the topics are state, activity and frames");
             return false;
         }
     }
@@ -84,6 +85,7 @@ cJSON *topics_json(uint32_t now)
     cJSON *o = cJSON_CreateObject();
     cJSON *list = cJSON_AddArrayToObject(o, "topics");
     if (now & topic_state) cJSON_AddItemToArray(list, cJSON_CreateString("state"));
+    if (now & topic_activity) cJSON_AddItemToArray(list, cJSON_CreateString("activity"));
     if (now & topic_frames) cJSON_AddItemToArray(list, cJSON_CreateString("frames"));
     return o;
 }
@@ -245,6 +247,16 @@ Reply port_hold(const cJSON *req, const Pending &p, radio::Hold h)
     return Reply::later();
 }
 
+Reply session_kick(const cJSON *req, const Pending &p)
+{
+    const char *session = str(req, "session");
+    if (!session) {
+        return Reply::error("bad_request", "session.kick needs session");
+    }
+    phones::kick(p, session);
+    return Reply::later();
+}
+
 Reply port_connect(const cJSON *req, const Pending &p) { return port_hold(req, p, radio::Hold::up); }
 Reply port_disconnect(const cJSON *req, const Pending &p) { return port_hold(req, p, radio::Hold::down); }
 Reply port_release(const cJSON *req, const Pending &p) { return port_hold(req, p, radio::Hold::none); }
@@ -265,6 +277,7 @@ const Command radio_commands[] = {
     {"port.connect", port_connect},
     {"port.disconnect", port_disconnect},
     {"port.release", port_release},
+    {"session.kick", session_kick},
 };
 const size_t radio_command_count = sizeof(radio_commands) / sizeof(radio_commands[0]);
 

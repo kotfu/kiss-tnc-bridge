@@ -30,8 +30,12 @@ void start();
 Link link();
 bool pairing();
 
-// BLE KISS clients connected. None until milestone 3.
+// Phones with a KISS session (or what debug.set says).
 int phones();
+
+// A frame from a phone (stuffed, without FENDs) for the radio. Safe from
+// the Bluetooth task: it only queues.
+void send_frame(const uint8_t *frame, size_t len, const std::string &session);
 
 // Pairing searches for 60 seconds and keeps the old radio until a new one
 // pairs (docs/atom-lite-ui.md, Pairing).
@@ -56,6 +60,9 @@ void update(const control::Pending &p, const std::string &model, const std::stri
 enum class Hold : uint8_t { none, up, down };
 void hold(const control::Pending &p, Hold h);
 
+// public_name changed: the name the radio sees when pairing.
+void name_changed();
+
 // For status: the adapters, tncs and bridges arrays. Safe from any task.
 cJSON *status_json();
 // For tnc.models.
@@ -66,7 +73,8 @@ cJSON *models_json();
 void remove_all_bonds();
 
 #if CONFIG_KTB_DEBUG_COMMANDS
-// debug.set: what the LED shows of the radio, and the phone count.
+// debug.set: what the LED shows of the radio, and the phone count (-1
+// goes back to the real one).
 void debug_override_link(bool on, Link l);
 void debug_set_phones(int n);
 #endif

@@ -367,7 +367,7 @@ def demo(d, seconds, breathe_seconds):
         step("event: identify", "device.identify")
     finally:
         d.request("device.settings.set", settings={"led_normal": original})
-        d.request("debug.set", radio="real", phones=0)
+        d.request("debug.set", radio="real", phones=-1)
     print("Pairing: double press (blue), then a single press cancels it (yellow flashes).")
     return 0
 

@@ -27,6 +27,7 @@ public:
 enum Topic : uint32_t {
     topic_state = 1 << 0,
     topic_frames = 1 << 1,
+    topic_activity = 1 << 2,
 };
 
 // A request to be answered later.
