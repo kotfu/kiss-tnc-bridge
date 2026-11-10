@@ -353,10 +353,14 @@ void Ui::render(int64_t now, Shown state, bool dark)
     uint32_t t = static_cast<uint32_t>(now - shown_since);
     bool fast_on = t % (2 * fast_ms) < fast_ms;
     bool slow_on = t % (2 * slow_ms) < slow_ms;
+    // Three fast blinks, then one more blink's worth of dark: 8 halves of
+    // a fast blink, so an error doesn't look like pairing.
+    uint32_t half = t / fast_ms % 8;
+    bool error_on = half < 6 && half % 2 == 0;
     Rgb color = led::off;
     float level = 1.0f;
     switch (state) {
-    case Shown::error: color = fast_on ? led::red : led::off; break;
+    case Shown::error: color = error_on ? led::red : led::off; break;
     case Shown::updating: color = fast_on ? led::white : led::off; break;
     case Shown::window: color = slow_on ? led::magenta : led::off; break;
     case Shown::pairing: color = fast_on ? led::blue : led::off; break;

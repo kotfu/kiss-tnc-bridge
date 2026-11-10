@@ -203,7 +203,7 @@ while the device goes on bridging.
 
 | State | What it means | Solid | Dim | Breathe | Dark |
 |---|---|---|---|---|---|
-| **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management client to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no client | Red, fast blink | Same | Same | Same |
+| **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management client to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no client | Red, three fast blinks, then a pause | Same | Same | Same |
 | **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
 | **Window open** | The management window is open for one enrollment | Magenta, slow blink | Same | Same | Same |
 | **Pairing** | Scanning for a Kenwood in pairing mode | Blue, fast blink | Same | Same | Same |
@@ -219,8 +219,8 @@ into green.
 **Color blindness.** Red-green color blindness is common, and hams are
 mostly men, among whom it's most common. Each state that needs attention
 differs from the others by its pattern as well as its color, so it reads
-without color: the error's fast blink against the normal states' steady
-light, and the yellow states' blinks, one of them with blue, which red-green
+without color: the error's three blinks and a pause against pairing's
+steady fast blink and the normal states' steady light, and the yellow states' blinks, one of them with blue, which red-green
 color blindness doesn't affect. Cyan and green, the two normal states,
 differ only in color; telling phones from no phones is the one thing a
 color-blind user may lose, and it's not worth a pattern of its own.
@@ -309,6 +309,7 @@ Judged by eye on an ATOM Lite (9 November 2026). The values are in
 | What | Time |
 |---|---|
 | Fast blink | 250 ms on, 250 ms off |
+| Error blink | Three fast blinks, then 500 ms more dark: red on 250 ms, off 250 ms, three times, then 500 ms off. 2 s in all |
 | Slow blink | 800 ms on, 800 ms off |
 | Quick flashes | 250 ms on, 250 ms off, three times |
 | Dark gap | 1 s |
