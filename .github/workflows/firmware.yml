@@ -1,0 +1,136 @@
+name: Firmware
+
+# Builds the device firmware on changes, and releases it on firmware-v* tags
+# (docs/web-installer.md, What a release publishes). Tag pushes ignore the
+# path filters.
+on:
+  pull_request:
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'firmware/**'
+      - '.github/workflows/firmware.yml'
+    tags:
+      - 'firmware-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.board }}
+    runs-on: ubuntu-latest
+    container: espressif/idf:v6.1
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [atom-lite]
+    defaults:
+      run:
+        shell: bash
+        working-directory: firmware
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Version
+        id: version
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/firmware-v* ]]; then
+            VERSION=${GITHUB_REF_NAME#firmware-v}
+            if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::Tag ${GITHUB_REF_NAME} isn't firmware-v<semver>"
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            VERSION=$(cat version.txt)
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Firmware version ${VERSION}"
+
+      - name: Release signing key
+        if: steps.version.outputs.release == 'true'
+        env:
+          FIRMWARE_SIGNING_KEY: ${{ secrets.FIRMWARE_SIGNING_KEY }}
+        run: |
+          if [ -z "$FIRMWARE_SIGNING_KEY" ]; then
+            echo "::error::The FIRMWARE_SIGNING_KEY secret isn't set"
+            exit 1
+          fi
+          umask 077
+          printf '%s\n' "$FIRMWARE_SIGNING_KEY" > release_signing_key.pem
+
+      - name: Throwaway signing key
+        if: steps.version.outputs.release != 'true'
+        run: |
+          . "$IDF_PATH/export.sh" > /dev/null
+          espsecure generate-signing-key --version 1 --scheme ecdsa256 release_signing_key.pem
+
+      - name: Build
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          . "$IDF_PATH/export.sh" > /dev/null
+          idf.py -B build-release -DSDKCONFIG=build-release/sdkconfig \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+            -DPROJECT_VER="${{ steps.version.outputs.version }}" build
+          espsecure verify-signature --version 1 --keyfile release_signing_key.pem \
+            build-release/ktb-firmware.bin
+          rm -f release_signing_key.pem
+
+      - name: Package
+        run: |
+          python3 tools/package.py build-release ${{ matrix.board }} \
+            "${{ steps.version.outputs.version }}" dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.board }}
+          path: firmware/dist/*
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/firmware-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Release notes
+        id: notes
+        run: |
+          VERSION=${GITHUB_REF_NAME#firmware-v}
+          awk "/^## ${VERSION} /{found=1; next} /^## /{if(found) exit} found{print}" \
+            firmware/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "::error::No '## ${VERSION} ' section in firmware/CHANGELOG.md"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: firmware-*
+          path: dist
+          merge-multiple: true
+
+      # Never "latest": GitHub's latest release stays the daemon's.
+      - uses: softprops/action-gh-release@v3
+        with:
+          name: Firmware ${{ steps.notes.outputs.version }}
+          body_path: ${{ runner.temp }}/notes.md
+          prerelease: ${{ steps.notes.outputs.prerelease }}
+          make_latest: false
+          files: dist/*

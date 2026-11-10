@@ -102,6 +102,12 @@ that share one protocol:
     capability in `device.info`, and clients check for it, so neither side
     needs a minimum version of the other to keep working. See
     [Compatibility](control-api.md#compatibility).
+16. **Release images are signed in CI with a key kept as a GitHub Actions
+    secret**, `FIRMWARE_SIGNING_KEY`, with an offline copy. The workflow
+    writes it to a file only for the build and deletes it after; pull
+    requests build with a throwaway key. Losing the key means devices can
+    only be updated over USB, because the bootloader checks every image
+    against the key it was built with.
 
 ## Non-goals
 
@@ -205,6 +211,7 @@ as they're found.
 | BLE advertising interval | Advertising airtime | Phones take longer to find and reconnect to the device | 100–150 ms |
 | BLE connection interval and peripheral latency | Radio time on each phone link | Latency to and from the phone. The phone chooses, but the device can ask for different values | The phone's choice |
 | Bluetooth transmit power | Transmit current | Range | Default |
+| Idle cores waiting for an interrupt | CPU power: a core with nothing to run stops in `WAITI` until the next interrupt | On a power source with a low-current cut-off, too little draw cuts the power. The development build's `debug.set spin_cores=1\|2` spins idle cores through the idle hook instead, and `modem_sleep=false` keeps the Bluetooth controller awake, to keep the draw up. Neither was needed on a charged Tail Bat; kept for testing other power banks | Waiting |
 | Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
 | Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
 | LED or screen brightness | LED or backlight current | Visibility | — |
@@ -300,23 +307,30 @@ Apache-2.0 or MIT.
 
 ### ATOM Lite firmware (decisions 2, 3, 4)
 
+In [`firmware/`](../firmware/README.md), built in four milestones during
+Phase C.
+
 B.B. Link parity:
 
-- [ ] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
-      automatic reconnect.
-- [ ] Put the radio's TNC into KISS mode, using the TNC model.
-- [ ] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
-      service, the same one the daemon's `ble-server` ports use.
-- [ ] Scan for and pair a radio.
-- [ ] Reset: clear all settings, the radio pairing and trusted clients.
-- [ ] RGB LED status and button controls.
+- [x] Connect to a TH-D74 or TH-D75 over Bluetooth Classic SPP, with
+      automatic reconnect (milestone 2).
+- [x] Put the radio's TNC into KISS mode, using the TNC model
+      (milestone 2).
+- [x] Serve the [BLE KISS API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
+      service, the same one the daemon's `ble-server` ports use
+      (milestone 3).
+- [x] Scan for and pair a radio: with a double press, or over USB
+      (milestone 2).
+- [x] Reset: clear all settings, the radio pairing and trusted clients
+      (milestone 1).
+- [x] RGB LED status and button controls (milestone 1).
 - [ ] RadioMail frequency control, if it's kept (see
       [Open questions](#open-questions)).
 
 Family features:
 
 - [ ] Control API subset over BLE management and USB serial.
-- [ ] Device settings in NVS.
+- [x] Device settings in NVS (milestone 1).
 - [ ] Setup code and management window.
 - [ ] Two app partitions for over-the-air updates, with rollback. The
       partition table sits at 0xA000 with NVS at the end of flash, because a
@@ -357,7 +371,9 @@ release assets, because GitHub doesn't send CORS headers for them (checked
 - [ ] Write the page's functional spec. Drafted:
       [web-installer.md](web-installer.md).
 - [ ] CI builds each board's firmware on every release and publishes the
-      images and a manifest per board.
+      images and a manifest per board. Written:
+      [`firmware.yml`](../.github/workflows/firmware.yml); not yet run on a
+      tag.
 - [ ] One page with a choice of board: ATOM Lite or Core2.
 - [ ] After flashing, the same page connects to the device over Web Serial and
       runs first setup over the control API: show the setup code, name the
@@ -444,7 +460,19 @@ The Phase A update spike showed this works on the ATOM Lite:
   output off when the load stays under 45 mA for 32 seconds. At 80 MHz the
   ATOM Lite's idle draw sits right at that line, so the default for a Tail
   Bat has to be 240 MHz. Deep sleep can't be used on a Tail Bat: power is cut,
-  and the ATOM's button can't turn it back on.
+  and the ATOM's button can't turn it back on. On the Phase C firmware at
+  240 MHz with the LED dark and the radio connected, a charged Tail Bat
+  kept going with and without a phone connected over BLE, frames passing
+  and the LED waking on a press. An earlier run that cut the power within a
+  minute of a phone connecting was on a nearly flat Tail Bat: a weak cell
+  looks the same as the low-current cut-off, so test on a charged one.
+  Pressing the Tail Bat's button brings it back after a cut. The Tail Bat
+  passes USB data through, so the control API and flashing work with the
+  ATOM on it, but while it's plugged in the output never cuts: test the
+  cut-off with nothing plugged into the Tail Bat. Plugging USB into a
+  running Tail Bat switches it to charging without restarting the ATOM or
+  dropping the radio link, but unplugging it cuts the power for a moment
+  and the ATOM restarts.
 
 ### M5Stack Core2 v1.3
 
@@ -506,14 +534,14 @@ Lite and set it up from a browser, with no app.
         a trusted client, USB, or unplugging.
   - [x] One enrollment per management window.
   - [x] The LED's states and events, in precedence order, with `solid`,
-        `breathe` and `dark` modes for the normal states, and the wake
+        `dim`, `breathe` and `dark` modes for the normal states, and the wake
         rule: while the LED is dark, a press only wakes it.
   - [x] Reset: hold the button at power-on, through a 3-second warning.
   - [x] Gestures: a single press wakes the LED in dark mode, cancels
         pairing or closes the management window; a double press pairs; a
         long press opens the window.
-  - [ ] The LED's timing and the gestures' durations, judged on a
-        device.
+  - [x] The LED's timing, judged on a device (milestone 1). The
+        gestures' durations are the first draft's, unchanged so far.
 
 ### Phase D: `ktbctl` device support
 
@@ -588,8 +616,6 @@ USB. To work out:
    still open.
 4. **`ktbctl` or a new program** for device management. `ktbctl` is the
    recommendation.
-5. **Firmware signing keys:** where the private key lives, and how CI signs
-   releases without exposing it.
-6. **More boards later.** The LILYGO T-Display (original ESP32, 1.14" screen)
+5. **More boards later.** The LILYGO T-Display (original ESP32, 1.14" screen)
    fits the same architecture for people willing to add their own battery and
    case.

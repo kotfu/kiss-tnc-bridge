@@ -60,6 +60,14 @@ pub enum Command {
     /// Events on the given topics, on this connection, until it closes.
     #[serde(rename = "subscribe")]
     Subscribe { topics: Vec<Topic> },
+    /// Stops events on the given topics on this connection, or on every
+    /// topic if none are given. For connections that can't close, such as
+    /// a device's USB serial port.
+    #[serde(rename = "unsubscribe")]
+    Unsubscribe {
+        #[serde(default)]
+        topics: Vec<Topic>,
+    },
     /// Re-read the config from disk and apply it. With `non_disruptive`, a
     /// plan that would disrupt anyone is refused with
     /// `reload_would_disrupt` and nothing is applied.
@@ -320,6 +328,7 @@ impl Command {
     pub const NAMES: &'static [&'static str] = &[
         "status",
         "subscribe",
+        "unsubscribe",
         "reload",
         "config.check",
         "config.get",
@@ -1091,6 +1100,17 @@ mod tests {
                 topics: vec![Topic::State, Topic::Frames]
             }
         );
+        let r: Request =
+            serde_json::from_str(r#"{"v":1,"id":5,"cmd":"unsubscribe","topics":["frames"]}"#)
+                .unwrap();
+        assert_eq!(
+            r.command,
+            Command::Unsubscribe {
+                topics: vec![Topic::Frames]
+            }
+        );
+        let r: Request = serde_json::from_str(r#"{"v":1,"id":5,"cmd":"unsubscribe"}"#).unwrap();
+        assert_eq!(r.command, Command::Unsubscribe { topics: vec![] });
         let r: Request = serde_json::from_str(r#"{"v":1,"id":6,"cmd":"config.check"}"#).unwrap();
         assert_eq!(r.command, Command::ConfigCheck { dynamic: None });
         assert!(serde_json::from_str::<Request>(r#"{"v":1,"id":6,"cmd":"nope"}"#).is_err());

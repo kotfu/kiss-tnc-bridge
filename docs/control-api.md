@@ -45,7 +45,12 @@ The same messages travel over three transports:
 - **Opening the port must not toggle DTR or RTS.** On both boards they
   drive the ESP32's reset and boot pins, so toggling them reboots the
   device or puts it in its download mode. Clients open the port with both
-  deasserted.
+  deasserted. The order matters: the reset circuit pulls the ESP32's
+  enable pin low while RTS is asserted without DTR, and some systems
+  assert both when a port opens, so a client drops RTS first, or both in
+  one call (Web Serial's `setSignals`). Dropping DTR first reboots the
+  ATOM Lite; pyserial does that unless told otherwise (checked
+  9 November 2026, see [firmware/README.md](../firmware/README.md)).
 - No authentication. Anyone with the device and a cable can reflash it
   anyway (roadmap decision 12), so USB is trusted. It's also how a lost
   setup code is recovered (`auth.code`).
@@ -94,9 +99,14 @@ service UUID in their advertising data, so KISS apps find them as before,
 and the management service UUID in their scan response, with as much of the
 name as fits. The full name is the GAP Device Name. Clients find
 manageable devices by the management service UUID. A 31-byte advertisement
-can't hold two 128-bit UUIDs and a long name, so this layout needs testing
-with KISS apps in Phase C. `ktb-gateway` advertises the management service
-in its own advertisement.
+can't hold two 128-bit UUIDs and a long name: the scan response has room
+for 11 bytes of it, as a shortened name when it's longer. The ATOM Lite
+firmware advertises this way from Phase C, before it serves the
+management service. An iOS KISS app found it and bridged through it (9
+November 2026); iOS showed the advertised name once its cache of the
+device's old name was cleared. More KISS apps are still to try.
+`ktb-gateway` advertises the management service in its own
+advertisement.
 
 ## Framing
 
@@ -455,6 +465,13 @@ Everything at once. No parameters.
 events on those topics on this connection until it closes. Subscribing
 again adds topics. The result lists the topics now subscribed.
 
+`{"cmd": "unsubscribe", "topics": ["frames"]}` stops those topics, or every
+topic when `topics` is missing or empty, and lists the topics still
+subscribed. A socket's subscriptions end when it closes, but a device's
+USB serial port never tells the device it closed: there, a client
+unsubscribes when it's done, or the events go on until the device
+restarts.
+
 ### `reload`
 
 Re-read the config from disk and apply what changed. Parameters:
@@ -661,7 +678,7 @@ One scan or pairing runs at a time; another gets `busy`.
 
 | Topic | Event | Fields |
 |---|---|---|
-| `state` | `state` | `what` (`bridge`, `port`, `tnc`, `session`, `config`), `object` (`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`), `state` (`started`, `stopped`, `connected`, `backoff`, `opened`, `closed`, `reloaded`, `changed`, …) |
+| `state` | `state` | `what` (`bridge`, `port`, `tnc`, `session`, `config`, and on a device `device`), `object` (`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`), `state` (`started`, `stopped`, `connected`, `backoff`, `opened`, `closed`, `reloaded`, `changed`, …) |
 | `activity` | `activity` | `object` (a port or session), `dir` (`rx` toward the bridge, `tx` away from it), `bytes` since the last event. At most about 10 a second per object and direction |
 | `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, the session it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
@@ -694,11 +711,12 @@ as on the daemon. A client can tell a device from the daemon by
 
 | Commands | On a device |
 |---|---|
-| `status`, `subscribe` | The same, with one bridge, one TNC and the device's one adapter |
+| `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock |
+| `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
 | `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
-| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only. The TH-D75's `confirm` step goes to the client as on the daemon |
-| `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the client as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
+| `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same. A session is a phone subscribed to the BLE KISS service, `ktbr0/phones/<its address>`; a kicked phone may reconnect at once, as on the daemon |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |
 | `reload`, `config.*`, `bridge.*`, `port.add`, `port.update`, `port.remove`, `tnc.create`, `tnc.delete`, `adapter.*`, `serial.list` | `not_supported`: a device's bridge can't be rebuilt |
@@ -730,13 +748,35 @@ A device's `status`, trimmed:
  "capabilities": ["spp-client", "ble-server", "firmware-update"],
  "max_message": 4096,
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
- "bluetooth": {"address": "B8:7B:4D:18:F2:72"}}
+ "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
+ "uptime": 5423,
+ "last_reset": "power_on",
+ "errors": [{"code": "phones",
+             "message": "advertising didn't start: phones can't find the device. Unplug the device and plug it in"}]}
 ```
 
 Clients decide what to offer from `capabilities`, not from `board`, so a new
 board needs no app changes for the features it shares. The capability
 names are provisional; a Core2 adds `screen` and `battery`, and later
-`wifi`. `max_message` is the largest request the device accepts, in bytes.
+`wifi`. `firmware-update` arrives with updates over BLE (Phase F).
+`max_message` is the largest request the device accepts, in bytes.
+
+`uptime` is how long the device has been running since it last started,
+in whole seconds.
+
+`last_reset` is why the device last started: `power_on` (which includes a
+reset from the USB serial port's control lines), `restart` (a reboot the
+firmware asked for), `crash`, `watchdog`, `brownout` (the supply sagged: a
+weak battery or cable) or `other`.
+
+`errors` lists what the device can't fix by retrying, which its LED shows
+as an error; it's empty when all is well. Each has a `code` and a
+`message` saying what happened and what to do, for people. The codes are
+`storage`, `bluetooth`, `phones` and `device_key` (see
+[atom-lite-ui.md](atom-lite-ui.md#errors)); clients should show an
+unknown code's message as it is. A `state` event with `what` `device`
+says the list changed: `state` is `error` when there's at least one, `ok`
+when there are none.
 
 ### `device.settings.get` and `device.settings.set`
 
@@ -759,7 +799,7 @@ saving tables:
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
-| `led_normal` | What the LED shows while bridging: `solid`, `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
+| `led_normal` | What the LED shows while bridging: `solid`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.

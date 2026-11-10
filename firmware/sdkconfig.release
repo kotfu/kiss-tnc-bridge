@@ -1,0 +1,4 @@
+# Release builds: sdkconfig.defaults, then this. CI writes the release key
+# here from a repository secret; it's never committed. Pull requests build
+# with a throwaway key in the same place.
+CONFIG_SECURE_BOOT_SIGNING_KEY="release_signing_key.pem"

@@ -22,7 +22,7 @@
 //! state. `subscribe` is handled here: the connection streams events from
 //! the hub on the topics asked for until it closes.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -164,7 +164,8 @@ async fn connection(
 
     let mut reader = BufReader::new(rd);
     let mut buf = Vec::new();
-    let mut subscribed: HashSet<Topic> = HashSet::new();
+    // Each subscribed topic's forwarder, stopped by its own token.
+    let mut subscribed: HashMap<Topic, CancellationToken> = HashMap::new();
     loop {
         buf.clear();
         let mut limited = (&mut reader).take(MAX_LINE as u64 + 1);
@@ -194,12 +195,28 @@ async fn connection(
             Err(resp) => *resp,
             Ok(req) => match req.command {
                 Command::Subscribe { topics } => {
-                    for t in topics.iter().copied().filter(|t| subscribed.insert(*t)) {
-                        tokio::spawn(forward(hub.subscribe(t), out_tx.clone(), done.clone()));
+                    for t in topics {
+                        if let std::collections::hash_map::Entry::Vacant(slot) = subscribed.entry(t)
+                        {
+                            let token = done.child_token();
+                            tokio::spawn(forward(hub.subscribe(t), out_tx.clone(), token.clone()));
+                            slot.insert(token);
+                        }
                     }
-                    let mut all: Vec<Topic> = subscribed.iter().copied().collect();
-                    all.sort_by_key(|t| *t as u8);
-                    Response::ok(req.id, json!({ "topics": all }))
+                    Response::ok(req.id, json!({ "topics": topic_list(&subscribed) }))
+                }
+                Command::Unsubscribe { topics } => {
+                    let stop: Vec<Topic> = if topics.is_empty() {
+                        subscribed.keys().copied().collect()
+                    } else {
+                        topics
+                    };
+                    for t in stop {
+                        if let Some(token) = subscribed.remove(&t) {
+                            token.cancel();
+                        }
+                    }
+                    Response::ok(req.id, json!({ "topics": topic_list(&subscribed) }))
                 }
                 command => {
                     // Handed to the daemon in the order they arrive, then
@@ -242,6 +259,13 @@ async fn connection(
     }
     done.cancel();
     let _ = writer.await;
+}
+
+/// The topics subscribed, in a stable order.
+fn topic_list(subscribed: &HashMap<Topic, CancellationToken>) -> Vec<Topic> {
+    let mut all: Vec<Topic> = subscribed.keys().copied().collect();
+    all.sort_by_key(|t| *t as u8);
+    all
 }
 
 /// A request, or the error response for a line that isn't one.

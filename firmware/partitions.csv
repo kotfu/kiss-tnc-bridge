@@ -1,0 +1,10 @@
+# The layout the firmware needs on a 4 MB ATOM Lite: two app partitions of
+# 0x1E0000 (1.875 MB) for over-the-air updates. The table sits at 0xA000
+# (CONFIG_PARTITION_TABLE_OFFSET) because a bootloader that checks
+# signatures is about 31 KB, too big for the default 0x8000. NVS moves to
+# the 192 KB the app partitions leave free at the end of flash.
+# Name,   Type, SubType, Offset,   Size
+otadata,  data, ota,     0xb000,   0x2000
+ota_0,    app,  ota_0,   0x10000,  0x1E0000
+ota_1,    app,  ota_1,   0x1F0000, 0x1E0000
+nvs,      data, nvs,     0x3D0000, 0x10000

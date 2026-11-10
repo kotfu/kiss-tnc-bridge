@@ -1,14 +1,16 @@
 # ATOM Lite user interface
 
 The ATOM Lite has one button (GPIO39) and one RGB LED (an SK6812 on
-GPIO27). This is the design of what you can do with them, worked out at the
+GPIO27). The small button on its side is the ESP32's reset, wired to the
+chip's enable pin: it restarts the device, and the firmware can't see it.
+This is the design of what you can do with them, worked out at the
 start of Phase C (see the [roadmap](roadmap.md#phase-c-atom-lite-firmware-and-web-installer)).
 Everything else is done from a trusted client (the iOS app, `ktbctl`) over
 the [control API](control-api.md), or by reflashing.
 
 Status: the actions and their gestures, the management window rule, and
-the LED's states and events were decided on 9 November 2026. The LED's
-timing, and the gestures' durations, wait for a device.
+the LED's states and events were decided on 9 November 2026, and the
+LED's timing was judged on an ATOM Lite running the firmware the same day.
 
 ## What you can do on the device
 
@@ -22,6 +24,11 @@ Only what you'd need with no app, no trusted client and no computer:
 | **Open the management window** | Long press | Lets one new client enroll with the setup code (see [below](#the-management-window)) |
 | **Close the management window** | Single press, while the window is open | Closes it before its time runs out |
 | **Reset** | Hold the button at power-on | Clears all settings (see [below](#reset)). It doesn't touch the firmware |
+| **Restart** | The side button | Restarts the device, as unplugging it and plugging it back in would |
+
+The firmware can't tell the side button from plugging in: both are a
+power-on to it, and `device.info`'s `last_reset` says `power_on` for
+either.
 
 Reset happens only at power-on, which leaves the running device's
 gestures to pairing and the window. A single press never starts anything,
@@ -53,7 +60,9 @@ magenta and nothing happens. Holding past it changes nothing; the window
 opens when you let go.
 
 A single press while the window is open closes it, and the LED goes back
-to the state it was showing.
+to the state it was showing. Closing it shows no confirmation, and neither
+does the window running out: whether an enrollment worked is for the
+client that was enrolling to say.
 
 This is a different hold from reset's, which happens only at power-on.
 
@@ -71,7 +80,7 @@ the LED goes dark.
 | While | The button |
 |---|---|
 | **Updating** | Does nothing. Pairing or opening the window mid-update isn't worth the risk |
-| **Error** | Works as usual. Pairing a radio again or letting a client in may be how you fix it |
+| **Error** | Works as usual: whatever still works can still be used |
 | **Pairing** | Only a single press, which cancels pairing |
 | **The window is open** | Only a single press, which closes the window |
 | **The LED is dark** | Only a wake (see [the wake rule](#normal-and-dark-mode)) |
@@ -116,6 +125,11 @@ The firmware checks the button before it loads any settings or starts
 Bluetooth, so reset works even when a setting makes the device crash or
 misbehave. No setting, dark mode included, can get in its way.
 
+With the device already powered, the side button does the same: hold the
+button, press and let go of the side button, and carry on from step 3.
+That's easier than plugging in with a thumb on the button, on a Tail Bat
+especially.
+
 If you're still holding the button when it reboots, it goes through the
 warning again: let go during the warning, and nothing more happens. The
 firmware doesn't treat that second boot differently.
@@ -151,6 +165,7 @@ without phones. One setting decides what the LED shows then:
 | `led_normal` | When things are normal |
 |---|---|
 | `solid` (the default) | The state's color, steady |
+| `dim` | The state's color, steady, at half the brightness to the eye: the same as halving `led_brightness` for the normal states. Frame flicks are dimmed too |
 | `breathe` | The state's color in a long, slow pulse, in brightness or between neighboring colors |
 | `dark` | Off, until a press wakes it |
 
@@ -159,7 +174,7 @@ before it goes dark again: 30 (provisional). Names and defaults are
 provisional; they join `led_brightness` in
 [`device.settings`](control-api.md#devicesettingsget-and-devicesettingsset).
 
-Breathe and dark mode change only the normal states. Anything else shows
+Dim, breathe and dark mode change only the normal states. Anything else shows
 the same in every mode, which is why most rows in the tables below say
 "Same".
 
@@ -186,16 +201,16 @@ A state lasts until something changes. When more than one is true, the
 LED shows the highest row: the window can be open, or an update running,
 while the device goes on bridging.
 
-| State | What it means | Solid | Breathe | Dark |
-|---|---|---|---|---|
-| **Error** | Something the device can't fix by retrying. Connect a management client to see what; with none, reflash the firmware. One generic error for now: blink codes can come later if a cause turns up that you could fix with no client | Red, fast blink | Same | Same |
-| **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same |
-| **Window open** | The management window is open for one enrollment | Magenta, slow blink | Same | Same |
-| **Pairing** | Scanning for a Kenwood in pairing mode | Blue, fast blink | Same | Same |
-| **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same |
-| **Radio not connected** | A radio is paired, but the link is down: the radio is off or out of range, or the device has just started. It tries again every 15 s | Yellow, slow blink | Same | Same |
-| **Radio connected, no phones** | Normal: bridging is ready, but no KISS app is connected | Cyan, steady | Cyan, slow pulse | Off; a press shows it steady |
-| **Radio connected, phones connected** | Normal: bridging | Green, steady | Green, slow pulse | Off; a press shows it steady |
+| State | What it means | Solid | Dim | Breathe | Dark |
+|---|---|---|---|---|---|
+| **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management client to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no client | Red, fast blink | Same | Same | Same |
+| **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
+| **Window open** | The management window is open for one enrollment | Magenta, slow blink | Same | Same | Same |
+| **Pairing** | Scanning for a Kenwood in pairing mode | Blue, fast blink | Same | Same | Same |
+| **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same | Same |
+| **Radio not connected** | A radio is paired, but the link is down: the radio is off or out of range, or the device has just started. It tries again every 15 s | Yellow, slow blink | Same | Same | Same |
+| **Radio connected, no phones** | Normal: bridging is ready, but no KISS app is connected | Cyan, steady | Cyan, steady, dimmed | Cyan, slow pulse | Off; a press shows it steady |
+| **Radio connected, phones connected** | Normal: bridging | Green, steady | Green, steady, dimmed | Green, slow pulse | Off; a press shows it steady |
 
 "Phones" means BLE KISS clients. The device doesn't show when a
 management client is connected, and a management client doesn't turn cyan
@@ -210,26 +225,61 @@ color blindness doesn't affect. Cyan and green, the two normal states,
 differ only in color; telling phones from no phones is the one thing a
 color-blind user may lose, and it's not worth a pattern of its own.
 
+### Errors
+
+An error is something the device can't fix by retrying. `device.info`
+lists the errors with what to do (see
+[control-api.md](control-api.md#deviceinfo)), and the control API keeps
+working over USB whatever fails, so a client can always say what's wrong.
+A new firmware image that starts with an error fails its self-test and is
+rolled back.
+
+| Error | What happened | What still works | Clears |
+|---|---|---|---|
+| `storage` | NVS, where settings, the radio pairing and the device's key live, can't be used | The device runs on default settings and forgets everything when unplugged. Bluetooth may not start | Only by a clean install |
+| `bluetooth` | The Bluetooth controller, Bluedroid or SPP didn't start | USB only: nothing is bridged | On a power cycle, if it was a fluke; otherwise a reinstall |
+| `phones` | The BLE KISS service or advertising didn't start, or advertising didn't start within 10 s of power-on | The radio link, but phones can't find the device | By itself, once advertising starts; otherwise a power cycle |
+| `device_key` | The device's X25519 key couldn't be loaded or made | Bridging. Nothing can enroll over BLE (Phase E) | Only by a clean install, which makes a new key |
+
+Not errors, because retrying or the button fixes them:
+
+- **The radio is off, out of range, or doesn't take KISS mode:** radio
+  not connected. The device retries every 15 s.
+- **The radio has forgotten the device** (its pairing was deleted on the
+  radio): the radio refuses the device's key, Bluedroid removes the bond,
+  and the LED shows no radio. A TH-D75 says the pairing was refused.
+  Pairing again fixes it. The device stops retrying, so the radio isn't
+  asked to pair every 15 s. (Tested on a TH-D75: the radio won't delete a
+  connected device, so `port.disconnect` held the link down first.)
+- **A crash, a watchdog reset or a brownout** restarts the device, which
+  carries on. `device.info`'s `last_reset` says why it last started; a
+  brownout points at a weak battery or cable.
+- **A firmware update rolled back:** the device runs the version it had,
+  and `device.info` says which version was rolled back.
+
 ### Events
 
 An event is a brief flash on top of the state. Their order doesn't matter.
 
-Most events end with a **dark gap**: the LED off for two counts of the
-fast blink, so the event is visibly separate from the state that follows
-it. Frames have no gap: they're a flick on top of the state, which carries
-on around them.
+Most events end with a **dark gap**, the LED off for a moment, so the
+event is visibly separate from the state that follows it. Power-on and
+identify end dark for a slow blink's length instead, and identify starts
+dark too. The confirmations (the three quick flashes) start with a gap,
+to set them apart from the state before them: cancelling pairing, say,
+goes from a blue blink to yellow flashes. Frames have no gap: they're a
+flick on top of the state, which carries on around them.
 
-| Event | Regular (`solid`, `breathe`) | Dark |
+| Event | Regular (`solid`, `dim`, `breathe`) | Dark |
 |---|---|---|
-| **Power on** (the firmware has started) | Red, yellow, cyan, green, one each at the fast blink pace, then the dark gap | Same |
+| **Power on** (the firmware has started) | Red, yellow, cyan, green, one straight after another, then dark; each step as long as a slow blink | Same |
 | **Frame from the radio to a phone** | A short dip in brightness | Nothing, unless the LED is awake |
 | **Frame from a phone to the radio** (the radio will transmit) | A short white flick | Nothing, unless the LED is awake |
-| **Pairing succeeded** | Green, three quick flashes, then the dark gap | Same |
-| **Pairing failed** (no radio found, it refused, or you cancelled) | Yellow, three quick flashes, then the dark gap | Same |
-| **Client enrolled** (the window closes) | Green, three quick flashes, then the dark gap | Same |
-| **Identify** (a trusted client asked, with `device.identify`) | Magenta, blue, white, magenta, blue, white at the fast blink pace, then the dark gap | Same |
+| **Pairing succeeded** | The dark gap, green, three quick flashes, then the dark gap | Same |
+| **Pairing failed** (no radio found, it refused, or you cancelled) | The dark gap, yellow, three quick flashes, then the dark gap | Same |
+| **Client enrolled** (the window closes) | The dark gap, green, three quick flashes, then the dark gap | Same |
+| **Identify** (a trusted client asked, with `device.identify`) | Dark, then magenta, blue, white, magenta, blue, white, one straight after another, then dark; each step as long as a slow blink | Same |
 | **Reset warning** (the button held at power-on) | Steady white for 3 seconds (provisional); let go to cancel | Same |
-| **Reset done** (just before the reboot) | White, three quick flashes, then the dark gap | Same |
+| **Reset done** (just before the reboot) | The dark gap, white, three quick flashes, then the dark gap | Same |
 | **Long press reached** (the button held for 3 s) | Steady magenta until you let go | Same: the LED is awake |
 
 Red is kept for errors: a failed pairing is yellow, like the radio states
@@ -252,14 +302,33 @@ A new ATOM Lite, after installing the firmware from the web page over USB:
 
 ### Timing
 
-The fast and slow blinks (milliseconds on and off), the quick flashes, the
-breathe pulse, the frame flick and dip, and the dark gap are set once the
-firmware runs on a device and they can be judged by eye.
+Judged by eye on an ATOM Lite (9 November 2026). The values are in
+[`firmware/main/ui.cpp`](../firmware/main/ui.cpp), and the colors in
+[`firmware/main/led.h`](../firmware/main/led.h).
 
-On the device, also measure the ATOM's draw on a Tail Bat at 240 MHz with
-the LED dark. If dark mode takes it under the Tail Bat's 45 mA cut-off,
-the Tail Bat cuts the power after 32 seconds, and dark mode can't be used
-on one as it stands.
+| What | Time |
+|---|---|
+| Fast blink | 250 ms on, 250 ms off |
+| Slow blink | 800 ms on, 800 ms off |
+| Quick flashes | 250 ms on, 250 ms off, three times |
+| Dark gap | 1 s |
+| Power-on and identify | 800 ms for each color and each dark step |
+| Breathe | 8 s for one breath, down to 15% |
+| Dim | The normal states at 25% of their light, which looks like half |
+| Frame dip | 100 ms at 15% |
+| Frame flick | 100 ms of a greenish white, (170, 255, 170): pure white flicked on green looked magenta |
+| Long press | 3 s |
+| Double press | The second press within 400 ms of letting go of the first |
+| Reset warning | 3 s |
+
+The gestures' durations haven't been changed from the first draft; they
+may still change with use. A whole confirmation takes about 3.5 s,
+power-on about 4 s, and identify about 6.4 s.
+
+Dark mode works on a Tail Bat. At 240 MHz with the LED dark, a charged
+Tail Bat kept the ATOM running above its 45 mA cut-off with one phone
+connected, with none, and while waiting for the radio (see the roadmap's
+[Hardware notes](roadmap.md#hardware-notes)).
 
 ## Not on the device
 
@@ -272,15 +341,8 @@ Left out on purpose, and how you do each one instead:
 | Open the window at power-on | The button |
 | Safe mode (boot with only USB) | Reset |
 | Forget the radio | Pairing a new one replaces it; reset removes it |
-| Reboot, reconnect to the radio now, clear an error | Unplug the USB cable or the Tail Bat |
+| Reboot, reconnect to the radio now, clear an error | The side button, or unplug the USB cable or the Tail Bat |
 | Pause the radio link | Not offered |
 | Disconnect all phones | Not needed: unplug |
 | Show the setup code | Over USB (`ktbctl device code`), or from a trusted client |
 | Change settings | A trusted client, or USB |
-
-## Still to design
-
-- The LED's [timing](#timing), and the gestures' durations, on a device.
-- The ATOM's draw on a Tail Bat in dark mode, on a device.
-- The list of errors, and whether each clears on its own or only with a
-  power cycle, with the firmware.

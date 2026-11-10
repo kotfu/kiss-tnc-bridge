@@ -1,0 +1,12 @@
+menu "kiss-tnc-bridge"
+
+    config KTB_DEBUG_COMMANDS
+        bool "debug.* commands on USB serial"
+        default n
+        help
+            Adds debug.set, debug.frame and debug.pairing_result to the
+            control API, which fake the radio, phones and errors so the LED
+            and gestures can be tried without them. For development builds
+            only (sdkconfig.dev); release builds leave this off.
+
+endmenu
