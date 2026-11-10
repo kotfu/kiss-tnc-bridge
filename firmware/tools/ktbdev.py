@@ -165,7 +165,7 @@ def main():
     p = sub.add_parser("raw", help="send a command with JSON parameters")
     p.add_argument("cmd")
     p.add_argument("params", nargs="?", default="{}")
-    p = sub.add_parser("debug", help="debug.set radio=none|down|connected|real phones=N error=true updating=true")
+    p = sub.add_parser("debug", help="debug.set radio=none|down|connected|real phones=N error=true updating=true modem_sleep=false spin_cores=0|1|2 (the last two are kept)")
     p.add_argument("pairs", nargs="+")
     p = sub.add_parser("frames", help="debug.frame: COUNT frames to_phone or to_radio")
     p.add_argument("direction", choices=["to_phone", "to_radio"])

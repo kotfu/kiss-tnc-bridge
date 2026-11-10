@@ -5,8 +5,9 @@
 
 namespace ktb::storage {
 
-// Opens NVS. Call before anything that reads it.
-void init();
+// Opens NVS. Call before anything that reads it. False if it can't be
+// used, which is the storage error; the device carries on with defaults.
+bool init();
 
 // Erases everything reset clears. Returns false if part of it failed.
 bool reset();

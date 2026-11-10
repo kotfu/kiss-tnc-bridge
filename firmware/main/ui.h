@@ -37,10 +37,6 @@ void post(Event e);
 // For device.reset, which shows its flashes before rebooting.
 void wait_idle(uint32_t timeout_ms);
 
-// The UI is in an error state (docs/atom-lite-ui.md, States). The list of
-// errors comes with the firmware; for now this is only the debug command's.
-void set_error(bool on);
-
 // A firmware update over BLE is running (Phase F).
 void set_updating(bool on);
 

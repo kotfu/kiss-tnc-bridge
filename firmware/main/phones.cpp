@@ -7,6 +7,7 @@
 #include <mutex>
 
 #include "activity.h"
+#include "errors.h"
 #include "esp_bt_defs.h"
 #include "esp_gap_ble_api.h"
 #include "esp_gap_bt_api.h"
@@ -79,6 +80,16 @@ bool scan_rsp_set = false;
 bool advertising = false;
 bool failed = false;
 std::string failure;
+
+// The service or advertising failed: the phones error, until advertising
+// starts.
+void fail(const char *why)
+{
+    failed = true;
+    failure = why;
+    errors::set(errors::Error::phones, std::string(why) +
+                                           ": phones can't find the device. Unplug the device and plug it in");
+}
 
 EventGroupHandle_t events;
 constexpr EventBits_t EV_ADVERTISING = 1 << 0;
@@ -220,11 +231,11 @@ void gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
             }
             advertising = true;
             failed = false;
+            errors::clear(errors::Error::phones);
             xEventGroupSetBits(events, EV_ADVERTISING);
         } else {
             ESP_LOGE(TAG, "advertising didn't start, status %d", param->adv_start_cmpl.status);
-            failed = true;
-            failure = "advertising didn't start";
+            fail("advertising didn't start");
         }
         break;
     case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT:
@@ -277,8 +288,7 @@ void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_
     case ESP_GATTS_REG_EVT:
         if (param->reg.status != ESP_GATT_OK) {
             ESP_LOGE(TAG, "GATT app didn't register, status %d", param->reg.status);
-            failed = true;
-            failure = "the GATT service didn't register";
+            fail("the GATT service didn't register");
             return;
         }
         gatts_if_saved = gatts_if;
@@ -287,8 +297,7 @@ void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_
     case ESP_GATTS_CREAT_ATTR_TAB_EVT:
         if (param->add_attr_tab.status != ESP_GATT_OK || param->add_attr_tab.num_handle != IDX_NB) {
             ESP_LOGE(TAG, "attribute table failed, status 0x%x", param->add_attr_tab.status);
-            failed = true;
-            failure = "the GATT service didn't start";
+            fail("the GATT service didn't start");
             return;
         }
         memcpy(handles, param->add_attr_tab.handles, sizeof(handles));
@@ -375,10 +384,10 @@ void start()
     esp_ble_auth_req_t auth = ESP_LE_AUTH_NO_BOND;
     esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth, sizeof(auth));
 
-    ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_cb));
-    ESP_ERROR_CHECK(esp_ble_gatts_register_callback(gatts_cb));
-    ESP_ERROR_CHECK(esp_ble_gatts_app_register(APP_ID));
-    ESP_ERROR_CHECK(esp_ble_gatt_set_local_mtu(LOCAL_MTU));
+    if (esp_ble_gap_register_callback(gap_cb) != ESP_OK || esp_ble_gatts_register_callback(gatts_cb) != ESP_OK ||
+        esp_ble_gatts_app_register(APP_ID) != ESP_OK || esp_ble_gatt_set_local_mtu(LOCAL_MTU) != ESP_OK) {
+        fail("the BLE KISS service didn't start");
+    }
 }
 
 bool wait_advertising(uint32_t timeout_ms)

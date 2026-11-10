@@ -21,6 +21,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "activity.h"
+#include "errors.h"
 #include "freertos/message_buffer.h"
 #include "kiss.h"
 #include "phones.h"
@@ -225,6 +226,9 @@ std::atomic<PortState> port_state{PortState::unpaired};
 std::string port_detail; // under state_lock
 std::atomic<bool> pairing_now{false};
 std::atomic<bool> busy_now{false}; // a scan or a pairing is running
+// True while Bluetooth and the radio task are up. Otherwise nothing answers
+// requests, so post refuses them.
+std::atomic<bool> running{false};
 std::atomic<Hold> hold_state{Hold::none};
 std::atomic<int> debug_phones{-1}; // debug.set phones=, until -1
 std::atomic<bool> override_on{false};
@@ -407,7 +411,11 @@ void spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *p)
         if (p->init.status == ESP_SPP_SUCCESS) {
             xEventGroupSetBits(events, EV_SPP_INIT);
         } else {
-            ESP_LOGE(TAG, "SPP init failed, status %d", p->init.status);
+            running = false;
+            errors::set(errors::Error::bluetooth,
+                        "Bluetooth didn't start: SPP failed (status " + std::to_string(p->init.status) +
+                            "). Nothing is bridged. Unplug the device and plug it in; if it happens "
+                            "again, reinstall the firmware");
         }
         break;
     case ESP_SPP_DISCOVERY_COMP_EVT:
@@ -551,6 +559,14 @@ bool restart = false;
 
 void post(Request &r)
 {
+    if (!running) {
+        control::reply_error(r.p, "failed", "Bluetooth didn't start");
+        if (r.type == ReqType::button_pair) {
+            pairing_now = false;
+            ui::post(ui::Event::pairing_failed);
+        }
+        return;
+    }
     if (xQueueSend(requests, &r, 0) != pdTRUE) {
         control::reply_error(r.p, "busy", "the radio has too many requests waiting");
         if (r.type == ReqType::button_pair) {
@@ -1326,6 +1342,18 @@ void handle(const Request &r)
 
 // ---- The task ----
 
+bool started(const char *what, esp_err_t err)
+{
+    if (err == ESP_OK) {
+        return true;
+    }
+    errors::set(errors::Error::bluetooth,
+                std::string("Bluetooth didn't start: ") + what + " failed (" + esp_err_to_name(err) +
+                    "). Nothing is bridged. Unplug the device and plug it in; if it happens "
+                    "again, reinstall the firmware");
+    return false;
+}
+
 void radio_task(void *)
 {
     xEventGroupWaitBits(events, EV_SPP_INIT, pdFALSE, pdFALSE, portMAX_DELAY);
@@ -1339,7 +1367,11 @@ void radio_task(void *)
             continue;
         }
         if (!bonded(r.addr)) {
-            set_port(PortState::unpaired, r.addr.str() + " isn't paired: pair it again");
+            // Bluedroid removes a bond when the radio refuses its key: the
+            // radio has forgotten this device. Retrying can't help.
+            set_port(PortState::unpaired, r.addr.str() +
+                                              " isn't paired any more (the radio may have forgotten this "
+                                              "device): double press the button to pair it again");
             serve_until(portMAX_DELAY);
             continue;
         }
@@ -1370,7 +1402,7 @@ void radio_task(void *)
 
 } // namespace
 
-void start()
+bool start()
 {
     load_record();
 
@@ -1383,13 +1415,15 @@ void start()
     to_radio = xMessageBufferCreate(4096);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
-    ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BTDM));
     esp_bluedroid_config_t bd_cfg = BT_BLUEDROID_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_bluedroid_init_with_cfg(&bd_cfg));
-    ESP_ERROR_CHECK(esp_bluedroid_enable());
-
-    ESP_ERROR_CHECK(esp_bt_gap_register_callback(gap_cb));
+    if (!started("the controller", esp_bt_controller_init(&bt_cfg)) ||
+        !started("the controller", esp_bt_controller_enable(ESP_BT_MODE_BTDM)) ||
+        !started("Bluedroid", esp_bluedroid_init_with_cfg(&bd_cfg)) ||
+        !started("Bluedroid", esp_bluedroid_enable()) ||
+        !started("GAP", esp_bt_gap_register_callback(gap_cb))) {
+        set_port(PortState::idle, "Bluetooth didn't start");
+        return false;
+    }
     // DisplayYesNo: the TH-D75 pairs by numeric comparison, and refuses
     // Just Works (spikes/FINDINGS.md, Pairing).
     esp_bt_io_cap_t iocap = ESP_BT_IO_CAP_IO;
@@ -1400,11 +1434,14 @@ void start()
     // The device only connects out; nothing connects to it over Classic.
     esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
 
-    ESP_ERROR_CHECK(esp_spp_register_callback(spp_cb));
     esp_spp_cfg_t cfg = {};
     cfg.mode = ESP_SPP_MODE_CB;
     cfg.enable_l2cap_ertm = true;
-    ESP_ERROR_CHECK(esp_spp_enhanced_init(&cfg));
+    if (!started("SPP", esp_spp_register_callback(spp_cb)) ||
+        !started("SPP", esp_spp_enhanced_init(&cfg))) {
+        set_port(PortState::idle, "Bluetooth didn't start");
+        return false;
+    }
 
     Record r = record();
     set_port(r.present ? PortState::connecting : PortState::unpaired);
@@ -1412,6 +1449,8 @@ void start()
                                   : "no radio paired");
     xTaskCreate(radio_task, "radio", 6144, nullptr, 5, nullptr);
     xTaskCreate(writer_task, "radio_tx", 4096, nullptr, 5, nullptr);
+    running = true;
+    return true;
 }
 
 Link link()

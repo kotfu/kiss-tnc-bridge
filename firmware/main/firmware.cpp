@@ -34,8 +34,8 @@ void check_boot()
 {
     const esp_app_desc_t *app = esp_app_get_description();
     const esp_partition_t *running = esp_ota_get_running_partition();
-    ESP_LOGI(TAG, "kiss-tnc-bridge firmware %s, built %s, on %s", app->version, KTB_BUILT,
-             running->label);
+    ESP_LOGI(TAG, "kiss-tnc-bridge firmware %s, built %s, on %s, last reset: %s", app->version,
+             KTB_BUILT, running->label, last_reset());
 
     if (const esp_partition_t *invalid = esp_ota_get_last_invalid_partition()) {
         esp_app_desc_t desc;
@@ -64,6 +64,20 @@ void self_test_passed()
     }
     esp_ota_mark_app_valid_cancel_rollback();
     ESP_LOGI(TAG, "self-test passed: image marked valid");
+}
+
+const char *last_reset()
+{
+    switch (esp_reset_reason()) {
+    case ESP_RST_POWERON: return "power_on";
+    case ESP_RST_SW: return "restart";
+    case ESP_RST_PANIC: return "crash";
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return "watchdog";
+    case ESP_RST_BROWNOUT: return "brownout";
+    default: return "other";
+    }
 }
 
 cJSON *info_json()

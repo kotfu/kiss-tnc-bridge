@@ -11,14 +11,14 @@ C++ on ESP-IDF 6.1, with Bluedroid. The Phase A spikes in
 
 ## Status
 
-Phase C, milestone 3 of 4:
+Phase C, milestone 4 of 4:
 
 | Milestone | What | State |
 |---|---|---|
 | 1 | Flash layout, signed images and rollback; settings in NVS; the device key and setup code; the control API over USB serial; the LED and button | Done |
 | 2 | The radio: SPP to the TH-D74/D75, KISS init, reconnect, pairing with the button and over USB | Done |
 | 3 | The BLE KISS service and bridging | Done |
-| 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | |
+| 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | Done |
 
 The ATOM bridges the radio to up to two phones. BLE management (Noise
 enrollment) is Phase E and updates over BLE are Phase F; until then the
@@ -29,8 +29,9 @@ management window opens and closes, but nothing can enroll.
 | File | What |
 |---|---|
 | `partitions.csv` | The flash layout, fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
-| `sdkconfig.defaults` | The build configuration; `sdkconfig.dev` adds the `debug.*` commands |
+| `sdkconfig.defaults` | The build configuration; `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
 | `version.txt` | The version for local builds; release builds pass `-DPROJECT_VER` |
+| `CHANGELOG.md` | The firmware's changes; a release's notes come from its section |
 | `main/main.cpp` | Start-up: reset at power-on, then settings, key, UI and the control API |
 | `main/console.*` | The USB serial port, shared by the log and the control API, one whole line at a time |
 | `main/control.*` | The control API: framing, replies now and later, events, and the device and auth commands |
@@ -43,8 +44,10 @@ management window opens and closes, but nothing can enroll.
 | `main/phones.*` | The BLE KISS service, advertising, and phones' sessions |
 | `main/activity.*` | The control API's activity events |
 | `main/storage.*` | NVS, and what reset clears |
+| `main/errors.*` | The errors the LED shows red and `device.info` lists |
 | `main/firmware.*` | The running image, rollback and the self-test deadline |
 | `tools/ktbdev.py` | A development client for the control API over USB |
+| `tools/package.py` | Names a build's images for a release and writes the web installer's manifest |
 
 ## Build and flash
 
@@ -122,3 +125,38 @@ a bond.
 iOS remembers a device's name by its address, so an ATOM that ran other
 firmware may show its old name in apps until the phone's Bluetooth cache
 is cleared.
+
+## Errors
+
+The LED blinks red fast for anything the ATOM can't fix by retrying:
+NVS that can't be used, Bluetooth or the BLE KISS service not starting,
+or a missing device key. The control API keeps working over USB whatever
+fails, and `tools/ktbdev.py info` shows each error's code and what to do;
+[atom-lite-ui.md](../docs/atom-lite-ui.md#errors) has the list. With the
+development build, `ktbdev.py debug error=true` turns on a `debug` error.
+
+## Releases
+
+[`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)
+builds every board on pull requests and pushes to `main` that touch the
+firmware, signed with a throwaway key. Pushing a `firmware-v<version>` tag
+builds with the release key, from the `FIRMWARE_SIGNING_KEY` repository
+secret, and publishes a GitHub release, never marked latest (that stays
+the daemon's), with the files the
+[web installer](../docs/web-installer.md#what-a-release-publishes) reads.
+A version with a hyphen (`1.0.0-rc.1`) is a prerelease.
+
+To release:
+
+1. Give the version a section in `CHANGELOG.md`, `## 1.0.0 (20 November 2026)`.
+2. Tag and push: `git tag firmware-v1.0.0 && git push origin firmware-v1.0.0`.
+
+The tag sets the version; `version.txt` is only for local builds. A build
+like CI's, with your own key in `release_signing_key.pem`:
+
+```
+idf.py -B build-release -DSDKCONFIG=build-release/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+  -DPROJECT_VER=1.0.0 build
+tools/package.py build-release atom-lite 1.0.0 dist
+```

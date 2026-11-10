@@ -13,9 +13,9 @@ language. This document is the contract between the two repositories: it
 says what this repository publishes, and what the page has to do with it.
 How the page looks is left to the site.
 
-Status: draft, 9 November 2026. The firmware doesn't exist yet: the
-release files, the manifest and the serial behavior here are what Phase C
-will build and test.
+Status: draft, 9 November 2026. The ATOM Lite firmware speaks the control
+API over USB serial as described here, and CI builds the release files and
+the manifest; no firmware release has been made yet.
 
 Decided:
 
@@ -68,8 +68,9 @@ origin.
 
 ### What a release publishes
 
-This repository's CI builds the firmware for each board when a firmware
-version is tagged, and attaches these files to the GitHub release:
+This repository's CI ([`firmware.yml`](../.github/workflows/firmware.yml))
+builds the firmware for each board when a firmware version is tagged, and
+attaches these files to the GitHub release:
 
 | File | What it is |
 |---|---|
@@ -110,13 +111,16 @@ so either tool can use it, with fields of our own added:
    "chipFamily": "ESP32",
    "parts": [
      {"path": "ktb-atom-lite-1.0.0-bootloader.bin",        "offset": 4096,  "sha256": "…", "size": 31792},
-     {"path": "ktb-atom-lite-1.0.0-partition-table.bin",   "offset": 40960, "sha256": "…", "size": 3072},
+     {"path": "ktb-atom-lite-1.0.0-partition-table.bin",   "offset": 40960, "sha256": "…", "size": 3140},
      {"path": "ktb-atom-lite-1.0.0-ota-data-initial.bin",  "offset": 45056, "sha256": "…", "size": 8192},
-     {"path": "ktb-atom-lite-1.0.0-app.bin",               "offset": 65536, "sha256": "…", "size": 1384448}
+     {"path": "ktb-atom-lite-1.0.0-app.bin",               "offset": 65536, "sha256": "…", "size": 1048564}
    ]}]}
 ```
 
 `path` is relative to the manifest. `sha256` (hex) and `size` are ours.
+[`firmware/tools/package.py`](../firmware/tools/package.py) writes it from
+the build's own offsets and flash settings. The app image is signed and
+padded to a 64 KB boundary, so its size barely changes between versions.
 The images are written as built: the page doesn't change the flash mode,
 frequency or size in the bootloader's header.
 
@@ -187,11 +191,13 @@ firmware, by speaking the [control API over USB
 serial](control-api.md#usb-serial):
 
 1. Open the port at 115200 baud, 8N1.
-2. Deassert DTR and RTS at once: `port.setSignals({dataTerminalReady:
-   false, requestToSend: false})`. They drive the ESP32's reset and boot
-   pins, and toggling them reboots the device. Some platforms assert both
-   when a port opens, which the ATOM's reset circuit should ignore, but if
-   the device reboots anyway, it's back within a few seconds.
+2. Deassert RTS, then DTR: `port.setSignals({requestToSend: false})`, then
+   `port.setSignals({dataTerminalReady: false})`. They drive the ESP32's
+   reset and boot pins: the ATOM resets while RTS is asserted without DTR,
+   so dropping DTR first reboots it (see
+   [control-api.md](control-api.md#usb-serial)). Some platforms assert both
+   when a port opens, which the ATOM's reset circuit ignores; if the device
+   reboots anyway, it's back within a few seconds.
 3. Send `{"v":1,"id":1,"cmd":"device.info"}` and a newline, and read lines,
    skipping any that don't start with `{` (the firmware's log shares the
    port). Wait up to 3 seconds, sending the request again once a second.

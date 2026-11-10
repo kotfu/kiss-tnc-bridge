@@ -678,7 +678,7 @@ One scan or pairing runs at a time; another gets `busy`.
 
 | Topic | Event | Fields |
 |---|---|---|
-| `state` | `state` | `what` (`bridge`, `port`, `tnc`, `session`, `config`), `object` (`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`), `state` (`started`, `stopped`, `connected`, `backoff`, `opened`, `closed`, `reloaded`, `changed`, …) |
+| `state` | `state` | `what` (`bridge`, `port`, `tnc`, `session`, `config`, and on a device `device`), `object` (`ktbr0`, `ktbr0/radio`, `ktbr0/lan/192.168.4.20:51515`), `state` (`started`, `stopped`, `connected`, `backoff`, `opened`, `closed`, `reloaded`, `changed`, …) |
 | `activity` | `activity` | `object` (a port or session), `dir` (`rx` toward the bridge, `tx` away from it), `bytes` since the last event. At most about 10 a second per object and direction |
 | `frames` | `frame` | `object` (the TNC port), `dir` (`rx` from the TNC, `tx` to it), `session` (for `tx`, the session it came from), `at`, `kiss` (the raw frame between FENDs, still stuffed, as hex), `decoded` (`channel`, `command`, `ax25` with `source`, `destination`, `path`, and a one-line `summary`) |
 | — | `lagged` | `missed`: this connection fell behind and lost that many events |
@@ -748,13 +748,35 @@ A device's `status`, trimmed:
  "capabilities": ["spp-client", "ble-server", "firmware-update"],
  "max_message": 4096,
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
- "bluetooth": {"address": "B8:7B:4D:18:F2:72"}}
+ "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
+ "uptime": 5423,
+ "last_reset": "power_on",
+ "errors": [{"code": "phones",
+             "message": "advertising didn't start: phones can't find the device. Unplug the device and plug it in"}]}
 ```
 
 Clients decide what to offer from `capabilities`, not from `board`, so a new
 board needs no app changes for the features it shares. The capability
 names are provisional; a Core2 adds `screen` and `battery`, and later
-`wifi`. `max_message` is the largest request the device accepts, in bytes.
+`wifi`. `firmware-update` arrives with updates over BLE (Phase F).
+`max_message` is the largest request the device accepts, in bytes.
+
+`uptime` is how long the device has been running since it last started,
+in whole seconds.
+
+`last_reset` is why the device last started: `power_on` (which includes a
+reset from the USB serial port's control lines), `restart` (a reboot the
+firmware asked for), `crash`, `watchdog`, `brownout` (the supply sagged: a
+weak battery or cable) or `other`.
+
+`errors` lists what the device can't fix by retrying, which its LED shows
+as an error; it's empty when all is well. Each has a `code` and a
+`message` saying what happened and what to do, for people. The codes are
+`storage`, `bluetooth`, `phones` and `device_key` (see
+[atom-lite-ui.md](atom-lite-ui.md#errors)); clients should show an
+unknown code's message as it is. A `state` event with `what` `device`
+says the list changed: `state` is `error` when there's at least one, `ok`
+when there are none.
 
 ### `device.settings.get` and `device.settings.set`
 

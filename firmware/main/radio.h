@@ -24,8 +24,9 @@ enum class Link : uint8_t {
 };
 
 // Starts Bluetooth (both Classic and BLE) and the radio task. Call after
-// settings load.
-void start();
+// settings load. False if Bluetooth didn't start, which is the bluetooth
+// error: the radio's commands then fail at once.
+bool start();
 
 Link link();
 bool pairing();

@@ -10,13 +10,16 @@
 #include "cJSON.h"
 #include "console.h"
 #include "control_internal.h"
+#include "errors.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "firmware.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "phones.h"
+#include "power.h"
 #include "radio.h"
 #include "settings.h"
 #include "storage.h"
@@ -105,13 +108,17 @@ Reply device_info(const cJSON *, const Pending &)
     cJSON_AddStringToObject(o, "board", board::name);
     cJSON_AddItemToObject(o, "firmware", firmware::info_json());
     cJSON_AddNumberToObject(o, "protocol", protocol_version);
-    // Capabilities arrive with the features: spp-client with the radio,
-    // ble-server with the BLE KISS service.
-    cJSON_AddArrayToObject(o, "capabilities");
+    // firmware-update arrives with updates over BLE (Phase F).
+    cJSON *caps = cJSON_AddArrayToObject(o, "capabilities");
+    cJSON_AddItemToArray(caps, cJSON_CreateString("spp-client"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("ble-server"));
     cJSON_AddNumberToObject(o, "max_message", console::max_message);
     cJSON_AddStringToObject(o, "fingerprint", auth::fingerprint().c_str());
     cJSON *bt = cJSON_AddObjectToObject(o, "bluetooth");
     cJSON_AddStringToObject(bt, "address", mac_string(ESP_MAC_BT).c_str());
+    cJSON_AddNumberToObject(o, "uptime", static_cast<double>(esp_timer_get_time() / 1000000));
+    cJSON_AddStringToObject(o, "last_reset", firmware::last_reset());
+    cJSON_AddItemToObject(o, "errors", errors::json());
     return Reply::ok(o);
 }
 
@@ -251,12 +258,31 @@ Reply debug_set(const cJSON *req, const Pending &)
         radio::debug_set_phones(static_cast<int>(p->valuedouble));
     }
     if (const cJSON *e = cJSON_GetObjectItemCaseSensitive(req, "error")) {
-        ui::set_error(cJSON_IsTrue(e));
+        if (cJSON_IsTrue(e)) {
+            errors::set(errors::Error::debug, "set by debug.set");
+        } else {
+            errors::clear(errors::Error::debug);
+        }
     }
     if (const cJSON *u = cJSON_GetObjectItemCaseSensitive(req, "updating")) {
         ui::set_updating(cJSON_IsTrue(u));
     }
-    return Reply::empty();
+    // Kept in NVS, unlike the others: they're for trying a Tail Bat.
+    if (const cJSON *m = cJSON_GetObjectItemCaseSensitive(req, "modem_sleep")) {
+        if (!cJSON_IsBool(m)) {
+            return Reply::error("bad_request", "modem_sleep must be true or false");
+        }
+        power::set_modem_sleep(cJSON_IsTrue(m));
+    }
+    if (const cJSON *c = cJSON_GetObjectItemCaseSensitive(req, "spin_cores")) {
+        if (!cJSON_IsNumber(c) || (c->valuedouble != 0 && c->valuedouble != 1 && c->valuedouble != 2)) {
+            return Reply::error("bad_request", "spin_cores must be 0, 1 or 2");
+        }
+        power::set_spin_cores(static_cast<int>(c->valuedouble));
+    }
+    cJSON *o = cJSON_CreateObject();
+    cJSON_AddItemToObject(o, "power", power::json());
+    return Reply::ok(o);
 }
 
 Reply debug_frame(const cJSON *req, const Pending &)

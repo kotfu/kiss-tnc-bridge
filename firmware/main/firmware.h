@@ -20,6 +20,12 @@ void check_boot();
 // The self-test passed: marks a new image valid. Harmless on any other boot.
 void self_test_passed();
 
+// Why the device last started, for device.info: power_on (which includes
+// the reset line, as USB serial and esptool drive it), restart (a reboot
+// the firmware asked for), crash, watchdog, brownout (the supply sagged:
+// a weak battery or cable) or other.
+const char *last_reset();
+
 // device.info's "firmware" object.
 cJSON *info_json();
 

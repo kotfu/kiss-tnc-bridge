@@ -1,9 +1,11 @@
 #include "storage.h"
 
 #include "auth.h"
+#include "errors.h"
 #include "esp_log.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "power.h"
 #include "radio.h"
 #include "settings.h"
 
@@ -40,17 +42,28 @@ bool erase_namespace(const char *ns)
 
 } // namespace
 
-void init()
+bool init()
 {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         // NVS is unreadable as it stands. Erasing it loses the device's key
         // and setup code too, as a clean install would.
         ESP_LOGW(TAG, "NVS unreadable (%s): erasing it", esp_err_to_name(err));
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        err = nvs_flash_init();
+        err = nvs_flash_erase();
+        if (err == ESP_OK) {
+            err = nvs_flash_init();
+        }
     }
-    ESP_ERROR_CHECK(err);
+    if (err != ESP_OK) {
+        // The device carries on with default settings: USB still works, so
+        // a client can see the error.
+        errors::set(errors::Error::storage,
+                    std::string("NVS can't be used (") + esp_err_to_name(err) +
+                        "): settings, the radio pairing and the device's key can't be kept. "
+                        "Reinstall the firmware with a clean install");
+        return false;
+    }
+    return true;
 }
 
 bool reset()
@@ -60,6 +73,7 @@ bool reset()
     bool ok = erase_namespace(settings::nvs_namespace);
     ok = erase_namespace(radio::nvs_namespace) && ok;
     ok = erase_namespace(auth::clients_namespace) && ok;
+    ok = erase_namespace(power::nvs_namespace) && ok;
     ok = erase_namespace(bluedroid_namespace) && ok;
     return ok;
 }

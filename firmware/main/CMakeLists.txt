@@ -1,7 +1,7 @@
 idf_component_register(
     SRCS "main.cpp" "console.cpp" "control.cpp" "settings.cpp" "auth.cpp"
          "firmware.cpp" "led.cpp" "ui.cpp" "radio.cpp" "storage.cpp"
-         "control_radio.cpp" "kiss.cpp" "phones.cpp" "activity.cpp"
+         "control_radio.cpp" "kiss.cpp" "phones.cpp" "activity.cpp" "errors.cpp" "power.cpp"
     INCLUDE_DIRS "."
     PRIV_REQUIRES nvs_flash esp_driver_gpio esp_driver_rmt esp_driver_uart
                   esp_timer app_update esp_app_format bootloader_support mbedtls bt

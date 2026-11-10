@@ -6,6 +6,7 @@
 
 #include "auth.h"
 #include "board.h"
+#include "errors.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -150,12 +151,11 @@ const char *shown_name(Shown s)
     return "?";
 }
 
-std::atomic<bool> error_on{false};
 std::atomic<bool> updating_on{false};
 
 Shown current_state()
 {
-    if (error_on) return Shown::error;
+    if (errors::any()) return Shown::error;
     if (updating_on) return Shown::updating;
     if (auth::window_is_open()) return Shown::window;
     if (radio::pairing()) return Shown::pairing;
@@ -508,7 +508,6 @@ void wait_idle(uint32_t timeout_ms)
     }
 }
 
-void set_error(bool on) { error_on = on; }
 void set_updating(bool on) { updating_on = on; }
 
 } // namespace ktb::ui
