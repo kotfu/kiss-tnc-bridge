@@ -135,6 +135,27 @@ ignore fields they don't know. Anything that would break a version 1
 client needs version 2. A request with another `v` gets
 `unsupported_version`.
 
+### Compatibility
+
+The software (the daemon, `ktbctl`, `ktb-gateway`) and the firmware are
+released separately, each with its own semver version: `v1.3.0` for the
+software, `firmware-v1.0.0` for the firmware (roadmap decision 15).
+
+- **The major version is the protocol version.** Software 1.x and firmware
+  1.x speak version 1 of this API, and work together; 2.x of either
+  speaks version 2. A major version of either one that breaks nothing in
+  the API still moves the other's to match, so the rule stays simple.
+- **Within a major, features are found, not assumed.** A firmware feature
+  is announced by a capability in [`device.info`](#deviceinfo); a client
+  offers it when the capability is there, and otherwise says it needs
+  newer firmware. Old firmware keeps working with new software, and the
+  reverse.
+- **Device support starts with Phase D's `ktbctl`.** Earlier 1.x releases
+  don't manage devices.
+
+Release notes say which major a release works with, and name a minimum
+version of the other only when a new feature needs it.
+
 ## Authentication
 
 Over BLE, management is authenticated and encrypted inside the protocol,
@@ -172,14 +193,20 @@ this: their access is controlled by who can reach them.
 A client can enroll only while the management window is open, for 5
 minutes (provisional) after it's opened by:
 
-- a long press on the ATOM Lite's button (provisional: Phase C designs the
-  button and LED)
+- a long press on the ATOM Lite's button, 3 seconds (see
+  [atom-lite-ui.md](atom-lite-ui.md#the-window))
 - a menu item on the Core2
 - `ktbctl gateway open` on a Pi, or the Pi starting up
 - `auth.window`, from a trusted client
 
-The window stays open until its time runs out, so several clients can
-enroll in one window; `auth.window` with `seconds: 0` closes it early.
+One window lets in one client: it closes after the first successful
+enrollment, including a client that was already trusted and enrolled
+again, so enrolling two clients takes two windows. A wrong code doesn't
+close it, but 3 failed enrollments (provisional) do. Otherwise it stays open
+until its time runs out; `auth.window` with `seconds: 0` closes it early,
+and so does a single press of the ATOM Lite's button.
+The rule is the same however the window was opened (see
+[atom-lite-ui.md](atom-lite-ui.md#the-management-window)).
 
 ### Handshakes
 
@@ -218,7 +245,7 @@ The client checks the device too:
 
 - **In a session**, the device's static key (in its handshake message) must
   be the one the client saw when it enrolled. If not, the client stops: the
-  device was factory reset, or it isn't the same device.
+  device was erased and reinstalled, or it isn't the same device.
 - **When enrolling** from a setup URI, the device's key must match the
   fingerprint in the URI.
 
@@ -679,7 +706,7 @@ as on the daemon. A client can tell a device from the daemon by
 A device's `status`, trimmed:
 
 ```jsonc
-{"version": "0.1.0",
+{"version": "1.1.0",
  "adapters": [{"id": "builtin", "mac": "B8:7B:4D:18:F2:72", "present": true, "powered": true}],
  "tncs": [{"id": "radio", "name": "TH-D75", "model": "th-d75",
            "spp": {"address": "40:79:12:E4:95:9D", "adapter": "builtin", "paired": true},
@@ -696,9 +723,9 @@ A device's `status`, trimmed:
 
 ```jsonc
 {"board": "atom-lite",                 // or "core2"
- "firmware": {"version": "0.1.0", "built": "2026-11-08T02:00:00Z",
+ "firmware": {"version": "1.1.0", "built": "2026-11-08T02:00:00Z",
               "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
-              "rolled_back": "0.2.0"},                  // present when the last update was rolled back
+              "rolled_back": "1.2.0"},                  // present when the last update was rolled back
  "protocol": 1,
  "capabilities": ["spp-client", "ble-server", "firmware-update"],
  "max_message": 4096,
@@ -729,18 +756,27 @@ saving tables:
 | Key | Values |
 |---|---|
 | `public_name` | The BLE name KISS apps show, as `public_name` on the daemon |
-| `cpu_mhz` | 240, 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
+| `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
+| `led_normal` | What the LED shows while bridging: `solid`, `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
+| `led_wake_seconds` | In dark mode, how long a press lights the LED |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
-### `device.reboot` and `device.factory_reset`
+### `device.reboot` and `device.reset`
 
-Both answer `{}` and then act. `device.factory_reset` erases the device's
-settings and data and reboots. Exactly what it erases (settings, the radio
-pairing, trusted clients, the setup code) is decided with the ATOM Lite's
-user interface in Phase C.
+Both answer `{}` and then act. `device.reset` does what the button's reset
+does, then reboots: every setting goes back to its default, and the radio
+pairing and every trusted client are removed. The firmware, the device's
+key and the setup code stay (see [atom-lite-ui.md](atom-lite-ui.md#reset)).
+
+### `device.identify`
+
+Answers `{}` and shows a sequence the device shows for nothing else, so
+you can tell which device you're managing when you own several: on the
+ATOM Lite, magenta, blue, white, twice, then back to its state (see
+[atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too.
 
 ### `firmware.update`
 
@@ -771,7 +807,7 @@ aborts it.
 4. **`firmware.update.finish`** once everything is acknowledged. The device
    checks the size, the SHA-256, that the image is for this board, and its
    signature, then makes it the one to boot next. It answers `{"version":
-   "0.2.0", "partition": "ota_1"}`, or fails with `image_rejected`.
+   "1.2.0", "partition": "ota_1"}`, or fails with `image_rejected`.
 5. **`device.reboot`.** The new image starts as `pending_verify`, marks
    itself valid once it's running properly, and is rolled back if it
    resets first. `device.info` shows the outcome.
