@@ -52,7 +52,7 @@ struct Step {
     uint32_t ms;
 };
 
-// The longest sequence: identify, 8 steps.
+// The longest sequence: identify, 11 steps.
 constexpr size_t max_steps = 16;
 struct Sequence {
     Step steps[max_steps];
@@ -94,7 +94,7 @@ Sequence sequence_for(Event e)
     case Event::identify:
         // Dark, the colors straight after one another, dark.
         s.add(led::off, slow_ms);
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 3; i++) {
             for (Rgb c : {led::magenta, led::blue, led::white}) {
                 s.add(c, slow_ms);
             }

@@ -277,7 +277,7 @@ flick on top of the state, which carries on around them.
 | **Pairing succeeded** | The dark gap, green, three quick flashes, then the dark gap | Same |
 | **Pairing failed** (no radio found, it refused, or you cancelled) | The dark gap, yellow, three quick flashes, then the dark gap | Same |
 | **Client enrolled** (the window closes) | The dark gap, green, three quick flashes, then the dark gap | Same |
-| **Identify** (a trusted client asked, with `device.identify`) | Dark, then magenta, blue, white, magenta, blue, white, one straight after another, then dark; each step as long as a slow blink | Same |
+| **Identify** (a trusted client asked, with `device.identify`) | Dark, then magenta, blue, white, three times, one straight after another, then dark; each step as long as a slow blink | Same |
 | **Reset warning** (the button held at power-on) | Steady white for 3 seconds (provisional); let go to cancel | Same |
 | **Reset done** (just before the reboot) | The dark gap, white, three quick flashes, then the dark gap | Same |
 | **Long press reached** (the button held for 3 s) | Steady magenta until you let go | Same: the LED is awake |
@@ -324,7 +324,7 @@ Judged by eye on an ATOM Lite (9 November 2026). The values are in
 
 The gestures' durations haven't been changed from the first draft; they
 may still change with use. A whole confirmation takes about 3.5 s,
-power-on about 4 s, and identify about 6.4 s.
+power-on about 4 s, and identify about 8.8 s.
 
 Dark mode works on a Tail Bat. At 240 MHz with the LED dark, a charged
 Tail Bat kept the ATOM running above its 45 mA cut-off with one phone

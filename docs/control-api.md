@@ -815,7 +815,7 @@ key and the setup code stay (see [atom-lite-ui.md](atom-lite-ui.md#reset)).
 
 Answers `{}` and shows a sequence the device shows for nothing else, so
 you can tell which device you're managing when you own several: on the
-ATOM Lite, magenta, blue, white, twice, then back to its state (see
+ATOM Lite, magenta, blue, white, three times, then back to its state (see
 [atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too.
 
 ### `firmware.update`
