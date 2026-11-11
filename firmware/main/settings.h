@@ -12,7 +12,7 @@
 namespace ktb::settings {
 
 // The values are stored in NVS: add new ones at the end.
-enum class LedNormal : uint8_t { solid, breathe, dark, dim };
+enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 
 // Reads the settings from NVS, with defaults for any that aren't there.
 void load();

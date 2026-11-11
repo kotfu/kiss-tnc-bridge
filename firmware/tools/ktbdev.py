@@ -332,9 +332,9 @@ def demo(d, seconds, breathe_seconds):
 
     original = d.request("device.settings.get")["result"]["settings"]["led_normal"]
     try:
-        # Solid, so the normal states and the frames show whatever mode the
+        # Bright, so the normal states and the frames show whatever mode the
         # device was left in (dark mode would hide them).
-        d.request("device.settings.set", settings={"led_normal": "solid"})
+        d.request("device.settings.set", settings={"led_normal": "bright"})
         d.request("debug.set", radio="none", phones=0, error=False, updating=False)
         d.request("auth.mode", seconds=0)
         step("state: no radio (yellow/blue, slow)", "debug.set", radio="none")
@@ -357,7 +357,7 @@ def demo(d, seconds, breathe_seconds):
         d.request("device.settings.set", settings={"led_normal": "breathe"})
         step("  breathe, green", "debug.set", wait=breathe_seconds, phones=1)
         step("  breathe, cyan", "debug.set", wait=breathe_seconds, phones=0)
-        d.request("device.settings.set", settings={"led_normal": "solid"})
+        d.request("device.settings.set", settings={"led_normal": "bright"})
         step("state: authorization mode (magenta, slow)", "auth.mode", seconds=600)
         d.request("auth.mode", seconds=0)
         step("state: updating (white, fast)", "debug.set", updating=True)

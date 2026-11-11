@@ -23,7 +23,7 @@ constexpr uint16_t wake_min = 5;
 constexpr uint16_t wake_max = 3600;
 
 // Defaults (provisional, docs/atom-lite-ui.md)
-constexpr LedNormal default_led_normal = LedNormal::solid;
+constexpr LedNormal default_led_normal = LedNormal::bright;
 constexpr uint16_t default_wake_seconds = 30;
 constexpr uint8_t default_brightness = 50;
 
@@ -45,14 +45,14 @@ const char *led_normal_name(LedNormal v)
     case LedNormal::breathe: return "breathe";
     case LedNormal::dark: return "dark";
     case LedNormal::dim: return "dim";
-    default: return "solid";
+    default: return "bright";
     }
 }
 
 bool parse_led_normal(const char *s, LedNormal &out)
 {
-    if (strcmp(s, "solid") == 0) {
-        out = LedNormal::solid;
+    if (strcmp(s, "bright") == 0) {
+        out = LedNormal::bright;
     } else if (strcmp(s, "breathe") == 0) {
         out = LedNormal::breathe;
     } else if (strcmp(s, "dark") == 0) {
@@ -188,7 +188,7 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             new_name = item->valuestring;
         } else if (strcmp(key, "led_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_led_normal(item->valuestring, new_normal)) {
-                error = "led_normal must be \"solid\", \"dim\", \"breathe\" or \"dark\"";
+                error = "led_normal must be \"bright\", \"dim\", \"breathe\" or \"dark\"";
                 return false;
             }
         } else if (strcmp(key, "led_wake_seconds") == 0) {

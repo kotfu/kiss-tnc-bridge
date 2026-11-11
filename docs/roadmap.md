@@ -557,7 +557,7 @@ Lite and set it up from a browser, with no app.
         the device key and the authorization code stay). Everything else
         goes to a management app, USB, or unplugging.
   - [x] One authorization each time authorization mode starts.
-  - [x] The LED's states and events, in precedence order, with `solid`,
+  - [x] The LED's states and events, in precedence order, with `bright`,
         `dim`, `breathe` and `dark` modes for the normal states, and the wake
         rule: while the LED is dark, a press only wakes it.
   - [x] Reset: hold the button at power-on, through a 3-second warning.

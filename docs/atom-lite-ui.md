@@ -166,7 +166,7 @@ without phones. One setting decides what the LED shows then:
 
 | `led_normal` | When things are normal |
 |---|---|
-| `solid` (the default) | The state's color, steady |
+| `bright` (the default) | The state's color, steady |
 | `dim` | The state's color, steady, at half the brightness to the eye: the same as halving `led_brightness` for the normal states. Frame flicks are dimmed too |
 | `breathe` | The state's color in a long, slow pulse, in brightness or between neighboring colors |
 | `dark` | Off, until a press wakes it |
@@ -203,7 +203,7 @@ A state lasts until something changes. When more than one is true, the
 LED shows the highest row: authorization mode can be on, or an update running,
 while the device goes on bridging.
 
-| State | What it means | Solid | Dim | Breathe | Dark |
+| State | What it means | Bright | Dim | Breathe | Dark |
 |---|---|---|---|---|---|
 | **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management app to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no management app | Red, three fast blinks, then a pause | Same | Same | Same |
 | **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
@@ -270,7 +270,7 @@ set them apart from the state before them: cancelling pairing, say,
 goes from a blue blink to yellow flashes. Frames have no gap: they're a
 flick on top of the state, which carries on around them.
 
-| Event | Regular (`solid`, `dim`, `breathe`) | Dark |
+| Event | Regular (`bright`, `dim`, `breathe`) | Dark |
 |---|---|---|
 | **Power on** (the firmware has started) | Red, yellow, cyan, green, one straight after another, each as long as a slow blink, then the dark gap | Same |
 | **Frame from the radio to a phone** | A short dip in brightness | Nothing, unless the LED is awake |

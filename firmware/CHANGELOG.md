@@ -16,6 +16,9 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pairing's fast blink.
 - Identify shows magenta, blue and white three times instead of twice.
 - Identify and power-on use the same 1 s dark gap as the other events.
+- The `led_normal` setting's `solid` is now `bright`, so the choices are
+  `bright`, `dim`, `breathe` and `dark`. A device set to `solid` shows
+  `bright`.
 - The project's vocabulary: the setup code is now the authorization code,
   the management window is authorization mode, and clients that manage
   the device are management apps. In the control API, `auth.window` is

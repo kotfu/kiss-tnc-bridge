@@ -807,7 +807,7 @@ saving tables:
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
-| `led_normal` | What the LED shows while bridging: `solid`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
+| `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
