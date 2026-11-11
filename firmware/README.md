@@ -139,8 +139,9 @@ development build, `ktbdev.py debug error=true` turns on a `debug` error.
 ## Releases
 
 [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)
-builds every board on pull requests and pushes to `main` that touch the
-firmware, signed with a throwaway key. Pushing a `firmware-v<version>` tag
+builds every board on pull requests that touch the firmware, signed with
+a throwaway key. Pushes to `main` don't build; to build `main` without
+tagging it, run the workflow by hand from the Actions tab. Pushing a `firmware-v<version>` tag
 builds with the release key, from the `FIRMWARE_SIGNING_KEY` repository
 secret, and publishes a GitHub release, never marked latest (that stays
 the daemon's), with the files the

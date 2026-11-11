@@ -1,18 +1,16 @@
 name: Firmware
 
-# Builds the device firmware on changes, and releases it on firmware-v* tags
-# (docs/web-installer.md, What a release publishes). Tag pushes ignore the
-# path filters.
+# Builds the device firmware on pull requests that change it, and releases
+# it on firmware-v* tags (docs/web-installer.md, What a release publishes).
+# Pushes to main don't build: a pull request's run already built its merge,
+# and a commit straight to main is built when it's tagged, or by hand with
+# workflow_dispatch.
 on:
   pull_request:
     paths:
       - 'firmware/**'
       - '.github/workflows/firmware.yml'
   push:
-    branches: [main]
-    paths:
-      - 'firmware/**'
-      - '.github/workflows/firmware.yml'
     tags:
       - 'firmware-v*'
   workflow_dispatch:
