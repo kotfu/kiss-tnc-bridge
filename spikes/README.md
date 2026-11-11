@@ -15,6 +15,12 @@ ESP-IDF project with its procedure and findings in its own README.
   client is [`ble-update`](ble-update), Rust with `bluer`, cross-built like
   the Phase 0 spikes (`spikes/ble-update/deploy.sh`).
 
+## Firmware 1.1
+
+- [`atom-lite-ble-tnc`](atom-lite-ble-tnc/README.md): the ATOM Lite as a
+  GATT client to a TIDRADIO TD-H9: KISS both ways, reconnecting, finding
+  it during a Classic inquiry, and its current and heap.
+
 ## Phase 0 (the daemon)
 
 For the Phase 0 checklist in

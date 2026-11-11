@@ -32,13 +32,14 @@ Corrections and findings from other firmware versions are welcome as
 
 ## Setting up the radio
 
-Three settings are needed before the TNC works in both directions:
+Four settings are needed before the TNC works in both directions:
 
 | Menu | Setting |
 |---|---|
 | Menu > Bluetooth > BT On/Off | On |
 | Menu > Bluetooth > BT Mode | Receiver |
 | Menu > APRS > APRS Switch | On |
+| The APRS channel's bandwidth | Wide |
 
 With APRS Switch off, the TNC still transmits the frames you write to it,
 but passes nothing it receives back over Bluetooth. Turning it on was
@@ -47,6 +48,11 @@ radio delivered nothing for eight minutes with the switch off, then
 packets within seconds of turning it on, and nothing again once it was
 turned off, while a nearby receiver kept hearing traffic it had passed on
 before.
+
+With narrow FM, the TNC still transmits, and other stations decode it,
+but in testing it received nothing: not a TH-D75 transmitting beside it,
+nor a nearby digipeater, over about 15 minutes. Back on wide, it decoded
+the digipeater's beacon within minutes. APRS on 2 m uses wide FM.
 
 You also need to ensure any other Bluetooth apps are disconnected from the radio. It
 only handles one connection at a time, and it doesn't advertise the GATT service while
@@ -64,7 +70,8 @@ an app is connected.
 | Initialization | Nothing over Bluetooth. It sends and receives as soon as you subscribe to `0xAF02`, if APRS Switch is on (see [Setting up the radio](#setting-up-the-radio)) |
 | Connections | One at a time. It stops advertising while connected |
 
-Write one complete KISS frame per write to `0xAF01`. Subscribe to `0xAF02`
+Write one complete KISS frame per write to `0xAF01`: the radio doesn't
+reassemble a frame split across writes. Subscribe to `0xAF02`
 and feed every notification into a KISS decoder. Each frame arrives whole
 in one notification, padded with extra `FEND` bytes, which a KISS decoder
 skips as empty frames.
@@ -117,8 +124,13 @@ channels that Bluetooth chip vendors build in; the Ailunce HA2 has an
 ### Host → radio (`0xAF01`)
 
 Write each KISS frame, delimited by `FEND`s, as one write without
-response. A 53-byte status packet that the radio transmitted, and the local
-digipeater repeated:
+response. The radio doesn't put a frame back together across writes: in
+testing from an ESP32, the same 61-byte status packet written in two
+pieces (20 bytes, then 41) was never transmitted, twice, while written
+whole it was transmitted and digipeated. So a frame must fit in one
+write, which with an MTU of 517 is up to 514 bytes after escaping. APRS
+frames are far shorter. A 53-byte status packet that the radio
+transmitted, and the local digipeater repeated:
 
 ```
 c0 00 82 a0 b4 96 a8 84 60 96 60 a8 8c aa 40 6e
@@ -275,6 +287,8 @@ Each received packet then shows up as a value change on `0xAF02`.
   control protocol, used by TIDRADIO's own app.
 - Whether the radio acts on KISS parameter commands (TXDELAY and the rest).
 - Whether frames longer than the MTU are split across notifications.
+- What the radio does with a frame longer than the MTU, which can't be
+  written whole.
 - Why the first listen (step 3 above) heard nothing for ten minutes, when
   later connections received packets right away without sending anything
   first. APRS Switch being off would explain it, but its setting then

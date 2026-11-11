@@ -1,0 +1,29 @@
+menu "ATOM Lite BLE TNC spike"
+
+    config SPIKE_RADIO_ADDR
+        string "TD-H9 Bluetooth address"
+        default ""
+        help
+            Connect to this address at start. Empty: search for the first
+            TD-H9 by name, as a double press would.
+
+    config SPIKE_CLASSIC_INQUIRY
+        bool "Run a Classic inquiry during the search"
+        default y
+        help
+            A double press also looks for a TH-D74 or TH-D75 over Classic,
+            so the BLE scan has to find a TD-H9 while an inquiry runs.
+
+    config SPIKE_SEARCH_SECONDS
+        int "How long a search runs"
+        default 60
+
+    config SPIKE_CALLSIGN
+        string "Callsign for the test beacon"
+        default "K0TFU-7"
+
+    config SPIKE_REPORT_INTERVAL_S
+        int "Seconds between status lines"
+        default 10
+
+endmenu

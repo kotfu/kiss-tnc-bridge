@@ -215,6 +215,8 @@ as they're found.
 | Idle cores waiting for an interrupt | CPU power: a core with nothing to run stops in `WAITI` until the next interrupt | On a power source with a low-current cut-off, too little draw cuts the power. The development build's `debug.set spin_cores=1\|2` spins idle cores through the idle hook instead, and `modem_sleep=false` keeps the Bluetooth controller awake, to keep the draw up. Neither was needed on a charged Tail Bat; kept for testing other power banks | Waiting |
 | Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
 | Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
+| Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. A direct connect scans at Bluedroid's fast rate, a 30 ms window every 60 ms; on an ATOM Lite that took the draw from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). `esp_ble_gattc_enh_open` takes a scan interval and window, so a slower rate (1.28 s is Bluedroid's slow one) is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within 1 s of the TD-H9 turning on | Bluedroid's fast rate |
+| BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting | The TD-H9's choice |
 | LED or screen brightness | LED or backlight current | Visibility | — |
 | Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
 
@@ -566,6 +568,37 @@ Lite and set it up from a browser, with no app.
         long press starts authorization mode.
   - [x] The LED's timing, judged on a device (milestone 1). The
         gestures' durations are the first draft's, unchanged so far.
+
+### Firmware 1.1: the TIDRADIO TD-H9
+
+Before Phase E. The ATOM Lite connects to a TD-H9 over BLE as a GATT
+client, on TIDRADIO's own KISS service, as the daemon's `td-h9` model
+does (see [td-h9-ble-kiss.md](td-h9-ble-kiss.md)). Only the TD-H9: a
+radio with a standard BLE KISS TNC gains little from a bridge.
+
+- [x] Spike: a TD-H9 from the ATOM. Connecting, the MTU, KISS both ways,
+      a frame split across two writes, reconnecting after the radio
+      restarts, finding it during the Classic search, and the current
+      drawn while connected and while looking for it. Done 10 November
+      2026: it works, ready in about 830 ms at an MTU of 517; the radio
+      doesn't reassemble a frame split across writes, so each frame goes
+      in one; a pending connect catches the radio within a second of it
+      turning on; about 50 mA connected. See
+      [spikes/atom-lite-ble-tnc](../spikes/atom-lite-ble-tnc/README.md).
+- [ ] Spike: heap with the GATT client, a TD-H9 and two phones.
+- [ ] Four BLE connections: the radio, two KISS TNC apps, and a
+      management app for Phase E. The KISS TNC app limit stays 2, apart
+      from the controller's.
+- [ ] A double press selects the first TD-H9 it finds, by name, during the
+      60 s search, as well as looking for a TH-D74 or TH-D75 to pair. The
+      bridge remembers it by its Bluetooth address. The docs say not to do
+      it with more than one TD-H9 nearby that has nothing connected to it.
+- [ ] `bluetooth.scan` with `"transport": "le"`, and `tnc.update` with
+      `model: "td-h9"`.
+- [ ] The radio's link apart from its task: SPP and the GATT client
+      behind one interface, and the TH-D75 tested again in full.
+- [ ] A word in the vocabulary for selecting a radio, since pairing is
+      Bluetooth Classic only.
 
 ### Phase D: `ktbctl` device support
 
