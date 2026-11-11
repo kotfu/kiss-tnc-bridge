@@ -12,6 +12,8 @@
 #include "esp_bt_device.h"
 #include "esp_bt_main.h"
 #include "esp_gap_bt_api.h"
+#include "esp_gatt_common_api.h"
+#include "esp_gattc_api.h"
 #include "esp_log.h"
 #include "esp_spp_api.h"
 #include "freertos/FreeRTOS.h"
@@ -64,13 +66,17 @@ struct Model {
     const char *radio;       // known radio, or null
     const char *name_prefix; // its Bluetooth name starts with this
     bool kiss_init;          // the TH-D7x init at every connect
+    bool ble;                // a BLE TNC, not Classic SPP
 };
 
+// generic stays third: it's the fallback for a model that isn't known.
 const Model models[] = {
-    {"th-d74", "Kenwood TH-D74", "TH-D74", true},
-    {"th-d75", "Kenwood TH-D75", "TH-D75", true},
-    {"generic", nullptr, nullptr, false},
+    {"th-d74", "Kenwood TH-D74", "TH-D74", true, false},
+    {"th-d75", "Kenwood TH-D75", "TH-D75", true, false},
+    {"generic", nullptr, nullptr, false, false},
+    {"td-h9", "TIDRADIO TD-H9", "TD-H9", false, true},
 };
+const Model &generic_model = models[2];
 
 const Model *find_model(const std::string &name)
 {
@@ -82,11 +88,19 @@ const Model *find_model(const std::string &name)
     return nullptr;
 }
 
-// The model a Bluetooth name belongs to, or null.
-const Model *model_for_name(const std::string &name)
+const Model &model_of(const std::string &name)
+{
+    const Model *m = find_model(name);
+    return m ? *m : generic_model;
+}
+
+// The model a Bluetooth name belongs to, or null. ble: the name came from
+// a BLE advertisement, not a Classic inquiry (a TD-H9 answers both, under
+// different addresses, and only its BLE side has the TNC).
+const Model *model_for_name(const std::string &name, bool ble)
 {
     for (const Model &m : models) {
-        if (m.name_prefix && name.compare(0, strlen(m.name_prefix), m.name_prefix) == 0) {
+        if (m.name_prefix && m.ble == ble && name.compare(0, strlen(m.name_prefix), m.name_prefix) == 0) {
             return &m;
         }
     }
@@ -100,6 +114,12 @@ struct Addr {
     bool operator==(const Addr &o) const { return memcmp(b, o.b, sizeof(b)) == 0; }
     bool operator!=(const Addr &o) const { return !(*this == o); }
     uint8_t *raw() { return b; }
+    static Addr of(const uint8_t *bda)
+    {
+        Addr a;
+        memcpy(a.b, bda, sizeof(a.b));
+        return a;
+    }
     std::string str() const
     {
         char s[18];
@@ -142,8 +162,10 @@ bool bonded(const Addr &a)
 struct Record {
     bool present = false;
     Addr addr;
+    uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC; // a BLE radio's
     std::string model = "th-d75";
     std::string name;
+    bool ble() const { return model_of(model).ble; }
 };
 
 std::mutex state_lock; // guards rec and port_detail
@@ -166,6 +188,7 @@ bool save_record(const Record &r)
         err = nvs_set_blob(h, "address", r.addr.b, sizeof(r.addr.b));
         if (err == ESP_OK) err = nvs_set_str(h, "model", r.model.c_str());
         if (err == ESP_OK) err = nvs_set_str(h, "name", r.name.c_str());
+        if (err == ESP_OK) err = nvs_set_u8(h, "addr_type", r.addr_type);
     } else {
         err = nvs_erase_all(h);
     }
@@ -198,6 +221,11 @@ void load_record()
             len = sizeof(buf);
             if (nvs_get_str(h, "name", buf, &len) == ESP_OK) {
                 r.name = buf;
+            }
+            // Missing before 1.1, when every radio was Classic.
+            uint8_t type;
+            if (nvs_get_u8(h, "addr_type", &type) == ESP_OK) {
+                r.addr_type = type;
             }
         }
         nvs_close(h);
@@ -270,12 +298,15 @@ enum : EventBits_t {
     EV_CLOSED = 1 << 2,
     EV_FAILED = 1 << 3,
     EV_UNCONGESTED = 1 << 4,
+    EV_GATTC_REG = 1 << 5,
 };
 EventGroupHandle_t events;
 
 struct GapEvent {
-    enum Type : uint8_t { found, disc_started, disc_stopped, remote_name, confirm, auth } type;
+    // ble_found and ble_scan_done come from BLE scans; the rest are Classic.
+    enum Type : uint8_t { found, disc_started, disc_stopped, remote_name, confirm, auth, ble_found, ble_scan_done } type;
     Addr addr;
+    uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC;
     bool ok = false;
     bool has_name = false;
     char name[32] = {};
@@ -284,7 +315,7 @@ struct GapEvent {
     bool has_rssi = false;
     uint32_t number = 0;
 };
-QueueHandle_t gap_events;
+QueueHandle_t gap_events = nullptr;
 
 StreamBufferHandle_t from_radio;
 std::atomic<uint32_t> spp_handle{0};
@@ -622,10 +653,336 @@ void refuse_busy(const Request &r)
     }
 }
 
+// ---- BLE: scans, and the TD-H9's KISS service as a GATT client ----
+//
+// docs/td-h9-ble-kiss.md and spikes/atom-lite-ble-tnc. Bluedroid's GATT
+// callbacks only feed the task, as the SPP ones do: the same events bits
+// (only one of SPP and BLE is ever in use), the same stream of bytes from
+// the radio.
+
+constexpr uint16_t GATTC_APP_ID = 0x52;
+constexpr uint16_t TDH9_SERVICE = 0xAF00;
+constexpr uint16_t TDH9_TX = 0xAF01; // write without response
+constexpr uint16_t TDH9_RX = 0xAF02; // notify
+constexpr uint16_t NO_CONN = 0xFFFF;
+// A connect attempt that lasted this long was waiting for the radio to
+// advertise (Bluedroid gives up after 30 s), so the next starts at once.
+constexpr TickType_t ble_waited = pdMS_TO_TICKS(20000);
+
+std::atomic<esp_gatt_if_t> gattc_if{ESP_GATT_IF_NONE};
+std::atomic<bool> ble_active{false}; // an attempt or a link: callbacks look at ble_target
+std::atomic<bool> ble_up{false};     // ready: subscribed, frames can go
+Addr ble_target;
+std::atomic<uint16_t> ble_conn{NO_CONN};
+std::atomic<uint16_t> ble_mtu{23};
+uint16_t ble_svc_start = 0, ble_svc_end = 0, ble_tx = 0, ble_rx = 0;
+
+// A BLE scan's length, until its parameters are set; 0 once it's stopped.
+std::atomic<uint32_t> ble_scan_seconds{0};
+// Addresses already reported in this scan, so the task isn't flooded with
+// every advertisement (a busy room has dozens a second).
+std::mutex scan_lock;
+std::vector<Addr> scan_seen;
+
+void ble_scan_start(uint32_t seconds)
+{
+    {
+        std::lock_guard<std::mutex> g(scan_lock);
+        scan_seen.clear();
+    }
+    ble_scan_seconds = seconds;
+    esp_ble_scan_params_t sp = {};
+    sp.scan_type = BLE_SCAN_TYPE_ACTIVE; // a name may be only in the scan response
+    sp.own_addr_type = BLE_ADDR_TYPE_PUBLIC;
+    sp.scan_filter_policy = BLE_SCAN_FILTER_ALLOW_ALL;
+    sp.scan_interval = 0x50; // 50 ms
+    sp.scan_window = 0x30;   // 30 ms
+    sp.scan_duplicate = BLE_SCAN_DUPLICATE_DISABLE;
+    if (esp_ble_gap_set_scan_params(&sp) != ESP_OK) {
+        ESP_LOGW(TAG, "BLE scan didn't start");
+        ble_scan_seconds = 0;
+        GapEvent e;
+        e.type = GapEvent::ble_scan_done;
+        xQueueSend(gap_events, &e, 0);
+    }
+}
+
+void ble_scan_stop()
+{
+    if (ble_scan_seconds.exchange(0) != 0) {
+        return; // its parameters aren't set yet: it won't start
+    }
+    esp_ble_gap_stop_scanning();
+}
+
+std::string adv_name(esp_ble_gap_cb_param_t::ble_scan_result_evt_param &r)
+{
+    uint8_t len = 0;
+    uint16_t total = r.adv_data_len + r.scan_rsp_len;
+    uint8_t *n = esp_ble_resolve_adv_data_by_type(r.ble_adv, total, ESP_BLE_AD_TYPE_NAME_CMPL, &len);
+    if (!n) {
+        n = esp_ble_resolve_adv_data_by_type(r.ble_adv, total, ESP_BLE_AD_TYPE_NAME_SHORT, &len);
+    }
+    return n ? std::string(reinterpret_cast<char *>(n), len) : std::string();
+}
+
+void gattc_fail(const char *why)
+{
+    ESP_LOGW(TAG, "%s", why);
+    xEventGroupSetBits(events, EV_FAILED);
+    esp_ble_gap_disconnect(ble_target.raw());
+}
+
+bool ble_ours(uint16_t conn) { return ble_active && conn == ble_conn; }
+
+void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t ifc, esp_ble_gattc_cb_param_t *p)
+{
+    if (event == ESP_GATTC_REG_EVT) {
+        if (p->reg.status == ESP_GATT_OK) {
+            gattc_if = ifc;
+            xEventGroupSetBits(events, EV_GATTC_REG);
+        } else {
+            ESP_LOGE(TAG, "the GATT client didn't register, status %d", p->reg.status);
+        }
+        return;
+    }
+    if (ifc != gattc_if) {
+        return;
+    }
+    switch (event) {
+    case ESP_GATTC_OPEN_EVT:
+        if (!ble_active || Addr::of(p->open.remote_bda) != ble_target) {
+            break;
+        }
+        if (p->open.status != ESP_GATT_OK) {
+            // After 30 s with no sign of the radio, or cancelled.
+            ESP_LOGI(TAG, "no BLE connection, status 0x%x", p->open.status);
+            xEventGroupSetBits(events, EV_FAILED);
+            break;
+        }
+        ble_conn = p->open.conn_id;
+        ble_svc_start = ble_svc_end = ble_tx = ble_rx = 0;
+        esp_ble_gattc_send_mtu_req(gattc_if, ble_conn);
+        break;
+    case ESP_GATTC_CFG_MTU_EVT: {
+        if (!ble_ours(p->cfg_mtu.conn_id)) {
+            break;
+        }
+        ble_mtu = p->cfg_mtu.status == ESP_GATT_OK ? p->cfg_mtu.mtu : 23;
+        esp_bt_uuid_t svc = {};
+        svc.len = ESP_UUID_LEN_16;
+        svc.uuid.uuid16 = TDH9_SERVICE;
+        esp_ble_gattc_search_service(gattc_if, ble_conn, &svc);
+        break;
+    }
+    case ESP_GATTC_SEARCH_RES_EVT:
+        if (ble_ours(p->search_res.conn_id) && p->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16 &&
+            p->search_res.srvc_id.uuid.uuid.uuid16 == TDH9_SERVICE) {
+            ble_svc_start = p->search_res.start_handle;
+            ble_svc_end = p->search_res.end_handle;
+        }
+        break;
+    case ESP_GATTC_SEARCH_CMPL_EVT: {
+        if (!ble_ours(p->search_cmpl.conn_id)) {
+            break;
+        }
+        if (!ble_svc_start) {
+            gattc_fail("the radio has no 0xAF00 service: is it a TD-H9?");
+            break;
+        }
+        esp_gattc_char_elem_t el;
+        esp_bt_uuid_t u = {};
+        u.len = ESP_UUID_LEN_16;
+        for (uint16_t want : {TDH9_TX, TDH9_RX}) {
+            uint16_t count = 1;
+            u.uuid.uuid16 = want;
+            if (esp_ble_gattc_get_char_by_uuid(gattc_if, ble_conn, ble_svc_start, ble_svc_end, u, &el, &count) ==
+                    ESP_GATT_OK &&
+                count > 0) {
+                (want == TDH9_TX ? ble_tx : ble_rx) = el.char_handle;
+            }
+        }
+        if (!ble_tx || !ble_rx) {
+            gattc_fail("the radio's 0xAF00 service is missing 0xAF01 or 0xAF02");
+            break;
+        }
+        esp_ble_gattc_register_for_notify(gattc_if, ble_target.raw(), ble_rx);
+        break;
+    }
+    case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
+        if (!ble_active || ble_conn == NO_CONN || p->reg_for_notify.handle != ble_rx) {
+            break;
+        }
+        esp_gattc_descr_elem_t d;
+        uint16_t count = 1;
+        esp_bt_uuid_t u = {};
+        u.len = ESP_UUID_LEN_16;
+        u.uuid.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG;
+        if (p->reg_for_notify.status != ESP_GATT_OK ||
+            esp_ble_gattc_get_descr_by_char_handle(gattc_if, ble_conn, ble_rx, u, &d, &count) != ESP_GATT_OK ||
+            count == 0) {
+            gattc_fail("couldn't subscribe to the radio's 0xAF02");
+            break;
+        }
+        static uint8_t notify_on[2] = {0x01, 0x00};
+        esp_ble_gattc_write_char_descr(gattc_if, ble_conn, d.handle, sizeof(notify_on), notify_on,
+                                       ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+        break;
+    }
+    case ESP_GATTC_WRITE_DESCR_EVT:
+        if (!ble_ours(p->write.conn_id)) {
+            break;
+        }
+        if (p->write.status != ESP_GATT_OK) {
+            gattc_fail("the radio refused the subscription to 0xAF02");
+            break;
+        }
+        ESP_LOGI(TAG, "BLE link ready, MTU %u", (unsigned)ble_mtu);
+        congested = false;
+        ble_up = true;
+        xEventGroupSetBits(events, EV_OPEN | EV_UNCONGESTED);
+        break;
+    case ESP_GATTC_NOTIFY_EVT:
+        if (ble_ours(p->notify.conn_id) && p->notify.handle == ble_rx) {
+            size_t sent = xStreamBufferSend(from_radio, p->notify.value, p->notify.value_len, 0);
+            if (sent < p->notify.value_len) {
+                ESP_LOGW(TAG, "dropped %u bytes from the radio", (unsigned)(p->notify.value_len - sent));
+            }
+        }
+        break;
+    case ESP_GATTC_WRITE_CHAR_EVT:
+        if (ble_ours(p->write.conn_id) && p->write.status != ESP_GATT_OK) {
+            ESP_LOGW(TAG, "a write to the radio failed, status 0x%x", p->write.status);
+        }
+        break;
+    case ESP_GATTC_CONGEST_EVT:
+        if (ble_ours(p->congest.conn_id)) {
+            congested = p->congest.congested;
+            if (p->congest.congested) {
+                xEventGroupClearBits(events, EV_UNCONGESTED);
+            } else {
+                xEventGroupSetBits(events, EV_UNCONGESTED);
+            }
+        }
+        break;
+    case ESP_GATTC_DISCONNECT_EVT:
+        // Every GATT app hears about every link: only the radio's matters.
+        // Before the link opened, the failed open says it instead.
+        if (ble_active && Addr::of(p->disconnect.remote_bda) == ble_target && ble_conn != NO_CONN) {
+            ESP_LOGI(TAG, "BLE link closed, reason 0x%x", p->disconnect.reason);
+            ble_up = false;
+            ble_conn = NO_CONN;
+            xEventGroupSetBits(events, EV_CLOSED | EV_FAILED | EV_UNCONGESTED);
+        }
+        break;
+    case ESP_GATTC_CANCEL_OPEN_EVT:
+        if (ble_active) {
+            xEventGroupSetBits(events, EV_FAILED);
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+// Ends an attempt or a link, and waits for it to end.
+void ble_close()
+{
+    if (!ble_active) {
+        return;
+    }
+    if (ble_conn != NO_CONN) {
+        ESP_LOGI(TAG, "closing the link");
+        esp_ble_gap_disconnect(ble_target.raw());
+        xEventGroupWaitBits(events, EV_CLOSED, pdFALSE, pdFALSE, close_timeout);
+    } else {
+        esp_ble_gattc_cancel_open_params_t c = {};
+        c.gattc_if = gattc_if;
+        memcpy(c.remote_bda, ble_target.b, sizeof(c.remote_bda));
+        xEventGroupClearBits(events, EV_FAILED);
+        if (esp_ble_gattc_cancel_open(&c) == ESP_OK) {
+            xEventGroupWaitBits(events, EV_FAILED, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
+        }
+    }
+    ble_up = false;
+    ble_conn = NO_CONN;
+    ble_active = false;
+}
+
+enum class BleOpen : uint8_t { opened, waited, failed, interrupted };
+
+// Connects to a TD-H9 and subscribes. A direct connect waits for the radio
+// to advertise, up to 30 s; a request arriving meanwhile ends the attempt,
+// and stays in the queue for the task.
+BleOpen ble_connect(const Record &r)
+{
+    if (gattc_if == ESP_GATT_IF_NONE) {
+        return BleOpen::failed;
+    }
+    xEventGroupClearBits(events, EV_OPEN | EV_CLOSED | EV_FAILED);
+    xStreamBufferReset(from_radio);
+    ble_target = r.addr;
+    ble_conn = NO_CONN;
+    ble_mtu = 23;
+    ble_active = true;
+    TickType_t start = xTaskGetTickCount();
+    Addr a = r.addr;
+    if (esp_ble_gattc_open(gattc_if, a.raw(), static_cast<esp_ble_addr_type_t>(r.addr_type), true) != ESP_OK) {
+        ble_active = false;
+        return BleOpen::failed;
+    }
+    for (;;) {
+        EventBits_t bits =
+            xEventGroupWaitBits(events, EV_OPEN | EV_FAILED | EV_CLOSED, pdFALSE, pdFALSE, pdMS_TO_TICKS(100));
+        if ((bits & EV_OPEN) && !(bits & EV_CLOSED)) {
+            return BleOpen::opened;
+        }
+        if (bits & (EV_FAILED | EV_CLOSED)) {
+            if (ble_conn != NO_CONN) {
+                ble_close(); // set up went wrong on an open link
+            } else {
+                ble_active = false; // the open failed: nothing to close
+            }
+            return xTaskGetTickCount() - start >= ble_waited ? BleOpen::waited : BleOpen::failed;
+        }
+        Request q;
+        if (xQueuePeek(requests, &q, 0) == pdTRUE) {
+            ble_close(); // a search or a scan gets the radio to itself
+            return BleOpen::interrupted;
+        }
+    }
+}
+
+// Writes one whole frame, FENDs included: the TD-H9 doesn't put a frame
+// back together across writes.
+bool ble_write(const uint8_t *data, size_t len)
+{
+    if (!ble_up) {
+        return false;
+    }
+    size_t most = ble_mtu - 3;
+    if (len > most) {
+        ESP_LOGW(TAG, "a %u-byte frame doesn't fit in one write to the radio (%u at most): dropped",
+                 (unsigned)len, (unsigned)most);
+        return false;
+    }
+    if (congested && !(xEventGroupWaitBits(events, EV_UNCONGESTED, pdFALSE, pdFALSE, write_timeout) &
+                       EV_UNCONGESTED)) {
+        ESP_LOGW(TAG, "write: still congested");
+        return false;
+    }
+    return esp_ble_gattc_write_char(gattc_if, ble_conn, ble_tx, len, const_cast<uint8_t *>(data),
+                                    ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE) == ESP_OK;
+}
+
 // ---- The link ----
 
 void drop_link()
 {
+    if (ble_active) {
+        ble_close();
+        return;
+    }
     if (spp_handle != 0) {
         ESP_LOGI(TAG, "closing the link");
         esp_spp_disconnect(spp_handle);
@@ -801,7 +1158,7 @@ void writer_task(void *)
         wire[0] = kiss::FEND;
         memcpy(wire + 1, frame, len);
         wire[len + 1] = kiss::FEND;
-        if (!spp_write_all(wire, len + 2)) {
+        if (!(ble_up ? ble_write(wire, len + 2) : spp_write_all(wire, len + 2))) {
             counters.dropped++;
             continue;
         }
@@ -842,6 +1199,8 @@ struct Found {
     uint32_t cod = 0;
     int8_t rssi = 0;
     bool has_rssi = false;
+    bool ble = false; // found by a BLE scan
+    uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC;
 };
 
 // Asks a device its name. Empty if it doesn't answer.
@@ -884,13 +1243,25 @@ uint8_t inquiry_len(TickType_t left)
 
 enum class SearchResult : uint8_t { found, none, cancelled };
 
-// The button's search: the first TH-D74 or TH-D75 in pairing mode, within
-// the deadline. Radios report a phone's Class of Device, so it goes by
-// name; one with the right class but no name in its inquiry response is
-// asked for its name.
+// The button's search: the first TH-D74 or TH-D75 in pairing mode, or
+// the first TD-H9, within the deadline. Kenwood radios report a phone's
+// Class of Device, so it goes by name; one with the right class but no
+// name in its inquiry response is asked for its name. A TD-H9 advertises
+// over BLE whenever nothing is connected to it, so a BLE scan runs
+// alongside the inquiries.
+SearchResult search_both(TickType_t deadline, Found &out);
+
 SearchResult search(TickType_t deadline, Found &out)
 {
     xQueueReset(gap_events);
+    ble_scan_start(pdTICKS_TO_MS(deadline - xTaskGetTickCount()) / 1000 + 1);
+    SearchResult res = search_both(deadline, out);
+    ble_scan_stop();
+    return res;
+}
+
+SearchResult search_both(TickType_t deadline, Found &out)
+{
     std::vector<Addr> unnamed;
     std::vector<Addr> asked;
     while (xTaskGetTickCount() < deadline) {
@@ -915,8 +1286,17 @@ SearchResult search(TickType_t deadline, Found &out)
             }
             if (e.type == GapEvent::disc_stopped) {
                 stopped = true;
+            } else if (e.type == GapEvent::ble_found) {
+                if (model_for_name(e.name, true)) {
+                    stop_discovery();
+                    out.addr = e.addr;
+                    out.name = e.name;
+                    out.ble = true;
+                    out.addr_type = e.addr_type;
+                    return SearchResult::found;
+                }
             } else if (e.type == GapEvent::found) {
-                if (e.has_name && model_for_name(e.name)) {
+                if (e.has_name && model_for_name(e.name, false)) {
                     stop_discovery();
                     out.addr = e.addr;
                     out.name = e.name;
@@ -936,7 +1316,7 @@ SearchResult search(TickType_t deadline, Found &out)
             asked.push_back(a);
             std::string name = read_name(a);
             ESP_LOGI(TAG, "%s is called \"%s\"", a.str().c_str(), name.c_str());
-            if (model_for_name(name)) {
+            if (model_for_name(name, false)) {
                 out.addr = a;
                 out.name = name;
                 return SearchResult::found;
@@ -957,8 +1337,8 @@ cJSON *device_json(const Found &f, const Record &r)
     if (f.has_rssi) {
         cJSON_AddNumberToObject(d, "rssi", f.rssi);
     }
-    cJSON_AddBoolToObject(d, "paired", bonded(f.addr));
-    if (const Model *m = model_for_name(f.name)) {
+    cJSON_AddBoolToObject(d, "paired", !f.ble && bonded(f.addr));
+    if (const Model *m = model_for_name(f.name, f.ble)) {
         cJSON_AddStringToObject(d, "known_tnc", m->radio);
         cJSON_AddStringToObject(d, "model", m->name);
     }
@@ -968,9 +1348,25 @@ cJSON *device_json(const Found &f, const Record &r)
     return d;
 }
 
+// Addresses and their types from LE scans, for tnc.update, which is given
+// only an address. Only the task touches it.
+std::vector<std::pair<Addr, uint8_t>> le_types;
+
+uint8_t le_type(const Addr &a)
+{
+    for (auto &t : le_types) {
+        if (t.first == a) {
+            return t.second;
+        }
+    }
+    return BLE_ADDR_TYPE_PUBLIC;
+}
+
 // bluetooth.scan: everything that answers, with found events as they come.
+// With req.flag, over BLE: every device that advertises a name.
 void do_scan(const Request &req)
 {
+    bool le = req.flag;
     busy_now = true;
     TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(req.seconds * 1000);
     // A button pairing waiting behind this scan was refused: its LED state
@@ -983,23 +1379,32 @@ void do_scan(const Request &req)
     };
     std::vector<Found> found;
     xQueueReset(gap_events);
-    if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
-                                   inquiry_len(pdMS_TO_TICKS(req.seconds * 1000)), 0) != ESP_OK) {
+    if (le) {
+        ble_scan_start(req.seconds);
+    } else if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
+                                          inquiry_len(pdMS_TO_TICKS(req.seconds * 1000)), 0) != ESP_OK) {
         busy_now = false;
         control::reply_error(req.p, "failed", "couldn't start the scan");
         return;
     }
+    auto stop = [le]() {
+        if (le) {
+            ble_scan_stop();
+        } else {
+            stop_discovery();
+        }
+    };
     Record r = record();
     bool stopped = false;
     while (!stopped) {
         if (xTaskGetTickCount() > deadline + pdMS_TO_TICKS(2000)) {
-            stop_discovery();
+            stop();
             break;
         }
         Request q;
         while (xQueueReceive(requests, &q, 0) == pdTRUE) {
             if (q.type == ReqType::scan_stop && q.ref == req.p.id) {
-                stop_discovery();
+                stop();
                 stopped = true;
                 control::reply_ok(q.p, cJSON_CreateObject());
             } else if (q.type == ReqType::scan_stop) {
@@ -1012,13 +1417,24 @@ void do_scan(const Request &req)
         if (stopped || xQueueReceive(gap_events, &e, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }
-        if (e.type == GapEvent::disc_stopped) {
+        if (e.type == (le ? GapEvent::ble_scan_done : GapEvent::disc_stopped)) {
             stopped = true;
-        } else if (e.type == GapEvent::found) {
+        } else if (e.type == (le ? GapEvent::ble_found : GapEvent::found)) {
+            if (le) {
+                auto t = std::find_if(le_types.begin(), le_types.end(), [&](auto &p) { return p.first == e.addr; });
+                if (t == le_types.end()) {
+                    if (le_types.size() >= 64) {
+                        le_types.erase(le_types.begin());
+                    }
+                    le_types.emplace_back(e.addr, e.addr_type);
+                } else {
+                    t->second = e.addr_type;
+                }
+            }
             auto it = std::find_if(found.begin(), found.end(), [&](const Found &f) { return f.addr == e.addr; });
             bool news = false;
             if (it == found.end()) {
-                found.push_back(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi});
+                found.push_back(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type});
                 it = found.end() - 1;
                 news = true;
             } else if (e.has_name && it->name.empty()) {
@@ -1036,7 +1452,7 @@ void do_scan(const Request &req)
     }
     // Known radios first
     std::stable_sort(found.begin(), found.end(), [](const Found &a, const Found &b) {
-        return model_for_name(a.name) && !model_for_name(b.name);
+        return model_for_name(a.name, a.ble) && !model_for_name(b.name, b.ble);
     });
     cJSON *list = cJSON_CreateArray();
     for (const Found &f : found) {
@@ -1062,9 +1478,33 @@ void pairing_event(const control::Pending &p, const char *step, const char *key 
     control::send_event(p.conn, e);
 }
 
+// The button found a TD-H9: it becomes the radio. It isn't paired: it
+// takes a connection from anything, so the bridge only remembers its
+// address. A Classic radio paired before is forgotten.
+void select_ble(const Found &target)
+{
+    Record old = record();
+    Record r;
+    r.present = true;
+    r.addr = target.addr;
+    r.addr_type = target.addr_type;
+    r.name = target.name;
+    r.model = model_for_name(target.name, true)->name;
+    if (save_record(r)) {
+        if (old.present && !old.ble() && bonded(old.addr)) {
+            esp_bt_gap_remove_bond_device(old.addr.raw());
+        }
+        ESP_LOGI(TAG, "selected %s (%s), model %s", r.name.c_str(), r.addr.str().c_str(), r.model.c_str());
+        ui::post(ui::Event::pairing_succeeded);
+    } else {
+        ui::post(ui::Event::pairing_failed);
+    }
+}
+
 // Pairs with a radio and makes it the radio, keeping the old one until the
 // new one has paired. From the button (search, confirm at once) or from
-// bluetooth.pair (a given address, the management app confirms).
+// bluetooth.pair (a given address, the management app confirms). The
+// button selects a TD-H9 instead if it finds one first.
 void do_pair(const Request &req)
 {
     bool button = req.type == ReqType::button_pair;
@@ -1079,16 +1519,22 @@ void do_pair(const Request &req)
     const char *failure = nullptr;
     bool cancelled = false;
     if (button) {
-        ESP_LOGI(TAG, "pairing: searching for a TH-D74 or TH-D75 in pairing mode");
+        ESP_LOGI(TAG, "pairing: searching for a TH-D74 or TH-D75 in pairing mode, or a TD-H9");
         switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target)) {
         case SearchResult::found:
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
+            if (target.ble) {
+                select_ble(target);
+                pairing_now = false;
+                busy_now = false;
+                return;
+            }
             break;
         case SearchResult::cancelled:
             cancelled = true;
             break;
         case SearchResult::none:
-            failure = "no TH-D74 or TH-D75 in pairing mode was found";
+            failure = "no TH-D74 or TH-D75 in pairing mode, and no TD-H9, was found";
             break;
         }
     } else {
@@ -1196,7 +1642,7 @@ void do_pair(const Request &req)
         r.present = true;
         r.addr = target.addr;
         r.name = target.name;
-        const Model *m = model_for_name(target.name);
+        const Model *m = model_for_name(target.name, false);
         r.model = m ? m->name : (old.present && old.addr == target.addr ? old.model : "generic");
         if (save_record(r)) {
             if (old.present && old.addr != r.addr) {
@@ -1269,6 +1715,9 @@ void do_update(const Request &req)
             next.present = true;
             next.name.clear();
         }
+    }
+    if (next.ble()) {
+        next.addr_type = le_type(next.addr);
     }
     bool changed = next.present != r.present || next.addr != r.addr || next.model != r.model;
     bool link_up = port_state == PortState::connected;
@@ -1357,16 +1806,21 @@ bool started(const char *what, esp_err_t err)
 void radio_task(void *)
 {
     xEventGroupWaitBits(events, EV_SPP_INIT, pdFALSE, pdFALSE, portMAX_DELAY);
+    if (!(xEventGroupWaitBits(events, EV_GATTC_REG, pdFALSE, pdFALSE, pdMS_TO_TICKS(5000)) & EV_GATTC_REG)) {
+        ESP_LOGE(TAG, "the GATT client didn't register: a TD-H9 can't connect");
+    }
     for (;;) {
         restart = false;
         xQueueReset(gap_events); // only pairing and scans read these
         Record r = record();
         if (!r.present) {
-            set_port(PortState::unpaired, "no radio paired: double press the button to pair one");
+            set_port(PortState::unpaired,
+                     "no radio: double press the button to pair a TH-D74 or TH-D75, or select a TD-H9");
             serve_until(portMAX_DELAY);
             continue;
         }
-        if (!bonded(r.addr)) {
+        const Model &m = model_of(r.model);
+        if (!m.ble && !bonded(r.addr)) {
             // Bluedroid removes a bond when the radio refuses its key: the
             // radio has forgotten this device. Retrying can't help.
             set_port(PortState::unpaired, r.addr.str() +
@@ -1381,10 +1835,32 @@ void radio_task(void *)
             continue;
         }
         set_port(PortState::connecting, r.addr.str());
+        if (m.ble) {
+            // A TD-H9: the connect waits for it to advertise, so a radio
+            // that's off or away is caught within a second of coming back
+            // (spikes/atom-lite-ble-tnc).
+            BleOpen res = ble_connect(r);
+            if (res == BleOpen::opened) {
+                counters.tnc_connects++;
+                set_port(PortState::connected);
+                bridge();
+                ble_close();
+                continue;
+            }
+            if (res == BleOpen::interrupted) {
+                serve_now();
+                continue;
+            }
+            if (res == BleOpen::waited || restart) {
+                continue;
+            }
+            set_port(PortState::backoff, "retrying in 15 s");
+            serve_until(retry_delay);
+            continue;
+        }
         if (connect_to(r.addr, connect_timeout)) {
             counters.tnc_connects++;
-            const Model *m = find_model(r.model);
-            if (kiss_init(m ? *m : models[2])) {
+            if (kiss_init(m)) {
                 set_port(PortState::connected);
                 bridge();
             } else {
@@ -1433,6 +1909,12 @@ bool start()
     esp_bt_gap_set_device_name(settings::public_name().c_str());
     // The device only connects out; nothing connects to it over Classic.
     esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+
+    if (!started("the GATT client", esp_ble_gattc_register_callback(gattc_cb)) ||
+        !started("the GATT client", esp_ble_gattc_app_register(GATTC_APP_ID))) {
+        set_port(PortState::idle, "Bluetooth didn't start");
+        return false;
+    }
 
     esp_spp_cfg_t cfg = {};
     cfg.mode = ESP_SPP_MODE_CB;
@@ -1505,7 +1987,7 @@ void cancel_pairing()
     post(r);
 }
 
-void scan(const control::Pending &p, uint32_t seconds)
+void scan(const control::Pending &p, uint32_t seconds, bool le)
 {
     if (busy_now) {
         control::reply_error(p, "busy", "a Bluetooth scan or pairing is running; one runs at a time");
@@ -1513,6 +1995,7 @@ void scan(const control::Pending &p, uint32_t seconds)
     }
     Request r{ReqType::scan, p};
     r.seconds = seconds;
+    r.flag = le;
     post(r);
 }
 
@@ -1570,7 +2053,7 @@ void unpair(const control::Pending &p, const std::string &address)
     post(r);
 }
 
-void update(const control::Pending &p, const std::string &model, const std::string &address,
+void update(const control::Pending &p, const std::string &model, const std::string &address, bool address_ble,
             bool non_disruptive)
 {
     Request r{ReqType::update, p};
@@ -1581,10 +2064,24 @@ void update(const control::Pending &p, const std::string &model, const std::stri
         }
         strlcpy(r.model, model.c_str(), sizeof(r.model));
     }
+    // The model decides the transport: spp for a Classic radio, ble for a
+    // TD-H9. Moving between them needs the new transport's address.
+    Record cur = record();
+    bool ble = model.empty() ? cur.ble() : model_of(model).ble;
+    const char *key = ble ? "ble.address" : "spp.address";
+    if (!address.empty() && address_ble != ble) {
+        control::reply_error(p, "bad_request", std::string("model ") + (model.empty() ? cur.model : model) +
+                                                   " takes " + key);
+        return;
+    }
+    if (address.empty() && cur.present && ble != cur.ble()) {
+        control::reply_error(p, "bad_request", std::string("changing to model ") + model + " needs " + key);
+        return;
+    }
     if (!address.empty()) {
         Addr a;
         if (!Addr::parse(address, a)) {
-            control::reply_error(p, "bad_request", "spp.address must look like 40:79:12:E4:95:9D");
+            control::reply_error(p, "bad_request", std::string(key) + " must look like 40:79:12:E4:95:9D");
             return;
         }
         strlcpy(r.addr, a.str().c_str(), sizeof(r.addr));
@@ -1608,7 +2105,8 @@ cJSON *status_json()
         std::lock_guard<std::mutex> g(state_lock);
         detail = port_detail;
     }
-    bool paired = r.present && bonded(r.addr);
+    bool ble = r.ble();
+    bool paired = r.present && !ble && bonded(r.addr);
     const uint8_t *own = esp_bt_dev_get_address();
     char mac[18] = "";
     if (own) {
@@ -1638,7 +2136,12 @@ cJSON *status_json()
     cJSON_AddStringToObject(t, "id", "radio");
     cJSON_AddStringToObject(t, "name", r.name.empty() ? "radio" : r.name.c_str());
     cJSON_AddStringToObject(t, "model", r.model.c_str());
-    if (r.present) {
+    if (r.present && ble) {
+        // Not paired: a BLE TNC takes any central, like a phone.
+        cJSON *b = cJSON_AddObjectToObject(t, "ble");
+        cJSON_AddStringToObject(b, "address", r.addr.str().c_str());
+        cJSON_AddStringToObject(b, "adapter", "builtin");
+    } else if (r.present) {
         cJSON *spp = cJSON_AddObjectToObject(t, "spp");
         cJSON_AddStringToObject(spp, "address", r.addr.str().c_str());
         cJSON_AddStringToObject(spp, "adapter", "builtin");
@@ -1661,7 +2164,7 @@ cJSON *status_json()
 
     cJSON *rp = cJSON_CreateObject();
     cJSON_AddStringToObject(rp, "id", "radio");
-    cJSON_AddStringToObject(rp, "type", "spp-client");
+    cJSON_AddStringToObject(rp, "type", ble ? "ble-client" : "spp-client");
     cJSON_AddStringToObject(rp, "role", "tnc");
     cJSON_AddStringToObject(rp, "state", port_state_name(port_state));
     std::string d = detail;
@@ -1703,7 +2206,7 @@ cJSON *models_json()
                             "Kenwood TH-D74/D75: switched to KISS mode at every connect, on the band its TNC is set to");
     cJSON *radios = cJSON_AddArrayToObject(d7x, "radios");
     for (const Model &m : models) {
-        if (!m.radio) {
+        if (!m.radio || m.ble) {
             continue;
         }
         cJSON *radio = cJSON_CreateObject();
@@ -1718,12 +2221,105 @@ cJSON *models_json()
         cJSON_AddItemToArray(radios, radio);
     }
     cJSON_AddItemToArray(list, d7x);
+
+    cJSON *h9 = cJSON_CreateObject();
+    cJSON *h9n = cJSON_AddArrayToObject(h9, "names");
+    cJSON_AddItemToArray(h9n, cJSON_CreateString("td-h9"));
+    cJSON_AddStringToObject(h9, "summary",
+                            "TIDRADIO TD-H9: KISS over BLE on TIDRADIO's own GATT service (af00) instead of the "
+                            "BLE KISS API's; otherwise like generic");
+    cJSON *h9r = cJSON_AddArrayToObject(h9, "radios");
+    for (const Model &m : models) {
+        if (!m.radio || !m.ble) {
+            continue;
+        }
+        cJSON *radio = cJSON_CreateObject();
+        cJSON_AddStringToObject(radio, "name", m.radio);
+        cJSON_AddStringToObject(radio, "model", m.name);
+        cJSON *b = cJSON_AddObjectToObject(radio, "ble");
+        cJSON_AddStringToObject(b, "name_prefix", m.name_prefix);
+        cJSON_AddStringToObject(b, "setup",
+                                "On the radio, set Menu > Bluetooth > BT On/Off to On and BT Mode to Receiver, "
+                                "Menu > APRS > APRS Switch to On (with it off, the radio transmits but passes "
+                                "nothing it receives to the bridge), and the APRS channel's bandwidth to wide "
+                                "(on narrow it decodes nothing). Disconnect any phone app from it: while "
+                                "something is connected, it doesn't advertise.");
+        cJSON_AddItemToArray(h9r, radio);
+    }
+    cJSON_AddItemToArray(list, h9);
     return list;
 }
 
 void name_changed()
 {
     esp_bt_gap_set_device_name(settings::public_name().c_str());
+}
+
+void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
+{
+    if (!gap_events) {
+        return;
+    }
+    GapEvent e;
+    switch (event) {
+    case ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT:
+        if (uint32_t seconds = ble_scan_seconds.exchange(0)) {
+            esp_ble_gap_start_scanning(seconds);
+        }
+        return;
+    case ESP_GAP_BLE_SCAN_START_COMPLETE_EVT:
+        if (param->scan_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
+            return;
+        }
+        ESP_LOGW(TAG, "BLE scan didn't start, status %d", param->scan_start_cmpl.status);
+        e.type = GapEvent::ble_scan_done;
+        break;
+    case ESP_GAP_BLE_SCAN_RESULT_EVT: {
+        auto &r = param->scan_rst;
+        if (r.search_evt == ESP_GAP_SEARCH_INQ_CMPL_EVT) {
+            e.type = GapEvent::ble_scan_done;
+            break;
+        }
+        if (r.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) {
+            return;
+        }
+        // Only named devices, each once: a scan lists what someone could
+        // pick, and a TD-H9 is known by its name. A known radio is passed on
+        // every time (a TD-H9 advertises about five times a second), as the
+        // search can miss one while it waits for something else.
+        std::string name = adv_name(r);
+        if (name.empty()) {
+            return;
+        }
+        e.addr = Addr::of(r.bda);
+        if (!model_for_name(name, true)) {
+            std::lock_guard<std::mutex> g(scan_lock);
+            if (std::find(scan_seen.begin(), scan_seen.end(), e.addr) != scan_seen.end()) {
+                return;
+            }
+            scan_seen.push_back(e.addr);
+        }
+        e.type = GapEvent::ble_found;
+        e.addr_type = r.ble_addr_type;
+        copy_name(e.name, reinterpret_cast<const uint8_t *>(name.data()), name.size());
+        e.has_name = true;
+        e.rssi = r.rssi;
+        e.has_rssi = true;
+        break;
+    }
+    case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
+        if (ble_active && Addr::of(param->update_conn_params.bda) == ble_target) {
+            ESP_LOGI(TAG, "BLE link: interval %.2f ms, latency %u, timeout %u ms",
+                     param->update_conn_params.conn_int * 1.25, param->update_conn_params.latency,
+                     param->update_conn_params.timeout * 10);
+        }
+        return;
+    default:
+        return;
+    }
+    if (xQueueSend(gap_events, &e, 0) != pdTRUE) {
+        ESP_LOGW(TAG, "GAP event queue full");
+    }
 }
 
 void remove_all_bonds()

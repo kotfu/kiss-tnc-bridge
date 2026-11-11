@@ -1,8 +1,9 @@
 # kiss-tnc-bridge firmware
 
 Firmware for the M5Stack ATOM Lite (and the Core2, in Phase G): a KISS
-bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic to phones over
-BLE, managed with the [control API](../docs/control-api.md). The plan is
+bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic, or a
+TIDRADIO TD-H9 over BLE, to phones over BLE, managed with the
+[control API](../docs/control-api.md). The plan is
 Phase C of the [roadmap](../docs/roadmap.md#phase-c-atom-lite-firmware-and-web-installer);
 the button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md).
 
@@ -19,6 +20,9 @@ Phase C, milestone 4 of 4:
 | 2 | The radio: SPP to the TH-D74/D75, KISS init, reconnect, pairing with the button and over USB | Done |
 | 3 | The BLE KISS service and bridging | Done |
 | 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | Done |
+
+Firmware 1.1 adds the TIDRADIO TD-H9 (roadmap, Firmware 1.1), as a GATT
+client to its KISS service.
 
 The ATOM bridges the radio to up to two phones. BLE management (Noise
 authorization) is Phase E and updates over BLE are Phase F; until then
@@ -84,9 +88,11 @@ tools/ktbdev.py status
 tools/ktbdev.py watch                # state and frame events, decoded
 tools/ktbdev.py watch activity       # bytes per port and session
 tools/ktbdev.py scan 10              # bluetooth.scan
+tools/ktbdev.py scan --le 10         # over BLE, for a TD-H9
 tools/ktbdev.py pair                 # bluetooth.pair, asking you to compare the number
 tools/ktbdev.py port disconnect      # and connect, release
 tools/ktbdev.py tnc model=th-d74     # tnc.update
+tools/ktbdev.py tnc model=td-h9 ble=FB:5D:C0:5E:D5:7E
 tools/ktbdev.py monitor              # the log
 ```
 
@@ -107,6 +113,14 @@ it had.
 Over USB, `ktbdev.py pair` does the same for an address, and asks you to
 compare the number first.
 
+The same double press selects a TIDRADIO TD-H9: the scan looks for one
+over BLE too, and the first device whose advertised name starts with
+`TD-H9` becomes the radio. It isn't paired; the ATOM keeps its address and
+connects to it as a GATT client (see
+[td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md) for the radio's settings).
+While it's off or away, the ATOM waits in a direct connect for it to
+advertise, and is ready within about a second of it coming back. Each
+frame goes to the radio in one write, which it needs.
 Opening the port must not reboot the device. The ATOM's reset circuit
 pulls EN low while RTS is asserted without DTR, so a management app has to
 drop RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
@@ -117,7 +131,8 @@ opens with DTR asserted and drops it after.
 KISS TNC apps find the ATOM by the BLE KISS service, which its advertisement
 carries; the scan response carries the management service's UUID and the
 first 11 bytes of `public_name`. Apps that connect read the whole name.
-The ATOM takes two BLE connections. A phone that subscribes to KISS
+The ATOM takes two phones. The controller allows four BLE links: the
+others are a TD-H9 and, from Phase E, a management app. A phone that subscribes to KISS
 notifications is a session; its writes are rebuilt into whole frames
 before they go to the radio, and frames from the radio go to every session
 whole. Phones aren't bonded: one that asks for encryption gets it without

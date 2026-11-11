@@ -180,12 +180,13 @@ def main():
     sub.add_parser("models", help="tnc.models")
     p = sub.add_parser("scan", help="bluetooth.scan for SECONDS (default 10)")
     p.add_argument("seconds", nargs="?", type=int, default=10)
+    p.add_argument("--le", action="store_true", help="over BLE, for a TD-H9")
     p = sub.add_parser("pair", help="bluetooth.pair ADDRESS (default: the radio's), confirming the number")
     p.add_argument("address", nargs="?")
     p.add_argument("--yes", action="store_true", help="accept the number without asking")
     p = sub.add_parser("unpair", help="bluetooth.unpair ADDRESS (default: the radio)")
     p.add_argument("address", nargs="?")
-    p = sub.add_parser("tnc", help="tnc.update model=th-d75 address=40:79:12:E4:95:9D")
+    p = sub.add_parser("tnc", help="tnc.update model=th-d75 address=40:79:12:E4:95:9D, or model=td-h9 ble=ADDRESS")
     p.add_argument("pairs", nargs="+")
     p.add_argument("--non-disruptive", action="store_true")
     p = sub.add_parser("port", help="port.connect, port.disconnect or port.release for the radio")
@@ -250,7 +251,8 @@ def main():
     if w == "models":
         return show(d.request("tnc.models"))
     if w == "scan":
-        return show(d.request("bluetooth.scan", timeout=args.seconds + 10, seconds=args.seconds))
+        params = {"transport": "le"} if args.le else {}
+        return show(d.request("bluetooth.scan", timeout=args.seconds + 10, seconds=args.seconds, **params))
     if w == "pair":
         return pair(d, args.address, args.yes)
     if w == "unpair":
@@ -263,8 +265,10 @@ def main():
             definition["model"] = kv.pop("model")
         if "address" in kv:
             definition["spp"] = {"address": kv.pop("address")}
+        if "ble" in kv:
+            definition["ble"] = {"address": kv.pop("ble")}
         if kv:
-            sys.exit("tnc takes model= and address=")
+            sys.exit("tnc takes model=, and address= (Classic) or ble= (TD-H9)")
         return show(d.request("tnc.update", timeout=10, tnc="radio", definition=definition,
                               non_disruptive=args.non_disruptive))
     if w == "port":

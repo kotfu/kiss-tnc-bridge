@@ -216,7 +216,7 @@ as they're found.
 | Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
 | Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
 | Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. A direct connect scans at Bluedroid's fast rate, a 30 ms window every 60 ms; on an ATOM Lite that took the draw from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). `esp_ble_gattc_enh_open` takes a scan interval and window, so a slower rate (1.28 s is Bluedroid's slow one) is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within 1 s of the TD-H9 turning on | Bluedroid's fast rate |
-| BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting | The TD-H9's choice |
+| BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting. The firmware drew mostly 60–70 mA bridging a TD-H9 to one phone, with bursts of several seconds up to 100 mA | The TD-H9's choice |
 | LED or screen brightness | LED or backlight current | Visibility | — |
 | Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
 
@@ -585,18 +585,21 @@ radio with a standard BLE KISS TNC gains little from a bridge.
       in one; a pending connect catches the radio within a second of it
       turning on; about 50 mA connected. See
       [spikes/atom-lite-ble-tnc](../spikes/atom-lite-ble-tnc/README.md).
-- [ ] Spike: heap with the GATT client, a TD-H9 and two phones.
-- [ ] Four BLE connections: the radio, two KISS TNC apps, and a
+- [x] Heap with the GATT client, a TD-H9 and phones: measured in the
+      firmware instead of a spike, with `device.info`'s `heap`. 112 KB
+      free with a TD-H9 and one phone, never below 111.6 KB.
+- [x] Four BLE connections: the radio, two KISS TNC apps, and a
       management app for Phase E. The KISS TNC app limit stays 2, apart
       from the controller's.
-- [ ] A double press selects the first TD-H9 it finds, by name, during the
+- [x] A double press selects the first TD-H9 it finds, by name, during the
       60 s search, as well as looking for a TH-D74 or TH-D75 to pair. The
       bridge remembers it by its Bluetooth address. The docs say not to do
       it with more than one TD-H9 nearby that has nothing connected to it.
-- [ ] `bluetooth.scan` with `"transport": "le"`, and `tnc.update` with
+- [x] `bluetooth.scan` with `"transport": "le"`, and `tnc.update` with
       `model: "td-h9"`.
-- [ ] The radio's link apart from its task: SPP and the GATT client
-      behind one interface, and the TH-D75 tested again in full.
+- [x] SPP and the GATT client side by side in the radio task, which keeps
+      its retries, holds and status for both, and the TH-D75 tested again
+      in full: pairing it after a TD-H9, and bridging.
 - [ ] A word in the vocabulary for selecting a radio, since pairing is
       Bluetooth Classic only.
 

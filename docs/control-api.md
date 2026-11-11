@@ -709,9 +709,9 @@ doesn't read its events loses them rather than slowing the daemon.
 ## Devices
 
 The ATOM Lite and Core2 firmware present themselves in the daemon's terms:
-one fixed bridge, `ktbr0`, with an `spp-client` TNC port, `radio`, to the
-radio's TNC, and a `ble-server` app port, `phones`, serving the BLE KISS
-API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
+one fixed bridge, `ktbr0`, with a TNC port, `radio`, to the radio's TNC
+(`spp-client` for a TH-D74 or TH-D75, `ble-client` for a TIDRADIO TD-H9),
+and a `ble-server` app port, `phones`, serving the BLE KISS API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
 as on the daemon. A management app can tell a device from the daemon by
 `device.info`, which the daemon doesn't answer.
 
@@ -721,9 +721,9 @@ as on the daemon. A management app can tell a device from the daemon by
 |---|---|
 | `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock |
 | `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
-| `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
+| `tnc.update` | Changes the radio's `model`, and its `spp.address` (a Classic model) or `ble.address` (`td-h9`). Moving between the two needs the other's address. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
-| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the management app as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same. `bluetooth.scan` with `"transport": "le"` lists named LE devices; a TD-H9 that something is connected to doesn't advertise, so it isn't listed. Pairing is Classic only: a TD-H9 becomes the radio with `tnc.update` (`model` `td-h9` and its `ble.address`) or a double press, and `bluetooth.unpair` with its address forgets it. The TH-D75's `confirm` step goes to the management app as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
 | `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same. A session is a phone subscribed to the BLE KISS service, `ktbr0/phones/<its address>`; a kicked phone may reconnect at once, as on the daemon |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |
@@ -753,11 +753,12 @@ A device's `status`, trimmed:
               "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
               "rolled_back": "1.2.0"},                  // present when the last update was rolled back
  "protocol": 1,
- "capabilities": ["spp-client", "ble-server", "firmware-update"],
+ "capabilities": ["spp-client", "ble-client", "ble-server", "firmware-update"],
  "max_message": 4096,
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
  "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
  "uptime": 5423,
+ "heap": {"free": 128412, "min": 121860, "largest": 110592},
  "last_reset": "power_on",
  "errors": [{"code": "phones",
              "message": "advertising didn't start: phones can't find the device. Unplug the device and plug it in"}]}
@@ -771,6 +772,10 @@ names are provisional; a Core2 adds `screen` and `battery`, and later
 
 `uptime` is how long the device has been running since it last started,
 in whole seconds.
+
+`heap` is the device's internal RAM in bytes: `free` now, the least
+`min` has been since it started, and the `largest` block that could be
+allocated at once. A `min` falling over days points to a leak.
 
 `last_reset` is why the device last started: `power_on` (which includes a
 reset from the USB serial port's control lines), `restart` (a reboot the

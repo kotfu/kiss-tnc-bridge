@@ -11,6 +11,7 @@
 #include "console.h"
 #include "control_internal.h"
 #include "errors.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_system.h"
@@ -111,12 +112,19 @@ Reply device_info(const cJSON *, const Pending &)
     // firmware-update arrives with updates over BLE (Phase F).
     cJSON *caps = cJSON_AddArrayToObject(o, "capabilities");
     cJSON_AddItemToArray(caps, cJSON_CreateString("spp-client"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("ble-client"));
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble-server"));
     cJSON_AddNumberToObject(o, "max_message", console::max_message);
     cJSON_AddStringToObject(o, "fingerprint", auth::fingerprint().c_str());
     cJSON *bt = cJSON_AddObjectToObject(o, "bluetooth");
     cJSON_AddStringToObject(bt, "address", mac_string(ESP_MAC_BT).c_str());
     cJSON_AddNumberToObject(o, "uptime", static_cast<double>(esp_timer_get_time() / 1000000));
+    multi_heap_info_t heap;
+    heap_caps_get_info(&heap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    cJSON *h = cJSON_AddObjectToObject(o, "heap");
+    cJSON_AddNumberToObject(h, "free", heap.total_free_bytes);
+    cJSON_AddNumberToObject(h, "min", heap.minimum_free_bytes);
+    cJSON_AddNumberToObject(h, "largest", heap.largest_free_block);
     cJSON_AddStringToObject(o, "last_reset", firmware::last_reset());
     cJSON_AddItemToObject(o, "errors", errors::json());
     return Reply::ok(o);

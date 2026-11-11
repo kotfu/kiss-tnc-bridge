@@ -19,7 +19,7 @@ Only what you'd need with no app and no computer:
 | Action | Gesture | What it does |
 |---|---|---|
 | **Wake the LED** | Single press, in dark mode | Lights the LED for `led_wake_seconds` (see [the wake rule](#normal-and-dark-mode)). Only in dark mode, and only while the LED is dark |
-| **Pair a radio** | Double press | Scans for a Kenwood in pairing mode and pairs with it. A new pairing replaces the old one, since the device keeps one radio |
+| **Pair or select a radio** | Double press | Scans for a Kenwood in pairing mode and pairs with it, or for a TIDRADIO TD-H9 and selects it. A new radio replaces the old one, since the device keeps one radio |
 | **Cancel pairing** | Single press, while pairing | Stops pairing and goes back to the radio the device had |
 | **Start authorization mode** | Long press | Lets one new management app be authorized with the authorization code (see [below](#authorization-mode)) |
 | **End authorization mode** | Single press, in authorization mode | Ends it before its time runs out |
@@ -46,6 +46,22 @@ one pairs. If pairing fails, times out, or is cancelled with a single
 press, it goes back to the radio
 it had (or to no radio). So an accidental double press costs only the
 bridging that stops while the device scans, and a single press ends that.
+
+The same scan looks for a TIDRADIO TD-H9 over Bluetooth LE, by its name.
+A TD-H9 isn't paired: it takes a connection from anything, and advertises
+whenever nothing is connected to it, so it has no pairing mode. The first
+one found is **selected**: it becomes the radio, the device remembers its
+Bluetooth address, and a Kenwood paired before is forgotten. Selecting
+shows the same feedback as pairing. A TD-H9 is usually found within a
+second or two, so don't double press with more than one TD-H9 nearby
+that has nothing connected to it: the device takes whichever it hears
+first. (One across the room was found as quickly as one beside the
+device; spikes/atom-lite-ble-tnc.) For the same reason, to pair a
+TH-D74 or TH-D75 in place of a TD-H9, turn the TD-H9's Bluetooth off
+first: the double press drops the TD-H9's link, it starts advertising at
+once, and it would be found before the Kenwood. The TD-H9 needs Bluetooth on, BT Mode
+set to Receiver, APRS Switch on and wide FM (see
+[td-h9-ble-kiss.md](td-h9-ble-kiss.md#setting-up-the-radio)).
 
 Nothing waits on a double press: a single press only wakes the LED or
 cancels pairing, so it doesn't need to wait to see whether a second press
@@ -208,9 +224,9 @@ while the device goes on bridging.
 | **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management app to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no management app | Red, three fast blinks, then a pause | Same | Same | Same |
 | **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
 | **Authorization mode** | Accepting one new management app | Magenta, slow blink | Same | Same | Same |
-| **Pairing** | Scanning for a Kenwood in pairing mode | Blue, fast blink | Same | Same | Same |
+| **Pairing** | Scanning for a Kenwood in pairing mode or a TD-H9 | Blue, fast blink | Same | Same | Same |
 | **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same | Same |
-| **Radio not connected** | A radio is paired, but the link is down: the radio is off or out of range, or the device has just started. It tries again every 15 s | Yellow, slow blink | Same | Same | Same |
+| **Radio not connected** | A radio is paired or selected, but the link is down: the radio is off or out of range, or the device has just started. It tries a Kenwood again every 15 s, and waits for a TD-H9 to advertise | Yellow, slow blink | Same | Same | Same |
 | **Radio connected, no phones** | Normal: bridging is ready, but no KISS TNC app is connected | Cyan, steady | Cyan, steady, dimmed | Cyan, slow pulse | Off; a press shows it steady |
 | **Radio connected, phones connected** | Normal: bridging | Green, steady | Green, steady, dimmed | Green, slow pulse | Off; a press shows it steady |
 

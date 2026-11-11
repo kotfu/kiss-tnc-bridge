@@ -133,6 +133,7 @@ Reply tnc_update(const cJSON *req, const Pending &p)
     }
     std::string model;
     std::string address;
+    bool address_ble = false;
     for (const cJSON *item = def->child; item; item = item->next) {
         const char *key = item->string;
         if (strcmp(key, "id") == 0) {
@@ -141,25 +142,30 @@ Reply tnc_update(const cJSON *req, const Pending &p)
             }
         } else if (strcmp(key, "model") == 0 && cJSON_IsString(item)) {
             model = item->valuestring;
-        } else if (strcmp(key, "spp") == 0 && cJSON_IsObject(item)) {
+        } else if ((strcmp(key, "spp") == 0 || strcmp(key, "ble") == 0) && cJSON_IsObject(item)) {
+            if (!address.empty()) {
+                return Reply::error("bad_request", "a device's TNC takes spp or ble, not both");
+            }
             for (const cJSON *s = item->child; s; s = s->next) {
                 if (strcmp(s->string, "address") == 0 && cJSON_IsString(s)) {
                     address = s->valuestring;
+                    address_ble = strcmp(key, "ble") == 0;
                 } else if (strcmp(s->string, "adapter") == 0 && cJSON_IsString(s) &&
                            strcmp(s->valuestring, "builtin") == 0) {
                     // the only adapter
                 } else {
-                    return Reply::error("bad_request", std::string("spp.") + s->string +
+                    return Reply::error("bad_request", std::string(key) + "." + s->string +
                                                            " can't be set on a device; it takes address");
                 }
             }
         } else {
             return Reply::error("bad_request", std::string(key) +
-                                                   " can't be set on a device's TNC; it takes model and "
-                                                   "spp.address");
+                                                   " can't be set on a device's TNC; it takes model, and "
+                                                   "spp.address or ble.address");
         }
     }
-    radio::update(p, model, address, cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(req, "non_disruptive")));
+    radio::update(p, model, address, address_ble,
+                  cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(req, "non_disruptive")));
     return Reply::later();
 }
 
@@ -170,9 +176,10 @@ Reply bt_scan(const cJSON *req, const Pending &p)
         return err;
     }
     const char *transport = str(req, "transport");
-    if (transport && strcmp(transport, "classic") != 0) {
-        return Reply::error("not_supported", "a device scans for Classic radios only");
+    if (transport && strcmp(transport, "classic") != 0 && strcmp(transport, "le") != 0) {
+        return Reply::error("bad_request", "transport must be classic or le");
     }
+    bool le = transport && strcmp(transport, "le") == 0;
     uint32_t seconds = 10;
     if (const cJSON *s = cJSON_GetObjectItemCaseSensitive(req, "seconds")) {
         if (!cJSON_IsNumber(s) || s->valuedouble < 1 || s->valuedouble > 60) {
@@ -180,7 +187,7 @@ Reply bt_scan(const cJSON *req, const Pending &p)
         }
         seconds = static_cast<uint32_t>(s->valuedouble);
     }
-    radio::scan(p, seconds);
+    radio::scan(p, seconds, le);
     return Reply::later();
 }
 
