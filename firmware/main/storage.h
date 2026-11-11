@@ -1,6 +1,6 @@
 // What reset clears (docs/atom-lite-ui.md, Reset): every setting, the
-// radio pairing and the trusted clients. The device's key and setup code
-// stay.
+// radio pairing and the authorized management apps. The device's key and
+// authorization code stay.
 #pragma once
 
 namespace ktb::storage {

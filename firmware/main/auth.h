@@ -1,8 +1,8 @@
-// The device's key, its setup code and the management window
+// The device's key, its authorization code and authorization mode
 // (docs/control-api.md, Authentication). The key and code are made on the
 // first boot and kept through a reset; only erasing the flash replaces
-// them. Enrollment over BLE comes in Phase E: until then the window opens
-// and closes, but nothing can enroll through it.
+// them. Authorizing management apps over BLE comes in Phase E: until then
+// authorization mode starts and ends, but no app can be authorized in it.
 #pragma once
 
 #include <cstdint>
@@ -22,27 +22,27 @@ std::string public_key_base64();
 // base32 characters.
 std::string fingerprint();
 
-// The setup code, grouped as "7KQ2-M9XD-4TPA-W3HN".
+// The authorization code, grouped as "7KQ2-M9XD-4TPA-W3HN".
 std::string code();
-// The setup URI: https://www.k0tfu.org/ktb#code=…&fp=…
+// The authorization link: https://www.k0tfu.org/ktb#code=…&fp=…
 std::string uri();
-// Makes and saves a new setup code. Returns false if it couldn't be saved.
+// Makes and saves a new authorization code. Returns false if it couldn't be saved.
 bool rotate_code();
 
-// The management window
-constexpr uint32_t window_default_seconds = 300; // provisional
-constexpr uint32_t window_max_seconds = 3600;
-void window_open(uint32_t seconds);
-void window_close();
-bool window_is_open();
-uint32_t window_seconds_left();
+// Authorization mode
+constexpr uint32_t mode_default_seconds = 300; // provisional
+constexpr uint32_t mode_max_seconds = 3600;
+void mode_start(uint32_t seconds);
+void mode_end();
+bool mode_is_on();
+uint32_t mode_seconds_left();
 
-// How many clients are trusted. None until Phase E.
-int client_count();
+// How many management apps are authorized. None until Phase E.
+int app_count();
 
-// NVS namespaces: the key and code (kept by reset), and the trusted
-// clients (cleared by reset).
+// NVS namespaces: the key and code (kept by reset), and the authorized
+// management apps (cleared by reset).
 constexpr const char *identity_namespace = "identity";
-constexpr const char *clients_namespace = "clients";
+constexpr const char *apps_namespace = "apps";
 
 } // namespace ktb::auth

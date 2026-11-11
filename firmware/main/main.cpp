@@ -46,7 +46,7 @@ extern "C" void app_main()
     }
     ui::start();
     // Whatever fails from here on, the control API still starts, so a
-    // client on USB can see the errors.
+    // management app on USB can see the errors.
     bool bluetooth = radio::start();
     if (bluetooth) {
         power::start();

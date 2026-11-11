@@ -1,7 +1,7 @@
 // The USB serial port: the firmware's log and the control API share it.
 // Protocol messages are whole lines that start with '{'; log lines never
-// do. Every line, log or protocol, goes out in one piece, so a client can
-// pick out the protocol lines (docs/control-api.md, USB serial).
+// do. Every line, log or protocol, goes out in one piece, so a management app
+// can pick out the protocol lines (docs/control-api.md, USB serial).
 #pragma once
 
 #include <cstddef>

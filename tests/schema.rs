@@ -40,7 +40,7 @@ fn generate() -> String {
     let doc = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "kiss-tnc-bridge control protocol, version 1",
-        "description": "Newline-delimited JSON over the daemon's control socket. Clients send Request; the daemon answers each with a Response, whose result depends on the command (see results), and streams EventMessage on subscribed topics. See docs/control-api.md.",
+        "description": "Newline-delimited JSON over the daemon's control socket. Management apps send Request; the daemon answers each with a Response, whose result depends on the command (see results), and streams EventMessage on subscribed topics. See docs/control-api.md.",
         "messages": {
             "Request": schema::<Request>(),
             "Response": schema::<Response>(),

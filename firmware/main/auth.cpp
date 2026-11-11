@@ -18,15 +18,17 @@ namespace {
 constexpr const char *TAG = "auth";
 
 constexpr const char *key_private = "x25519";
+// The authorization code. Its key keeps the code's first name, so devices
+// installed before the rename keep their codes.
 constexpr const char *key_code = "setup_code";
 constexpr size_t code_bytes = 10; // 80 bits
 
 uint8_t pub[32];
-uint8_t setup_code[code_bytes];
+uint8_t auth_code[code_bytes];
 std::mutex code_lock;
 
-std::mutex window_lock;
-int64_t window_until_us = 0; // 0: closed
+std::mutex mode_lock;
+int64_t mode_until_us = 0; // 0: authorization mode is off
 
 // Crockford base32 of 10 bytes: 16 characters, most significant bits first.
 std::string base32(const uint8_t *bytes)
@@ -142,11 +144,11 @@ bool load()
     }
 
     len = code_bytes;
-    if (nvs_get_blob(h, key_code, setup_code, &len) != ESP_OK || len != code_bytes) {
-        ESP_LOGI(TAG, "making the setup code");
-        secure_random(setup_code, code_bytes);
-        if (!save_code(h, setup_code)) {
-            ESP_LOGE(TAG, "couldn't save the setup code");
+    if (nvs_get_blob(h, key_code, auth_code, &len) != ESP_OK || len != code_bytes) {
+        ESP_LOGI(TAG, "making the authorization code");
+        secure_random(auth_code, code_bytes);
+        if (!save_code(h, auth_code)) {
+            ESP_LOGE(TAG, "couldn't save the authorization code");
             nvs_close(h);
             return false;
         }
@@ -173,7 +175,7 @@ std::string code()
     std::string plain;
     {
         std::lock_guard<std::mutex> g(code_lock);
-        plain = base32(setup_code);
+        plain = base32(auth_code);
     }
     return plain.substr(0, 4) + "-" + plain.substr(4, 4) + "-" + plain.substr(8, 4) + "-" +
            plain.substr(12, 4);
@@ -184,7 +186,7 @@ std::string uri()
     std::string plain;
     {
         std::lock_guard<std::mutex> g(code_lock);
-        plain = base32(setup_code);
+        plain = base32(auth_code);
     }
     return "https://www.k0tfu.org/ktb#code=" + plain + "&fp=" + fingerprint();
 }
@@ -201,55 +203,55 @@ bool rotate_code()
     nvs_close(h);
     if (ok) {
         std::lock_guard<std::mutex> g(code_lock);
-        memcpy(setup_code, fresh, code_bytes);
-        ESP_LOGI(TAG, "setup code rotated");
+        memcpy(auth_code, fresh, code_bytes);
+        ESP_LOGI(TAG, "authorization code changed");
     }
     return ok;
 }
 
-void window_open(uint32_t seconds)
+void mode_start(uint32_t seconds)
 {
     if (seconds == 0) {
-        window_close();
+        mode_end();
         return;
     }
-    if (seconds > window_max_seconds) {
-        seconds = window_max_seconds;
+    if (seconds > mode_max_seconds) {
+        seconds = mode_max_seconds;
     }
-    std::lock_guard<std::mutex> g(window_lock);
-    window_until_us = esp_timer_get_time() + static_cast<int64_t>(seconds) * 1000000;
-    ESP_LOGI(TAG, "management window open for %u s", (unsigned)seconds);
+    std::lock_guard<std::mutex> g(mode_lock);
+    mode_until_us = esp_timer_get_time() + static_cast<int64_t>(seconds) * 1000000;
+    ESP_LOGI(TAG, "authorization mode on for %u s", (unsigned)seconds);
 }
 
-void window_close()
+void mode_end()
 {
-    std::lock_guard<std::mutex> g(window_lock);
-    if (window_until_us != 0) {
-        ESP_LOGI(TAG, "management window closed");
+    std::lock_guard<std::mutex> g(mode_lock);
+    if (mode_until_us != 0) {
+        ESP_LOGI(TAG, "authorization mode ended");
     }
-    window_until_us = 0;
+    mode_until_us = 0;
 }
 
-bool window_is_open()
+bool mode_is_on()
 {
-    return window_seconds_left() > 0;
+    return mode_seconds_left() > 0;
 }
 
-uint32_t window_seconds_left()
+uint32_t mode_seconds_left()
 {
-    std::lock_guard<std::mutex> g(window_lock);
-    if (window_until_us == 0) {
+    std::lock_guard<std::mutex> g(mode_lock);
+    if (mode_until_us == 0) {
         return 0;
     }
-    int64_t left = window_until_us - esp_timer_get_time();
+    int64_t left = mode_until_us - esp_timer_get_time();
     if (left <= 0) {
-        window_until_us = 0;
-        ESP_LOGI(TAG, "management window timed out");
+        mode_until_us = 0;
+        ESP_LOGI(TAG, "authorization mode timed out");
         return 0;
     }
     return static_cast<uint32_t>((left + 999999) / 1000000);
 }
 
-int client_count() { return 0; }
+int app_count() { return 0; }
 
 } // namespace ktb::auth

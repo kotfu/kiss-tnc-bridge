@@ -156,12 +156,12 @@ def main():
     sub.add_parser("auth", help="auth.info")
     sub.add_parser("code", help="auth.code")
     sub.add_parser("rotate-code", help="auth.rotate_code")
-    p = sub.add_parser("window", help="auth.window (seconds; 0 closes it)")
+    p = sub.add_parser("mode", help="auth.mode: start authorization mode (seconds; 0 ends it)")
     p.add_argument("seconds", nargs="?", type=int)
-    sub.add_parser("clients", help="auth.clients")
+    sub.add_parser("apps", help="auth.apps: the authorized management apps")
     sub.add_parser("identify", help="device.identify")
     sub.add_parser("reboot", help="device.reboot")
-    sub.add_parser("reset", help="device.reset: clears settings, pairing, clients")
+    sub.add_parser("reset", help="device.reset: clears settings, pairing, authorized apps")
     p = sub.add_parser("raw", help="send a command with JSON parameters")
     p.add_argument("cmd")
     p.add_argument("params", nargs="?", default="{}")
@@ -222,11 +222,11 @@ def main():
         return show(d.request("auth.code"))
     if w == "rotate-code":
         return show(d.request("auth.rotate_code"))
-    if w == "window":
+    if w == "mode":
         params = {} if args.seconds is None else {"seconds": args.seconds}
-        return show(d.request("auth.window", **params))
-    if w == "clients":
-        return show(d.request("auth.clients"))
+        return show(d.request("auth.mode", **params))
+    if w == "apps":
+        return show(d.request("auth.apps"))
     if w == "identify":
         return show(d.request("device.identify"))
     if w == "reboot":
@@ -336,7 +336,7 @@ def demo(d, seconds, breathe_seconds):
         # device was left in (dark mode would hide them).
         d.request("device.settings.set", settings={"led_normal": "solid"})
         d.request("debug.set", radio="none", phones=0, error=False, updating=False)
-        d.request("auth.window", seconds=0)
+        d.request("auth.mode", seconds=0)
         step("state: no radio (yellow/blue, slow)", "debug.set", radio="none")
         step("state: radio not connected (yellow, slow)", "debug.set", radio="down")
         step("state: connected, no phones (cyan)", "debug.set", radio="connected", phones=0)
@@ -358,11 +358,11 @@ def demo(d, seconds, breathe_seconds):
         step("  breathe, green", "debug.set", wait=breathe_seconds, phones=1)
         step("  breathe, cyan", "debug.set", wait=breathe_seconds, phones=0)
         d.request("device.settings.set", settings={"led_normal": "solid"})
-        step("state: window open (magenta, slow)", "auth.window", seconds=600)
-        d.request("auth.window", seconds=0)
+        step("state: authorization mode (magenta, slow)", "auth.mode", seconds=600)
+        d.request("auth.mode", seconds=0)
         step("state: updating (white, fast)", "debug.set", updating=True)
         d.request("debug.set", updating=False)
-        step("state: error (red, fast)", "debug.set", error=True)
+        step("state: error (red, three blinks)", "debug.set", error=True)
         d.request("debug.set", error=False)
         step("event: identify", "device.identify")
     finally:

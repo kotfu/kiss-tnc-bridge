@@ -91,10 +91,10 @@ std::string mac_string(esp_mac_type_t type)
     return buf;
 }
 
-cJSON *window_json()
+cJSON *mode_json()
 {
     cJSON *o = cJSON_CreateObject();
-    uint32_t left = auth::window_seconds_left();
+    uint32_t left = auth::mode_seconds_left();
     cJSON_AddBoolToObject(o, "open", left > 0);
     cJSON_AddNumberToObject(o, "seconds_left", left);
     return o;
@@ -184,8 +184,8 @@ Reply auth_info(const cJSON *, const Pending &)
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "fingerprint", auth::fingerprint().c_str());
     cJSON_AddStringToObject(o, "public_key", auth::public_key_base64().c_str());
-    cJSON_AddItemToObject(o, "window", window_json());
-    cJSON_AddNumberToObject(o, "clients", auth::client_count());
+    cJSON_AddItemToObject(o, "mode", mode_json());
+    cJSON_AddNumberToObject(o, "apps", auth::app_count());
     return Reply::ok(o);
 }
 
@@ -202,30 +202,30 @@ Reply auth_code(const cJSON *, const Pending &) { return code_reply(); }
 Reply auth_rotate_code(const cJSON *, const Pending &)
 {
     if (!auth::rotate_code()) {
-        return Reply::error("internal", "couldn't save a new setup code; the old one still works");
+        return Reply::error("internal", "couldn't save a new authorization code; the old one still works");
     }
     return code_reply();
 }
 
-Reply auth_window(const cJSON *req, const Pending &)
+Reply auth_mode(const cJSON *req, const Pending &)
 {
     const cJSON *s = cJSON_GetObjectItemCaseSensitive(req, "seconds");
-    uint32_t seconds = auth::window_default_seconds;
+    uint32_t seconds = auth::mode_default_seconds;
     if (s) {
-        if (!cJSON_IsNumber(s) || s->valuedouble < 0 || s->valuedouble > auth::window_max_seconds ||
+        if (!cJSON_IsNumber(s) || s->valuedouble < 0 || s->valuedouble > auth::mode_max_seconds ||
             s->valuedouble != static_cast<uint32_t>(s->valuedouble)) {
             return Reply::error("bad_request", "seconds must be a whole number from 0 to 3600");
         }
         seconds = static_cast<uint32_t>(s->valuedouble);
     }
-    auth::window_open(seconds); // 0 closes it
-    return Reply::ok(window_json());
+    auth::mode_start(seconds); // 0 ends it
+    return Reply::ok(mode_json());
 }
 
-Reply auth_clients(const cJSON *, const Pending &)
+Reply auth_apps(const cJSON *, const Pending &)
 {
     cJSON *o = cJSON_CreateObject();
-    cJSON_AddArrayToObject(o, "clients"); // enrollment comes in Phase E
+    cJSON_AddArrayToObject(o, "apps"); // authorizing over BLE comes in Phase E
     return Reply::ok(o);
 }
 
@@ -310,8 +310,8 @@ const Command commands[] = {
     {"auth.info", auth_info},
     {"auth.code", auth_code},
     {"auth.rotate_code", auth_rotate_code},
-    {"auth.window", auth_window},
-    {"auth.clients", auth_clients},
+    {"auth.mode", auth_mode},
+    {"auth.apps", auth_apps},
 #if CONFIG_KTB_DEBUG_COMMANDS
     {"debug.set", debug_set},
     {"debug.frame", debug_frame},

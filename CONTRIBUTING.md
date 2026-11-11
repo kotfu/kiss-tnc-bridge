@@ -1,5 +1,20 @@
 # Contributing to kiss-tnc-bridge
 
+## Vocabulary
+
+The project's words are defined in its
+[vocabulary](https://www.k0tfu.org/kiss-tnc-bridge#vocabulary): bridge,
+pair, connect, KISS TNC app, management app, authorize, revoke,
+authorization code and authorization mode. Docs, code comments, log
+messages and protocol names use those words and only those, so they read
+the same as the website and the installer. When a new term is needed, add
+it there first.
+
+Bluetooth's own words stay as Bluetooth uses them: BlueZ "trusts" a paired
+device, and its agent handles "authorization" requests. Released changelog
+sections, `docs/plan-1.0.md` and `spikes/` are history and keep the words
+of their time.
+
 ## Building from source
 
 On Linux, building requires a Rust toolchain and `libdbus-1-dev` (Debian/Ubuntu)

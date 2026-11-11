@@ -2,8 +2,8 @@
 
 Every member of the family is managed through one API: the daemon, and the
 ATOM Lite and Core2 firmware (see the [roadmap](roadmap.md)). `ktbctl` (the
-CLI and TUI) is a client, and so will be `ktb-gateway`, which carries the
-same messages to web and phone apps, and the iOS app. The types are defined
+CLI and TUI) is a management app, and so will be the iOS app;
+`ktb-gateway` carries the same messages to management apps over BLE. The types are defined
 once, in [`src/control/protocol.rs`](../src/control/protocol.rs), and
 published as a JSON Schema in
 [`control-api.schema.json`](control-api.schema.json) for apps in other
@@ -21,7 +21,7 @@ The same messages travel over three transports:
 |---|---|---|
 | [Unix socket](#unix-socket) | The daemon | Members of its group |
 | [USB serial](#usb-serial) | The ATOM Lite and Core2 firmware | Anyone with the device and a cable |
-| [BLE management](#ble-management) | The firmware, and `ktb-gateway` on a Pi | Trusted clients, over an encrypted session (see [Authentication](#authentication)) |
+| [BLE management](#ble-management) | The firmware, and `ktb-gateway` on a Pi | Authorized management apps, over an encrypted session (see [Authentication](#authentication)) |
 
 ### Unix socket
 
@@ -41,19 +41,19 @@ The same messages travel over three transports:
 - The board's USB serial port at 115200 baud, 8N1, speaking the same
   newline-delimited JSON as the socket.
 - The port also carries the firmware's log. Protocol messages are the
-  lines that start with `{`; clients skip the others.
+  lines that start with `{`; management apps skip the others.
 - **Opening the port must not toggle DTR or RTS.** On both boards they
   drive the ESP32's reset and boot pins, so toggling them reboots the
-  device or puts it in its download mode. Clients open the port with both
+  device or puts it in its download mode. Management apps open the port with both
   deasserted. The order matters: the reset circuit pulls the ESP32's
   enable pin low while RTS is asserted without DTR, and some systems
-  assert both when a port opens, so a client drops RTS first, or both in
+  assert both when a port opens, so a management app drops RTS first, or both in
   one call (Web Serial's `setSignals`). Dropping DTR first reboots the
   ATOM Lite; pyserial does that unless told otherwise (checked
   9 November 2026, see [firmware/README.md](../firmware/README.md)).
 - No authentication. Anyone with the device and a cable can reflash it
-  anyway (roadmap decision 12), so USB is trusted. It's also how a lost
-  setup code is recovered (`auth.code`).
+  anyway (roadmap decision 12), so USB is authorized without a code. It's also how a
+  lost authorization code is recovered (`auth.code`).
 - Firmware updates don't use this transport: `ktbctl device flash` writes
   the flash directly, as the web installer does.
 
@@ -65,7 +65,7 @@ One GATT service, with the same UUIDs on the firmware and on
 | UUID | Characteristic | Properties | Carries |
 |---|---|---|---|
 | `e3370001-156d-4ba6-90dd-14075e7ca557` | (the service) | | |
-| `e3370002-156d-4ba6-90dd-14075e7ca557` | TX | write, write without response | Records from the client |
+| `e3370002-156d-4ba6-90dd-14075e7ca557` | TX | write, write without response | Records from the management app |
 | `e3370003-156d-4ba6-90dd-14075e7ca557` | RX | notify | Records from the device |
 | `e3370004-156d-4ba6-90dd-14075e7ca557` | Data | write without response | Firmware image bytes during an update (see [`firmware.update`](#firmwareupdate)) |
 
@@ -76,35 +76,35 @@ its type:
 | Type | Record | Rest of the record | Sent |
 |---|---|---|---|
 | `0x01` | Session handshake | A Noise handshake message | Both ways, to start a session |
-| `0x02` | Enrollment handshake | A Noise handshake message | Both ways, to enroll a new client |
+| `0x02` | Authorization handshake | A Noise handshake message | Both ways, to authorize a new management app |
 | `0x03` | Message | A Noise transport message: one encrypted request, response or event, as JSON | Both ways, once a handshake is done |
 | `0x04` | Refusal | JSON in the clear: `{"code": "…", "message": "…"}` | By the device, before closing the connection |
 
 - Records are split across writes and notifications of at most the ATT
   MTU less 3 bytes, and one write or notification can hold the end of one
   record and the start of the next. The receiver reassembles them by
-  length. Devices offer an MTU of 517; clients should ask for the largest
+  length. Devices offer an MTU of 517; management apps should ask for the largest
   they can.
 - A record is at most 65,535 bytes, so one JSON message is at most 65,518
   bytes (less the type byte and Noise's 16-byte tag). Devices take smaller
   requests: `device.info` gives the largest as `max_message`.
 - One session per connection. Devices allow only a few BLE connections in
-  all (the ATOM Lite two, shared with KISS apps), so clients disconnect
+  all (the ATOM Lite two, shared with KISS TNC apps), so management apps disconnect
   when they're done.
 - `activity` and `frames` events are throttled over BLE.
 
 **Advertising (provisional).** Devices put the [BLE KISS
 API](https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md)
-service UUID in their advertising data, so KISS apps find them as before,
+service UUID in their advertising data, so KISS TNC apps find them as before,
 and the management service UUID in their scan response, with as much of the
-name as fits. The full name is the GAP Device Name. Clients find
+name as fits. The full name is the GAP Device Name. Management apps find
 manageable devices by the management service UUID. A 31-byte advertisement
 can't hold two 128-bit UUIDs and a long name: the scan response has room
 for 11 bytes of it, as a shortened name when it's longer. The ATOM Lite
 firmware advertises this way from Phase C, before it serves the
-management service. An iOS KISS app found it and bridged through it (9
+management service. An iOS KISS TNC app found it and bridged through it (9
 November 2026); iOS showed the advertised name once its cache of the
-device's old name was cleared. More KISS apps are still to try.
+device's old name was cleared. More KISS TNC apps are still to try.
 `ktb-gateway` advertises the management service in its own
 advertisement.
 
@@ -121,7 +121,7 @@ message record over BLE. Every message carries `"v": 1`.
 ← {"v":1,"event":"state","what":"tnc","object":"ktbr0/radio","state":"connected"}
 ```
 
-- A **request** has `cmd`, an `id` the client chooses (a number), and the
+- A **request** has `cmd`, an `id` the management app chooses (a number), and the
   command's parameters. `id` always belongs to the request: the objects a
   command acts on are named by their kind (`bridge`, `port`, `tnc`,
   `adapter`, `session`, `object`), and new definitions go under
@@ -129,7 +129,7 @@ message record over BLE. Every message carries `"v": 1`.
 - A **response** echoes the `id`, with `"ok": true` and a `result`, or
   `"ok": false` and an `error`. Commands run one at a time, in the order
   the daemon receives them, so each sees the state the last one left.
-  A client may send more requests before the answers come: each is
+  A management app may send more requests before the answers come: each is
   answered by its id when it's done, which for a scan or a pairing can be
   a while after the requests behind it.
 - An **event** has `event` and no `id`; it arrives only on a connection
@@ -140,9 +140,9 @@ message record over BLE. Every message carries `"v": 1`.
   see `max_message` in [`device.info`](#deviceinfo).
 
 **Versioning.** Additive changes (a new command, a new optional field, a
-new error code, a new event field) stay in version 1, so clients should
+new error code, a new event field) stay in version 1, so management apps should
 ignore fields they don't know. Anything that would break a version 1
-client needs version 2. A request with another `v` gets
+management app needs version 2. A request with another `v` gets
 `unsupported_version`.
 
 ### Compatibility
@@ -156,8 +156,8 @@ software, `firmware-v1.0.0` for the firmware (roadmap decision 15).
   speaks version 2. A major version of either one that breaks nothing in
   the API still moves the other's to match, so the rule stays simple.
 - **Within a major, features are found, not assumed.** A firmware feature
-  is announced by a capability in [`device.info`](#deviceinfo); a client
-  offers it when the capability is there, and otherwise says it needs
+  is announced by a capability in [`device.info`](#deviceinfo); a
+  management app offers it when the capability is there, and otherwise says it needs
   newer firmware. Old firmware keeps working with new software, and the
   reverse.
 - **Device support starts with Phase D's `ktbctl`.** Earlier 1.x releases
@@ -172,55 +172,63 @@ Over BLE, management is authenticated and encrypted inside the protocol,
 not by Bluetooth pairing. An ATOM Lite or a headless Pi has no screen to
 show a passkey, Just Works pairing gives no protection against an attacker
 in the middle, and bonding phones causes trouble with BlueZ on a Pi. So
-clients connect without pairing, and run a
+management apps connect without pairing, and run a
 [Noise](https://noiseprotocol.org/noise.html) handshake inside the
 management service instead. The Unix socket and USB serial don't use any of
 this: their access is controlled by who can reach them.
 
-### Keys and setup codes
+The words follow the project's
+[vocabulary](https://www.k0tfu.org/kiss-tnc-bridge#vocabulary): a
+management app is **authorized** once, with the device's **authorization
+code**, while the device is in **authorization mode**, and **revoked** to
+take that away.
+
+### Keys and authorization codes
 
 - **The device's key.** Each device, and `ktb-gateway`, makes an X25519
   key pair the first time it starts, and keeps it. Its **fingerprint** is
-  the first 10 bytes of the SHA-256 of the public key, written like a setup
-  code.
-- **The setup code.** Each device also makes a setup code: 80 random bits,
-  written as 16 [Crockford base32](https://www.crockford.com/base32.html)
-  characters in groups of four, such as `7KQ2-M9XD-4TPA-W3HN`. Clients
-  ignore case and dashes, and read `O` as `0` and `I` and `L` as `1`. The
-  code is permanent: `auth.rotate_code` makes a new one, and clients that
-  are already trusted keep working.
-- **Clients' keys.** Each client makes its own X25519 key pair and keeps
-  it: the iOS app in the keychain, `ktbctl` in its configuration directory.
-- **Trusted clients.** The device keeps the public key of each client it
-  trusts, with the client's name, when it enrolled and when it was last
-  seen. There's one level: a trusted client can do everything, including
-  revoking other clients. Anyone with the device and a USB cable can
-  reflash it anyway, so separate owner and guest levels wouldn't protect
-  anything. The ATOM Lite keeps up to 8 (provisional).
+  the first 10 bytes of the SHA-256 of the public key, written like an
+  authorization code.
+- **The authorization code.** Each device also makes an authorization
+  code: 80 random bits, written as 16
+  [Crockford base32](https://www.crockford.com/base32.html) characters in
+  groups of four, such as `7KQ2-M9XD-4TPA-W3HN`. Management apps ignore
+  case and dashes, and read `O` as `0` and `I` and `L` as `1`. The code is
+  permanent: `auth.rotate_code` makes a new one, and apps that are already
+  authorized keep working.
+- **Management apps' keys.** Each management app makes its own X25519 key
+  pair and keeps it: the iOS app in the keychain, `ktbctl` in its
+  configuration directory.
+- **Authorized apps.** The device keeps the public key of each management
+  app it has authorized, with the app's name, when it was authorized and
+  when it was last seen. There's one level: an authorized app can do
+  everything, including revoking other apps. Anyone with the device and a
+  USB cable can reflash it anyway, so separate owner and guest levels
+  wouldn't protect anything. The ATOM Lite keeps up to 8 (provisional).
 
-### The management window
+### Authorization mode
 
-A client can enroll only while the management window is open, for 5
-minutes (provisional) after it's opened by:
+A management app can be authorized only while the device is in
+authorization mode, for 5 minutes (provisional) after it's started by:
 
 - a long press on the ATOM Lite's button, 3 seconds (see
-  [atom-lite-ui.md](atom-lite-ui.md#the-window))
+  [atom-lite-ui.md](atom-lite-ui.md#starting-authorization-mode))
 - a menu item on the Core2
 - `ktbctl gateway open` on a Pi, or the Pi starting up
-- `auth.window`, from a trusted client
+- `auth.mode`, from an authorized app
 
-One window lets in one client: it closes after the first successful
-enrollment, including a client that was already trusted and enrolled
-again, so enrolling two clients takes two windows. A wrong code doesn't
-close it, but 3 failed enrollments (provisional) do. Otherwise it stays open
-until its time runs out; `auth.window` with `seconds: 0` closes it early,
-and so does a single press of the ATOM Lite's button.
-The rule is the same however the window was opened (see
-[atom-lite-ui.md](atom-lite-ui.md#the-management-window)).
+Authorization mode lets in one app: it ends after the first successful
+authorization, including an app that was already authorized and was
+authorized again, so authorizing two apps takes authorization mode twice.
+A wrong code doesn't end it, but 3 failed authorizations (provisional) do.
+Otherwise it lasts until its time runs out; `auth.mode` with `seconds: 0`
+ends it early, and so does a single press of the ATOM Lite's button. The
+rule is the same however authorization mode was started (see
+[atom-lite-ui.md](atom-lite-ui.md#authorization-mode)).
 
 ### Handshakes
 
-The client starts the handshake. Both patterns use the prologue
+The management app starts the handshake. Both patterns use the prologue
 `ktb-mgmt/1` (ASCII), and the payloads are JSON:
 
 ```
@@ -229,56 +237,56 @@ The client starts the handshake. Both patterns use the prologue
 -> s, se           payload: {"name": "Pat's iPhone"}
 ```
 
-- **Enrolling** a new client uses enrollment records (`0x02`) and
-  `Noise_XXpsk3_25519_ChaChaPoly_SHA256`. The PSK is the SHA-256 of the
-  ASCII string `ktb-setup-code/1` followed by the setup code's 10 bytes.
-  If the client's key is already trusted, enrolling again only updates its
-  name.
-- **A session** for a trusted client uses session records (`0x01`) and
+- **Authorizing** a new management app uses authorization records
+  (`0x02`) and `Noise_XXpsk3_25519_ChaChaPoly_SHA256`. The PSK is the
+  SHA-256 of the ASCII string `ktb-auth-code/1` followed by the
+  authorization code's 10 bytes. If the app's key is already authorized,
+  authorizing again only updates its name.
+- **A session** for an authorized app uses session records (`0x01`) and
   `Noise_XX_25519_ChaChaPoly_SHA256`.
 
 Either way, when the handshake is done the connection carries message
-records (`0x03`) under the keys it produced. An enrollment doesn't need a
-new connection or a second handshake.
+records (`0x03`) under the keys it produced. An authorization doesn't need
+a new connection or a second handshake.
 
 The device refuses with a refusal record and closes the connection when:
 
 | `code` | Why |
 |---|---|
-| `window_closed` | An enrollment handshake while the window is closed. Sent in answer to the first message |
-| `bad_code` | The enrollment's last message didn't decrypt: the client's setup code is wrong |
-| `not_trusted` | A session handshake from a client the device doesn't trust (never enrolled, or revoked) |
-| `too_many_clients` | An enrollment when the trusted list is full; revoke one first |
+| `not_authorizing` | An authorization handshake while the device isn't in authorization mode. Sent in answer to the first message |
+| `bad_code` | The authorization's last message didn't decrypt: the app's authorization code is wrong |
+| `not_authorized` | A session handshake from an app the device hasn't authorized (never authorized, or revoked) |
+| `too_many_apps` | An authorization when the list of authorized apps is full; revoke one first |
 | `handshake_failed` | Anything else wrong with the handshake |
 
-The client checks the device too:
+The management app checks the device too:
 
 - **In a session**, the device's static key (in its handshake message) must
-  be the one the client saw when it enrolled. If not, the client stops: the
-  device was erased and reinstalled, or it isn't the same device.
-- **When enrolling** from a setup URI, the device's key must match the
-  fingerprint in the URI.
+  be the one the app saw when it was authorized. If not, the app stops:
+  the device was erased and reinstalled, or it isn't the same device.
+- **When authorizing** from an authorization link, the device's key must
+  match the fingerprint in the link.
 
 The X25519, ChaCha20-Poly1305 and SHA-256 this needs are in CryptoKit on
 iOS, mbedTLS on the ESP32, and the [`snow`](https://crates.io/crates/snow)
 crate in Rust.
 
-### Setup URIs
+### Authorization links
 
 QR codes carry an `https` URI on the project's web home, so a phone's
-camera can open the iOS app straight at enrollment, already knowing which
-device it's for:
+camera can open the iOS app straight at authorization, already knowing
+which device it's for:
 
 ```
 https://www.k0tfu.org/ktb#code=7KQ2M9XD4TPAW3HN&fp=Q4M8ZC2V7XKD1B6N
 ```
 
-`code` is the setup code and `fp` the device's fingerprint. The device's
-name isn't in it: the client learns that from the handshake, and leaving it
-out keeps the QR code at 37×37 modules (error correction level M), which a
-terminal draws in 41 columns and 21 lines. A client given only the 16
-characters enrolls without the fingerprint check, with whichever device in
-its window accepts the code.
+`code` is the authorization code and `fp` the device's fingerprint. The
+device's name isn't in it: the app learns that from the handshake, and
+leaving it out keeps the QR code at 37×37 modules (error correction level
+M), which a terminal draws in 41 columns and 21 lines. An app given only
+the 16 characters is authorized without the fingerprint check, by
+whichever device in authorization mode accepts the code.
 
 - **It's a Universal Link.** The iOS app claims `www.k0tfu.org/ktb` in its
   Associated Domains, and the site serves
@@ -288,26 +296,26 @@ its window accepts the code.
   the code is for and links to the app. The rest of the site opens in
   Safari as usual.
 - **The code and fingerprint go after `#`**, which browsers never send to a
-  server. A phone without the app doesn't put the setup code in the site's
-  logs. `/ktb` can redirect anywhere on the site: a browser keeps the
-  fragment through a redirect whose target has none of its own.
-- **The URI is permanent.** Printed codes keep it for the life of the
-  device, so `/ktb` has to keep working. Clients that parse it (the app's
-  own scanner, `ktbctl`) read the fragment and ignore the host.
+  server. A phone without the app doesn't put the authorization code in
+  the site's logs. `/ktb` can redirect anywhere on the site: a browser
+  keeps the fragment through a redirect whose target has none of its own.
+- **The link is permanent.** Printed codes keep it for the life of the
+  device, so `/ktb` has to keep working. Apps that parse it (the app's own
+  scanner, `ktbctl`) read the fragment and ignore the host.
 
-### Getting the code to a client
+### Getting the code to a management app
 
 | Device | Where the code comes from | To the iOS app | To `ktbctl` on another machine |
 |---|---|---|---|
 | Core2 | Its screen, as a QR code and 16 characters | Scan the screen | Type the 16 characters |
 | ATOM Lite or Core2, installed from the web | The installer reads it over Web Serial right after flashing | Scan the QR code on the page | Type the 16 characters |
-| ATOM Lite or Core2, installed with `ktbctl` | `ktbctl` reads it over USB, and also enrolls itself (`auth.add`), so it never needs the code | `ktbctl device code` shows a QR code in the terminal | Type the 16 characters |
-| Any device already set up | `ktbctl device code` over USB, or `auth.code` from a trusted client | A QR code in the terminal or the app | Type the 16 characters |
+| ATOM Lite or Core2, installed with `ktbctl` | `ktbctl` reads it over USB, and also authorizes itself (`auth.add`), so it never needs the code | `ktbctl device code` shows a QR code in the terminal | Type the 16 characters |
+| Any device already set up | `ktbctl device code` over USB, or `auth.code` from an authorized app | A QR code in the terminal or the app | Type the 16 characters |
 | A Pi with `ktb-gateway` | `ktbctl gateway code` on the Pi, locally or over ssh | A QR code in the terminal | Not needed: `ktbctl` on the Pi uses the Unix socket |
 
 Terminal QR codes are drawn with Unicode half blocks, which phone cameras
-read from a terminal, over ssh too. Every path still needs the management
-window open when the client enrolls.
+read from a terminal, over ssh too. Every path still needs the device in
+authorization mode when the app is authorized.
 
 ### `auth` commands
 
@@ -317,13 +325,13 @@ doesn't. Public keys are base64, fingerprints and codes as above.
 
 | Command | Parameters | Result |
 |---|---|---|
-| `auth.info` | | `fingerprint`, `public_key`, `window` (`open`, `seconds_left`), and `clients`, how many are trusted |
-| `auth.code` | | The setup code and its URI: `{"code": "7KQ2-M9XD-4TPA-W3HN", "uri": "https://www.k0tfu.org/ktb#code=…"}` |
-| `auth.rotate_code` | | A new setup code and URI. Trusted clients keep working |
-| `auth.window` | `seconds` (default 300; 0 closes it) | `open`, `seconds_left` |
-| `auth.clients` | | The trusted clients: `fingerprint`, `name`, `enrolled`, `last_seen`, and `this: true` for the one asking |
-| `auth.add` | `public_key`, `name` | Trusts a client directly, without the code or the window: how `ktbctl` enrolls itself over USB. Returns the client's `fingerprint` and the device's `public_key`, which the client keeps for its sessions |
-| `auth.revoke` | `client` (a fingerprint) | Stops trusting a client and closes its sessions. Returns `{}` |
+| `auth.info` | | `fingerprint`, `public_key`, `mode` (authorization mode: `open`, `seconds_left`), and `apps`, how many are authorized |
+| `auth.code` | | The authorization code and its link: `{"code": "7KQ2-M9XD-4TPA-W3HN", "uri": "https://www.k0tfu.org/ktb#code=…"}` |
+| `auth.rotate_code` | | A new authorization code and link. Authorized apps keep working |
+| `auth.mode` | `seconds` (default 300; 0 ends it) | Starts authorization mode: `open`, `seconds_left` |
+| `auth.apps` | | The authorized apps: `fingerprint`, `name`, `authorized`, `last_seen`, and `this: true` for the one asking |
+| `auth.add` | `public_key`, `name` | Authorizes a management app directly, without the code or authorization mode: how `ktbctl` authorizes itself over USB. Returns the app's `fingerprint` and the device's `public_key`, which the app keeps for its sessions |
+| `auth.revoke` | `app` (a fingerprint) | Revokes an app and closes its sessions. Returns `{}` |
 
 ## Errors
 
@@ -333,7 +341,7 @@ doesn't. Public keys are base64, fingerprints and codes as above.
  "object": "static: /etc/kiss-tnc-bridge/kiss-tnc-bridge.toml"}
 ```
 
-`code` is stable, for scripts and clients to match on. `message` is for
+`code` is stable, for scripts and management apps to match on. `message` is for
 people and says what to do next. `object` names what the error is about,
 and `data` carries detail for some codes.
 
@@ -468,7 +476,7 @@ again adds topics. The result lists the topics now subscribed.
 `{"cmd": "unsubscribe", "topics": ["frames"]}` stops those topics, or every
 topic when `topics` is missing or empty, and lists the topics still
 subscribed. A socket's subscriptions end when it closes, but a device's
-USB serial port never tells the device it closed: there, a client
+USB serial port never tells the device it closed: there, a management app
 unsubscribes when it's done, or the events go on until the device
 restarts.
 
@@ -624,7 +632,7 @@ is `"classic"`.
 While it looks, the daemon sends the requesting connection a `found` event
 with the request's id and the `device` as each one turns up, and again
 when there's news about one already sent (a device often shows up before
-its name does; changes in signal strength aren't news). A client can list
+its name does; changes in signal strength aren't news). A management app can list
 devices as they come, and end the scan with `bluetooth.scan_stop` once it
 has the one it wants; the scan then answers with what it found so far.
 
@@ -688,7 +696,7 @@ One scan or pairing runs at a time; another gets `busy`.
 
 State events are hints: after one, read `status` for the whole picture.
 Frames are decoded for display only; the daemon never acts on what's in
-them. Events cost nothing while nobody subscribes, and a client that
+them. Events cost nothing while nobody subscribes, and a management app that
 doesn't read its events loses them rather than slowing the daemon.
 
 ```jsonc
@@ -704,7 +712,7 @@ The ATOM Lite and Core2 firmware present themselves in the daemon's terms:
 one fixed bridge, `ktbr0`, with an `spp-client` TNC port, `radio`, to the
 radio's TNC, and a `ble-server` app port, `phones`, serving the BLE KISS
 API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
-as on the daemon. A client can tell a device from the daemon by
+as on the daemon. A management app can tell a device from the daemon by
 `device.info`, which the daemon doesn't answer.
 
 ### What's the same, and what isn't
@@ -715,7 +723,7 @@ as on the daemon. A client can tell a device from the daemon by
 | `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
 | `tnc.update` | Changes the radio's `model` and `spp.address`. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
-| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the client as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same, Classic only (`"transport": "le"` is `not_supported`). The TH-D75's `confirm` step goes to the management app as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
 | `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same. A session is a phone subscribed to the BLE KISS service, `ktbr0/phones/<its address>`; a kicked phone may reconnect at once, as on the daemon |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |
@@ -755,7 +763,7 @@ A device's `status`, trimmed:
              "message": "advertising didn't start: phones can't find the device. Unplug the device and plug it in"}]}
 ```
 
-Clients decide what to offer from `capabilities`, not from `board`, so a new
+Management apps decide what to offer from `capabilities`, not from `board`, so a new
 board needs no app changes for the features it shares. The capability
 names are provisional; a Core2 adds `screen` and `battery`, and later
 `wifi`. `firmware-update` arrives with updates over BLE (Phase F).
@@ -773,7 +781,7 @@ weak battery or cable) or `other`.
 as an error; it's empty when all is well. Each has a `code` and a
 `message` saying what happened and what to do, for people. The codes are
 `storage`, `bluetooth`, `phones` and `device_key` (see
-[atom-lite-ui.md](atom-lite-ui.md#errors)); clients should show an
+[atom-lite-ui.md](atom-lite-ui.md#errors)); management apps should show an
 unknown code's message as it is. A `state` event with `what` `device`
 says the list changed: `state` is `error` when there's at least one, `ok`
 when there are none.
@@ -795,7 +803,7 @@ saving tables:
 
 | Key | Values |
 |---|---|
-| `public_name` | The BLE name KISS apps show, as `public_name` on the daemon |
+| `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon |
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100. On the Core2, the screen's brightness |
@@ -808,8 +816,8 @@ Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
 Both answer `{}` and then act. `device.reset` does what the button's reset
 does, then reboots: every setting goes back to its default, and the radio
-pairing and every trusted client are removed. The firmware, the device's
-key and the setup code stay (see [atom-lite-ui.md](atom-lite-ui.md#reset)).
+pairing and every authorized management app are removed. The firmware,
+the device's key and the authorization code stay (see [atom-lite-ui.md](atom-lite-ui.md#reset)).
 
 ### `device.identify`
 
@@ -824,7 +832,7 @@ Over BLE only; over USB, `ktbctl device flash` and the web installer write
 the flash directly. One update runs at a time (`busy`), and a disconnect
 aborts it.
 
-1. **Check the image.** Before sending, the client checks the image's
+1. **Check the image.** Before sending, the management app checks the image's
    signature, its board and its version. The device checks them again.
 2. **`firmware.update.begin`** with `size`, `sha256` (hex) and `version`.
    The device erases the space for the image, then answers with
@@ -832,7 +840,7 @@ aborts it.
    4096}`. Erasing takes about 2 s on an ATOM Lite.
 3. **Write the image** to the Data characteristic, in order. Each write is
    the image offset (4 bytes, little-endian) and then at most `chunk_max`
-   bytes of image. The client keeps at most `window` bytes beyond the last
+   bytes of image. The management app keeps at most `window` bytes beyond the last
    acknowledgement in flight. The device sends this connection `update`
    events, each with the `request` id of its `firmware.update.begin`:
 

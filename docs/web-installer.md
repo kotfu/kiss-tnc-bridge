@@ -28,8 +28,8 @@ Decided:
 - **The page uses [`esptool-js`](https://github.com/espressif/esptool-js)
   directly**, not ESP Web Tools, so the page draws every screen in the
   site's design. The manifest is in ESP Web Tools' format all the same.
-- **The page installs; it doesn't manage.** It shows the setup code after
-  installing, and that's all it does with an installed device. A lost code,
+- **The page installs; it doesn't manage.** It shows the authorization code
+  after installing, and that's all it does with an installed device. A lost code,
   a lost phone or a setting to change means reinstalling, until a
   management page (`/kiss-tnc-bridge/manage` or similar) is built, if it
   ever is.
@@ -87,7 +87,7 @@ The ATOM Lite's layout is fixed from the first release (see the roadmap's
 ATOM Lite firmware items): the bootloader at `0x1000`, the partition table
 at `0xA000`, OTA data at `0xB000`, two app partitions at `0x10000` and
 `0x1F0000`, and NVS, which holds the settings, the device's key and its
-setup code, at `0x3D0000`. Every version uses the same layout, so any
+authorization code, at `0x3D0000`. Every version uses the same layout, so any
 version can be installed over any other.
 
 Firmware releases are tagged `firmware-v<version>`, apart from the
@@ -220,8 +220,8 @@ firmware for the board found.
 
 | Choice | When it's offered | What's written | What happens to settings |
 |---|---|---|---|
-| **Update** | The device runs this firmware | Every part in the manifest | Kept: the settings, the radio pairing, the trusted clients, the device's key and its setup code are all in NVS, which isn't written |
-| **Clean install** | Always. The only choice when the device runs other firmware | The whole flash is erased first, then every part | Gone. The device makes a new key and setup code when it starts, so a setup code written down before is useless, and every trusted client has to enroll again |
+| **Update** | The device runs this firmware | Every part in the manifest | Kept: the settings, the radio pairing, the authorized management apps, the device's key and its authorization code are all in NVS, which isn't written |
+| **Clean install** | Always. The only choice when the device runs other firmware | The whole flash is erased first, then every part | Gone. The device makes a new key and authorization code when it starts, so an authorization code kept from before is useless, and every management app has to be authorized again |
 
 Update is the default when it's offered. The page explains clean install
 in a sentence before the user picks it: it's how to start completely
@@ -272,15 +272,15 @@ install; a different cable or USB port.
 Over the control API on the same port. USB needs no authentication. Three
 things, in this order:
 
-1. **The setup code.** `auth.code` gives the 16 characters. The page shows
-   them, grouped as the device gives them (`7KQ2-M9XD-4TPA-W3HN`), and
-   tells the user to write them down: it's how other computers get
-   permission to manage the device over Bluetooth (`ktbctl`, Phase D), and
-   it doesn't change unless someone rotates it or the device is installed
-   clean. No QR code yet: nothing scans one until the iOS app (Phase E),
+1. **The authorization code.** `auth.code` gives the 16 characters. The
+   page shows them, grouped as the device gives them
+   (`7KQ2-M9XD-4TPA-W3HN`), and tells the user to keep them: it's how
+   management apps are authorized to manage the device over Bluetooth
+   (`ktbctl`, Phase D), and it doesn't change unless someone changes it or
+   the device is installed clean. No QR code yet: nothing scans one until the iOS app (Phase E),
    and the page adds it then, from `auth.code`'s `uri`.
 2. **The name.** `device.settings.set` with `public_name`: the name KISS
-   apps show when they scan. The page shows the current name and lets
+   TNC apps show when they scan. The page shows the current name and lets
    the user change it. Only the first 11 characters or so fit in the
    device's advertisement (provisional: see
    [advertising](control-api.md#ble-management)); apps that connect see
@@ -295,7 +295,7 @@ pair the radio itself; the button does. The CPU clock isn't asked: the
 firmware runs at 240 MHz, which a Tail Bat needs.
 
 The page ends with a summary: the firmware version, the name, the LED
-mode, and the setup code again.
+mode, and the authorization code again.
 
 ## The serial connection
 
@@ -313,7 +313,7 @@ mode, and the setup code again.
 
 ## Privacy
 
-- **The setup code never leaves the browser.** It's never put in a URL,
+- **The authorization code never leaves the browser.** It's never put in a URL,
   a log, analytics or an error report. When the page shows a QR code
   (Phase E), it draws it with its own JavaScript, not a server or a QR
   service.
@@ -349,4 +349,4 @@ In Phase C, on the project's ATOM Lite:
       device on its second app partition.
 - [ ] Going back to an older version.
 - [ ] Unplugging mid-install, then installing again.
-- [ ] The setup code from the page enrolls `ktbctl` over BLE (Phase D).
+- [ ] The authorization code from the page authorizes `ktbctl` over BLE (Phase D).

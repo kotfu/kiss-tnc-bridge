@@ -32,7 +32,7 @@ constexpr const char *KISS_TX = "00000002-ba2a-46c9-ae49-01b0961f68bb"; // phone
 constexpr const char *KISS_RX = "00000003-ba2a-46c9-ae49-01b0961f68bb"; // phone subscribes
 // The management service (docs/control-api.md, BLE management). It isn't
 // served until Phase E, but its UUID goes in the scan response now, so the
-// advertising layout can be tried with KISS apps (roadmap, Phase C).
+// advertising layout can be tried with KISS TNC apps (roadmap, Phase C).
 constexpr const char *MGMT_SERVICE = "e3370001-156d-4ba6-90dd-14075e7ca557";
 
 constexpr uint16_t APP_ID = 0x4b;
@@ -162,7 +162,7 @@ void session_event(const std::string &session, const char *state)
     }
 }
 
-// The flags and the KISS service in the advertisement, so KISS apps find
+// The flags and the KISS service in the advertisement, so KISS TNC apps find
 // the device as before; the management service and as much of the name as
 // fits in the scan response. The whole name is the GAP device name.
 void configure_advertising()

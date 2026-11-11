@@ -15,14 +15,15 @@ Phase C, milestone 4 of 4:
 
 | Milestone | What | State |
 |---|---|---|
-| 1 | Flash layout, signed images and rollback; settings in NVS; the device key and setup code; the control API over USB serial; the LED and button | Done |
+| 1 | Flash layout, signed images and rollback; settings in NVS; the device key and authorization code; the control API over USB serial; the LED and button | Done |
 | 2 | The radio: SPP to the TH-D74/D75, KISS init, reconnect, pairing with the button and over USB | Done |
 | 3 | The BLE KISS service and bridging | Done |
 | 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | Done |
 
 The ATOM bridges the radio to up to two phones. BLE management (Noise
-enrollment) is Phase E and updates over BLE are Phase F; until then the
-management window opens and closes, but nothing can enroll.
+authorization) is Phase E and updates over BLE are Phase F; until then
+authorization mode starts and ends, but no management app can be
+authorized over BLE.
 
 ## Layout
 
@@ -37,7 +38,7 @@ management window opens and closes, but nothing can enroll.
 | `main/control.*` | The control API: framing, replies now and later, events, and the device and auth commands |
 | `main/control_radio.cpp` | `status`, `subscribe`, `tnc.*`, `bluetooth.*` and `port.*` |
 | `main/settings.*` | `public_name`, `led_normal`, `led_wake_seconds`, `led_brightness` in NVS |
-| `main/auth.*` | The X25519 device key, the setup code, the management window |
+| `main/auth.*` | The X25519 device key, the authorization code, authorization mode |
 | `main/ui.*`, `main/led.*` | Gestures, LED states and events, dark mode |
 | `main/radio.*` | The radio: one task for the SPP link, KISS init, reconnecting, scanning and pairing |
 | `main/kiss.*` | KISS framing, and AX.25 decoding for frame events |
@@ -46,7 +47,7 @@ management window opens and closes, but nothing can enroll.
 | `main/storage.*` | NVS, and what reset clears |
 | `main/errors.*` | The errors the LED shows red and `device.info` lists |
 | `main/firmware.*` | The running image, rollback and the self-test deadline |
-| `tools/ktbdev.py` | A development client for the control API over USB |
+| `tools/ktbdev.py` | A development management app for the control API over USB |
 | `tools/package.py` | Names a build's images for a release and writes the web installer's manifest |
 
 ## Build and flash
@@ -61,7 +62,7 @@ idf.py -B build-dev -p /dev/cu.usbserial-XXXX -b 115200 flash
 ```
 
 `erase-flash` before `flash` makes a clean install: a new device key and
-setup code. Flash at 115200 baud; 921600 didn't hold on the ATOM Lite.
+authorization code. Flash at 115200 baud; 921600 didn't hold on the ATOM Lite.
 
 Images are signed, and the bootloader checks the signature at every boot,
 so an image signed with one key won't boot under a bootloader built with
@@ -74,9 +75,9 @@ development key and the release key only needs a flash.
 
 ```
 tools/ktbdev.py info                 # device.info
-tools/ktbdev.py code                 # the setup code and its URI
+tools/ktbdev.py code                 # the authorization code and its link
 tools/ktbdev.py set led_normal=dark led_wake_seconds=10
-tools/ktbdev.py window 120           # open the management window
+tools/ktbdev.py mode 120             # start authorization mode
 tools/ktbdev.py demo                 # every LED state and event in turn
 tools/ktbdev.py debug radio=connected phones=1
 tools/ktbdev.py status
@@ -107,13 +108,13 @@ Over USB, `ktbdev.py pair` does the same for an address, and asks you to
 compare the number first.
 
 Opening the port must not reboot the device. The ATOM's reset circuit
-pulls EN low while RTS is asserted without DTR, so a client has to drop
-RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
+pulls EN low while RTS is asserted without DTR, so a management app has to
+drop RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
 opens with DTR asserted and drops it after.
 
 ## Phones
 
-KISS apps find the ATOM by the BLE KISS service, which its advertisement
+KISS TNC apps find the ATOM by the BLE KISS service, which its advertisement
 carries; the scan response carries the management service's UUID and the
 first 11 bytes of `public_name`. Apps that connect read the whole name.
 The ATOM takes two BLE connections. A phone that subscribes to KISS

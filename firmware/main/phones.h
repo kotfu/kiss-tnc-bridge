@@ -1,6 +1,6 @@
 // The phones: the BLE KISS API service
 // (https://github.com/hessu/aprs-specs/blob/master/BLE-KISS-API.md) that
-// KISS apps connect to, the `phones` app port of the bridge ktbr0.
+// KISS TNC apps connect to, the `phones` app port of the bridge ktbr0.
 //
 // Each phone subscribed to KISS notifications is a session,
 // "ktbr0/phones/<its address>". A phone's writes are reassembled into whole

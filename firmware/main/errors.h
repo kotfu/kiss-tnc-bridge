@@ -1,6 +1,6 @@
 // The device's errors (docs/atom-lite-ui.md, Errors): things it can't fix by
 // retrying. Any of them turns the LED red, and device.info lists them with
-// what to do, so a management client can say what's wrong.
+// what to do, so a management app can say what's wrong.
 //
 // Most last until the device restarts. phones clears itself once
 // advertising starts.

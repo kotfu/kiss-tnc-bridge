@@ -438,7 +438,7 @@ impl Response {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ApiError {
-    /// Stable and machine-readable: scripts and clients match on it.
+    /// Stable and machine-readable: scripts and management apps match on it.
     pub code: ErrorCode,
     /// For people: what went wrong and what to do next.
     pub message: String,

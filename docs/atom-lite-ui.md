@@ -5,24 +5,24 @@ GPIO27). The small button on its side is the ESP32's reset, wired to the
 chip's enable pin: it restarts the device, and the firmware can't see it.
 This is the design of what you can do with them, worked out at the
 start of Phase C (see the [roadmap](roadmap.md#phase-c-atom-lite-firmware-and-web-installer)).
-Everything else is done from a trusted client (the iOS app, `ktbctl`) over
+Everything else is done from a management app (the iOS app, `ktbctl`) over
 the [control API](control-api.md), or by reflashing.
 
-Status: the actions and their gestures, the management window rule, and
+Status: the actions and their gestures, the authorization mode rule, and
 the LED's states and events were decided on 9 November 2026, and the
 LED's timing was judged on an ATOM Lite running the firmware the same day.
 
 ## What you can do on the device
 
-Only what you'd need with no app, no trusted client and no computer:
+Only what you'd need with no app and no computer:
 
 | Action | Gesture | What it does |
 |---|---|---|
 | **Wake the LED** | Single press, in dark mode | Lights the LED for `led_wake_seconds` (see [the wake rule](#normal-and-dark-mode)). Only in dark mode, and only while the LED is dark |
 | **Pair a radio** | Double press | Scans for a Kenwood in pairing mode and pairs with it. A new pairing replaces the old one, since the device keeps one radio |
 | **Cancel pairing** | Single press, while pairing | Stops pairing and goes back to the radio the device had |
-| **Open the management window** | Long press | Lets one new client enroll with the setup code (see [below](#the-management-window)) |
-| **Close the management window** | Single press, while the window is open | Closes it before its time runs out |
+| **Start authorization mode** | Long press | Lets one new management app be authorized with the authorization code (see [below](#authorization-mode)) |
+| **End authorization mode** | Single press, in authorization mode | Ends it before its time runs out |
 | **Reset** | Hold the button at power-on | Clears all settings (see [below](#reset)). It doesn't touch the firmware |
 | **Restart** | The side button | Restarts the device, as unplugging it and plugging it back in would |
 
@@ -31,7 +31,7 @@ power-on to it, and `device.info`'s `last_reset` says `power_on` for
 either.
 
 Reset happens only at power-on, which leaves the running device's
-gestures to pairing and the window. A single press never starts anything,
+gestures to pairing and authorization mode. A single press never starts anything,
 so it's free to wake the LED.
 
 ### Pairing
@@ -51,27 +51,27 @@ Nothing waits on a double press: a single press only wakes the LED or
 cancels pairing, so it doesn't need to wait to see whether a second press
 follows.
 
-### The window
+### Starting authorization mode
 
 Long press: hold the button for 3 seconds (provisional). The LED turns
-**steady magenta**, meaning "let go now to open the window". Let go and
-the window opens: **magenta, slow blink**. Let go before the LED turns
-magenta and nothing happens. Holding past it changes nothing; the window
-opens when you let go.
+**steady magenta**, meaning "let go now to start authorization mode". Let
+go and authorization mode starts: **magenta, slow blink**. Let go before
+the LED turns magenta and nothing happens. Holding past it changes
+nothing; authorization mode starts when you let go.
 
-A single press while the window is open closes it, and the LED goes back
-to the state it was showing. Closing it shows no confirmation, and neither
-does the window running out: whether an enrollment worked is for the
-client that was enrolling to say.
+A single press in authorization mode ends it, and the LED goes back to the
+state it was showing. Ending it shows no confirmation, and neither does
+its time running out: whether an authorization worked is for the
+management app being authorized to say.
 
 This is a different hold from reset's, which happens only at power-on.
 
-### Dark mode while pairing or the window is open
+### Dark mode while pairing or in authorization mode
 
-Pairing and the open window always show, whatever `led_normal` says, and
+Pairing and authorization mode always show, whatever `led_normal` says, and
 the LED never goes dark while either one lasts, even if the wake timer runs
-out. So the single press that cancels pairing or closes the window is
-never taken as a wake press. When pairing or the window ends, the wake
+out. So the single press that cancels pairing or ends authorization mode
+is never taken as a wake press. When pairing or authorization mode ends, the wake
 timer starts again, so you see the state the device goes back to before
 the LED goes dark.
 
@@ -79,10 +79,10 @@ the LED goes dark.
 
 | While | The button |
 |---|---|
-| **Updating** | Does nothing. Pairing or opening the window mid-update isn't worth the risk |
+| **Updating** | Does nothing. Pairing or starting authorization mode mid-update isn't worth the risk |
 | **Error** | Works as usual: whatever still works can still be used |
 | **Pairing** | Only a single press, which cancels pairing |
-| **The window is open** | Only a single press, which closes the window |
+| **Authorization mode** | Only a single press, which ends authorization mode |
 | **The LED is dark** | Only a wake (see [the wake rule](#normal-and-dark-mode)) |
 
 ## Reset
@@ -92,16 +92,17 @@ installed:
 
 - every setting goes back to its default
 - the radio pairing is removed
-- every trusted management client is removed
+- every authorized management app is removed
 
 The firmware stays, so reset is not a "factory reset". It's also the way out
 of a configuration that makes the device misbehave, so it has to work
 however the device is set up: a setting can't stop the button from
 reaching it.
 
-Reset keeps the device's key and setup code, so a reset device can be
-enrolled again with the code you wrote down at install time. To change the
-code, a trusted client rotates it (`auth.rotate_code`). To change the key
+Reset keeps the device's key and authorization code, so management apps
+can be authorized again on a reset device with the code you kept at install
+time. To change the code, an authorized management app changes it
+(`auth.rotate_code`). To change the key
 as well, erase the flash and reinstall the firmware.
 
 ### How you reset
@@ -134,22 +135,23 @@ If you're still holding the button when it reboots, it goes through the
 warning again: let go during the warning, and nothing more happens. The
 firmware doesn't treat that second boot differently.
 
-## The management window
+## Authorization mode
 
-The window is the time during which the device accepts an enrollment
-handshake: 5 minutes (provisional) after it's opened. Trusted clients
-don't need it; they connect whenever they like.
+Authorization mode is the time during which the device accepts an
+authorization handshake: 5 minutes (provisional) after it starts.
+Authorized management apps don't need it; they connect whenever they
+like.
 
-- **One enrollment per window.** The window closes after the first
-  successful enrollment, including a client that was already trusted and
-  enrolled again. Enrolling two clients takes two windows. This keeps a
-  window that's left open from letting in more than the client it was
-  opened for.
-- **A few failed attempts close it.** A wrong code doesn't close the window,
-  so someone nearby can't keep closing it before you enroll, but after 3
-  (provisional) it closes anyway.
+- **One authorization each time.** Authorization mode ends after the first
+  successful authorization, including an app that was already authorized
+  and was authorized again. Authorizing two apps takes authorization mode
+  twice. This keeps authorization mode, if it's forgotten, from letting in
+  more than the app it was started for.
+- **A few failed attempts end it.** A wrong code doesn't end authorization
+  mode, so someone nearby can't keep ending it before your app is
+  authorized, but after 3 (provisional) it ends anyway.
 - **The same rule everywhere:** the button, the Core2's menu, a Pi running
-  `ktb-gateway`, and `auth.window` from a trusted client.
+  `ktb-gateway`, and `auth.mode` from an authorized management app.
 
 ## The LED
 
@@ -198,22 +200,22 @@ This also means:
 ### States
 
 A state lasts until something changes. When more than one is true, the
-LED shows the highest row: the window can be open, or an update running,
+LED shows the highest row: authorization mode can be on, or an update running,
 while the device goes on bridging.
 
 | State | What it means | Solid | Dim | Breathe | Dark |
 |---|---|---|---|---|---|
-| **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management client to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no client | Red, three fast blinks, then a pause | Same | Same | Same |
+| **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management app to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no management app | Red, three fast blinks, then a pause | Same | Same | Same |
 | **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
-| **Window open** | The management window is open for one enrollment | Magenta, slow blink | Same | Same | Same |
+| **Authorization mode** | Accepting one new management app | Magenta, slow blink | Same | Same | Same |
 | **Pairing** | Scanning for a Kenwood in pairing mode | Blue, fast blink | Same | Same | Same |
 | **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same | Same |
 | **Radio not connected** | A radio is paired, but the link is down: the radio is off or out of range, or the device has just started. It tries again every 15 s | Yellow, slow blink | Same | Same | Same |
-| **Radio connected, no phones** | Normal: bridging is ready, but no KISS app is connected | Cyan, steady | Cyan, steady, dimmed | Cyan, slow pulse | Off; a press shows it steady |
+| **Radio connected, no phones** | Normal: bridging is ready, but no KISS TNC app is connected | Cyan, steady | Cyan, steady, dimmed | Cyan, slow pulse | Off; a press shows it steady |
 | **Radio connected, phones connected** | Normal: bridging | Green, steady | Green, steady, dimmed | Green, slow pulse | Off; a press shows it steady |
 
-"Phones" means BLE KISS clients. The device doesn't show when a
-management client is connected, and a management client doesn't turn cyan
+"Phones" means KISS TNC apps connected over BLE. The device doesn't show
+when a management app is connected, and a management app doesn't turn cyan
 into green.
 
 **Color blindness.** Red-green color blindness is common, and hams are
@@ -230,7 +232,7 @@ color-blind user may lose, and it's not worth a pattern of its own.
 An error is something the device can't fix by retrying. `device.info`
 lists the errors with what to do (see
 [control-api.md](control-api.md#deviceinfo)), and the control API keeps
-working over USB whatever fails, so a client can always say what's wrong.
+working over USB whatever fails, so a management app can always say what's wrong.
 A new firmware image that starts with an error fails its self-test and is
 rolled back.
 
@@ -239,7 +241,7 @@ rolled back.
 | `storage` | NVS, where settings, the radio pairing and the device's key live, can't be used | The device runs on default settings and forgets everything when unplugged. Bluetooth may not start | Only by a clean install |
 | `bluetooth` | The Bluetooth controller, Bluedroid or SPP didn't start | USB only: nothing is bridged | On a power cycle, if it was a fluke; otherwise a reinstall |
 | `phones` | The BLE KISS service or advertising didn't start, or advertising didn't start within 10 s of power-on | The radio link, but phones can't find the device | By itself, once advertising starts; otherwise a power cycle |
-| `device_key` | The device's X25519 key couldn't be loaded or made | Bridging. Nothing can enroll over BLE (Phase E) | Only by a clean install, which makes a new key |
+| `device_key` | The device's X25519 key couldn't be loaded or made | Bridging. No management app can be authorized over BLE (Phase E) | Only by a clean install, which makes a new key |
 
 Not errors, because retrying or the button fixes them:
 
@@ -275,8 +277,8 @@ flick on top of the state, which carries on around them.
 | **Frame from a phone to the radio** (the radio will transmit) | A short white flick | Nothing, unless the LED is awake |
 | **Pairing succeeded** | The dark gap, green, three quick flashes, then the dark gap | Same |
 | **Pairing failed** (no radio found, it refused, or you cancelled) | The dark gap, yellow, three quick flashes, then the dark gap | Same |
-| **Client enrolled** (the window closes) | The dark gap, green, three quick flashes, then the dark gap | Same |
-| **Identify** (a trusted client asked, with `device.identify`) | The dark gap, then magenta, blue, white, three times, one straight after another, each as long as a slow blink, then the dark gap | Same |
+| **App authorized** (authorization mode ends) | The dark gap, green, three quick flashes, then the dark gap | Same |
+| **Identify** (a management app asked, with `device.identify`) | The dark gap, then magenta, blue, white, three times, one straight after another, each as long as a slow blink, then the dark gap | Same |
 | **Reset warning** (the button held at power-on) | Steady white for 3 seconds (provisional); let go to cancel | Same |
 | **Reset done** (just before the reboot) | The dark gap, white, three quick flashes, then the dark gap | Same |
 | **Long press reached** (the button held for 3 s) | Steady magenta until you let go | Same: the LED is awake |
@@ -295,7 +297,7 @@ A new ATOM Lite, after installing the firmware from the web page over USB:
 4. The radio pairs. **Pairing succeeded:** three quick green flashes, then
    dark.
 5. **Radio connected, no phones:** cyan, steady.
-6. A KISS app connects. **Radio connected, phones connected:** green,
+6. A KISS TNC app connects. **Radio connected, phones connected:** green,
    steady, with a white flick for each frame the app sends and a dip for
    each frame it receives.
 
@@ -336,13 +338,13 @@ Left out on purpose, and how you do each one instead:
 
 | Action | Instead |
 |---|---|
-| Revoke all trusted clients, rotate the setup code | A trusted client; with none, reset |
+| Revoke all management apps, change the authorization code | An authorized management app; with none, reset |
 | Roll back a bad firmware update | Reflash from the web installer or `ktbctl` |
-| Open the window at power-on | The button |
+| Start authorization mode at power-on | The button |
 | Safe mode (boot with only USB) | Reset |
 | Forget the radio | Pairing a new one replaces it; reset removes it |
 | Reboot, reconnect to the radio now, clear an error | The side button, or unplug the USB cable or the Tail Bat |
 | Pause the radio link | Not offered |
 | Disconnect all phones | Not needed: unplug |
-| Show the setup code | Over USB (`ktbctl device code`), or from a trusted client |
-| Change settings | A trusted client, or USB |
+| Show the authorization code | Over USB (`ktbctl device code`), or from an authorized management app |
+| Change settings | An authorized management app, or USB |

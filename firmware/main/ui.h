@@ -10,7 +10,7 @@ enum class Event : uint8_t {
     power_on,
     pairing_succeeded,
     pairing_failed,
-    client_enrolled,
+    app_authorized,
     identify,
     reset_done,
     frame_to_phone, // a frame from the radio to a phone: a dip

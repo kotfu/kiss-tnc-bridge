@@ -15,7 +15,7 @@
 
 namespace ktb::control {
 
-// A connection a client speaks the API over.
+// A connection a management app speaks the API over.
 class Conn {
 public:
     virtual ~Conn() = default;

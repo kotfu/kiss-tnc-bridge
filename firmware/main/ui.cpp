@@ -82,7 +82,7 @@ Sequence sequence_for(Event e)
         s.add(led::off, gap_ms);
         break;
     case Event::pairing_succeeded:
-    case Event::client_enrolled:
+    case Event::app_authorized:
         three_flashes(led::green);
         break;
     case Event::pairing_failed:
@@ -113,7 +113,7 @@ const char *event_name(Event e)
     case Event::power_on: return "power on";
     case Event::pairing_succeeded: return "pairing succeeded";
     case Event::pairing_failed: return "pairing failed";
-    case Event::client_enrolled: return "client enrolled";
+    case Event::app_authorized: return "app authorized";
     case Event::identify: return "identify";
     case Event::reset_done: return "reset done";
     case Event::frame_to_phone: return "frame to phone";
@@ -126,7 +126,7 @@ const char *event_name(Event e)
 enum class Shown : uint8_t {
     error,
     updating,
-    window,
+    authorizing,
     pairing,
     no_radio,
     radio_down,
@@ -141,7 +141,7 @@ const char *shown_name(Shown s)
     switch (s) {
     case Shown::error: return "error";
     case Shown::updating: return "updating";
-    case Shown::window: return "window open";
+    case Shown::authorizing: return "authorization mode";
     case Shown::pairing: return "pairing";
     case Shown::no_radio: return "no radio";
     case Shown::radio_down: return "radio not connected";
@@ -157,7 +157,7 @@ Shown current_state()
 {
     if (errors::any()) return Shown::error;
     if (updating_on) return Shown::updating;
-    if (auth::window_is_open()) return Shown::window;
+    if (auth::mode_is_on()) return Shown::authorizing;
     if (radio::pairing()) return Shown::pairing;
     switch (radio::link()) {
     case radio::Link::none: return Shown::no_radio;
@@ -200,7 +200,7 @@ enum class Press : uint8_t {
     ignored,     // updating, or already used (a wake, the second of a double)
     candidate,   // could become a long press, or the first of a double
     cancel_pair, // a press while pairing: cancels it when let go
-    close_window,// a press while the window is open: closes it when let go
+    end_authorizing, // a press in authorization mode: ends it when let go
 };
 
 class Ui {
@@ -275,7 +275,7 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
         if (down && press == Press::candidate && !long_reached &&
             now - press_start >= long_press_ms) {
             long_reached = true;
-            ESP_LOGI(TAG, "long press reached: let go to open the window");
+            ESP_LOGI(TAG, "long press reached: let go to start authorization mode");
         }
         return;
     }
@@ -299,8 +299,8 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
             last_click_up = -10000;
         } else if (state == Shown::pairing) {
             press = Press::cancel_pair;
-        } else if (state == Shown::window) {
-            press = Press::close_window;
+        } else if (state == Shown::authorizing) {
+            press = Press::end_authorizing;
         } else if (now - last_click_up <= double_press_ms) {
             ESP_LOGI(TAG, "double press: pair");
             press = Press::ignored;
@@ -316,8 +316,8 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
     switch (press) {
     case Press::candidate:
         if (long_reached) {
-            ESP_LOGI(TAG, "long press: open the window");
-            auth::window_open(auth::window_default_seconds);
+            ESP_LOGI(TAG, "long press: start authorization mode");
+            auth::mode_start(auth::mode_default_seconds);
             last_click_up = -10000;
         } else {
             last_click_up = now;
@@ -327,9 +327,9 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
         ESP_LOGI(TAG, "press: cancel pairing");
         radio::cancel_pairing();
         break;
-    case Press::close_window:
-        ESP_LOGI(TAG, "press: close the window");
-        auth::window_close();
+    case Press::end_authorizing:
+        ESP_LOGI(TAG, "press: end authorization mode");
+        auth::mode_end();
         break;
     default:
         break;
@@ -362,7 +362,7 @@ void Ui::render(int64_t now, Shown state, bool dark)
     switch (state) {
     case Shown::error: color = error_on ? led::red : led::off; break;
     case Shown::updating: color = fast_on ? led::white : led::off; break;
-    case Shown::window: color = slow_on ? led::magenta : led::off; break;
+    case Shown::authorizing: color = slow_on ? led::magenta : led::off; break;
     case Shown::pairing: color = fast_on ? led::blue : led::off; break;
     case Shown::no_radio: color = slow_on ? led::yellow : led::blue; break;
     case Shown::radio_down: color = slow_on ? led::yellow : led::off; break;
@@ -413,8 +413,8 @@ void Ui::run()
         if (state != shown) {
             ESP_LOGI(TAG, "state: %s", shown_name(state));
             if (is_normal(state) && !is_normal(shown)) {
-                // Coming back to normal (linked, pairing over, window
-                // closed): show it for a while before going dark.
+                // Coming back to normal (linked, pairing over,
+                // authorization mode ended): show it for a while before going dark.
                 awake_until = now + settings::led_wake_seconds() * 1000;
             }
             shown = state;

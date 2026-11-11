@@ -87,9 +87,9 @@ that share one protocol:
 14. **The project's web home is
     [www.k0tfu.org/kiss-tnc-bridge](https://www.k0tfu.org/kiss-tnc-bridge)**:
     documentation, install pages and the web installer. The source code
-    stays on GitHub. The site is a Rails app, so it can serve the setup
-    link (`https://www.k0tfu.org/ktb`, see
-    [Setup URIs](control-api.md#setup-uris)) and the files the iOS app's
+    stays on GitHub. The site is a Rails app, so it can serve the
+    authorization link (`https://www.k0tfu.org/ktb`, see
+    [Authorization links](control-api.md#authorization-links)) and the files the iOS app's
     Universal Links need.
 15. **The firmware has its own semver releases, and the major version
     says what works together.** Firmware is tagged `firmware-v<version>`,
@@ -99,7 +99,7 @@ that share one protocol:
     `ktbctl` with device support), and neither works with the other's 2.x:
     the major version is the control API's protocol version, so the two
     move together. Within a major, a new feature is announced by a
-    capability in `device.info`, and clients check for it, so neither side
+    capability in `device.info`, and management apps check for it, so neither side
     needs a minimum version of the other to keep working. See
     [Compatibility](control-api.md#compatibility).
 16. **Release images are signed in CI with a key kept as a GitHub Actions
@@ -175,7 +175,7 @@ exactly as on the daemon.
     below).
   - `device.reboot`, `device.reset` and `device.identify`.
   - `firmware.update.*`: see [Firmware updates](#firmware-updates).
-- Clients decide what to show from `device.info`'s capabilities, not from the
+- Management apps decide what to show from `device.info`'s capabilities, not from the
   board name, so a new board doesn't need app changes for features it shares.
 
 ### Device settings
@@ -229,25 +229,27 @@ These devices control a transmitter under your callsign, so the firmware uses
 the same model planned for `ktb-gateway`:
 
 - **Authentication inside the protocol, not Bluetooth pairing.** Each
-  device makes its own setup code, 80 random bits, and keeps it. A client
-  that knows the code enrolls once, with a Noise handshake, and is trusted
-  from then on by its own key. Every session is encrypted. The ATOM Lite has
+  device makes its own authorization code, 80 random bits, and keeps it. A
+  management app that knows the code is authorized once, with a Noise
+  handshake, and recognized from then on by its own key. Every session is encrypted. The ATOM Lite has
   no screen, so its code comes from the web installer or `ktbctl` over USB,
   either as 16 characters or as a QR code with a URI in it. The Core2 shows
   its QR code on screen. See [Authentication](control-api.md#authentication)
   in the control API.
-- **The code is permanent.** It can be rotated over USB or by a trusted
-  client; clients already trusted keep working.
-- **One level of trusted clients**, and a trusted client can do everything.
+- **The code is permanent.** It can be changed over USB or by an
+  authorized management app; apps already authorized keep working.
+- **One level of authorized management apps**, and an authorized app can
+  do everything.
   Anyone with the device and a USB cable can reflash it anyway (decision
   12), so owner and guest levels would add complexity without adding
   protection.
-- **One enrollment flow** in the iOS app for every device: a Pi running
+- **One authorization flow** in the iOS app for every device: a Pi running
   `ktb-gateway`, an ATOM Lite and a Core2.
-- **Management window.** A new client is accepted only for a few minutes
-  after a button press: a long press on the ATOM Lite (see
-  [atom-lite-ui.md](atom-lite-ui.md)), or a menu item on the Core2. A trusted client can open it too.
-  Each window lets in one client.
+- **Authorization mode.** A new management app is accepted only for a few
+  minutes after a button press: a long press on the ATOM Lite (see
+  [atom-lite-ui.md](atom-lite-ui.md#authorization-mode)), or a menu item on
+  the Core2. An authorized management app can start it too. Each time, it
+  lets in one app.
 - **Firmware updates are signed** and checked before the device boots them.
   This protects updates over BLE, not USB: with no eFuses burned (decision
   12), anyone with the device and a USB cable can reflash it, which is also
@@ -274,15 +276,16 @@ configuration commands aren't the management protocol; the control API is.
       `firmware.update.*` commands to `src/control/protocol.rs` and the
       published JSON Schema. Specified in control-api.md; types not yet
       written.
-- [ ] Specify the setup-code exchange and the management window, shared by
-      `ktb-gateway` and the firmware. Drafted 8 November 2026: a Noise
-      handshake keyed by an 80-bit setup code, then a key per client.
+- [ ] Specify the authorization-code exchange and authorization mode,
+      shared by `ktb-gateway` and the firmware. Drafted 8 November 2026: a
+      Noise handshake keyed by an 80-bit authorization code, then a key
+      per management app.
 
 ### `ktb-gateway` BLE management (decision 1)
 
 This is Phase 6 in [plan-1.0.md](plan-1.0.md#phase-6-ktb-gateway-1x). The iOS
-app needs at least its BLE management transport, setup codes and management
-window to reach the daemon. The HTTP, WebSocket and LAN transports can follow
+app needs at least its BLE management transport, authorization codes and
+authorization mode to reach the daemon. The HTTP, WebSocket and LAN transports can follow
 later.
 
 ### iOS app (decisions 1, 3, 7)
@@ -292,7 +295,7 @@ published JSON Schema.
 
 - [ ] Discover devices advertising the BLE management service: Pis running
       `ktb-gateway`, ATOM Lites and Core2s.
-- [ ] Enter a setup code, and store the credential per device.
+- [ ] Enter an authorization code, and store the credential per device.
 - [ ] Status: bridges, ports, TNC state, connected apps, activity.
 - [ ] Scan for and pair a radio, and set its TNC model.
 - [ ] Daemon management: enable, disable and switch bridges. Create and edit
@@ -322,7 +325,7 @@ B.B. Link parity:
       (milestone 3).
 - [x] Scan for and pair a radio: with a double press, or over USB
       (milestone 2).
-- [x] Reset: clear all settings, the radio pairing and trusted clients
+- [x] Reset: clear all settings, the radio pairing and authorized management apps
       (milestone 1).
 - [x] RGB LED status and button controls (milestone 1).
 - [ ] RadioMail frequency control, if it's kept (see
@@ -332,7 +335,7 @@ Family features:
 
 - [ ] Control API subset over BLE management and USB serial.
 - [x] Device settings in NVS (milestone 1).
-- [ ] Setup code and management window.
+- [ ] Authorization code and authorization mode.
 - [ ] Two app partitions for over-the-air updates, with rollback. The
       partition table sits at 0xA000 with NVS at the end of flash, because a
       bootloader that checks signatures doesn't fit before 0x8000. Updates
@@ -377,7 +380,7 @@ release assets, because GitHub doesn't send CORS headers for them (checked
       tag.
 - [ ] One page with a choice of board: ATOM Lite or Core2.
 - [ ] After flashing, the same page connects to the device over Web Serial and
-      runs first setup over the control API: show the setup code, name the
+      runs first setup over the control API: show the authorization code, name the
       device, and choose the LED mode. Pairing is on the device's button,
       and the radio's model comes from its Bluetooth name.
 - [ ] Explain the "erase device" choice: a clean install wipes the radio
@@ -399,8 +402,8 @@ The same firmware core as the ATOM Lite, built for a second board, plus:
 
 - [ ] Status screen: TNC state, connected apps, battery, and recently heard
       stations, decoded for display only, as `ktbctl monitor` does.
-- [ ] On-device setup: scan for and pair a radio, show the setup code, open
-      the management window, change settings.
+- [ ] On-device setup: scan for and pair a radio, show the authorization
+      code, start authorization mode, change settings.
 - [ ] Battery level and charging through M5Unified, with a power-off menu
       item.
 - [ ] Wi-Fi, if it passes the soak test below: station mode only, a
@@ -537,7 +540,7 @@ numbers are the best case.
 ### Phase B: protocol
 
 The BLE management transport, the device subset, the `device.*` and
-`firmware.update.*` commands, and the setup-code exchange. Published in
+`firmware.update.*` commands, and the authorization-code exchange. Published in
 [control-api.md](control-api.md) and the schema.
 
 ### Phase C: ATOM Lite firmware and web installer
@@ -549,18 +552,18 @@ Lite and set it up from a browser, with no app.
 - [ ] **Design the ATOM Lite's user interface first**, in
       [atom-lite-ui.md](atom-lite-ui.md). Its only controls are one button
       and one RGB LED.
-  - [x] What you can do on the device alone: pair a radio, open the
-        management window, and reset (clear all settings; the firmware,
-        the device key and the setup code stay). Everything else goes to
-        a trusted client, USB, or unplugging.
-  - [x] One enrollment per management window.
+  - [x] What you can do on the device alone: pair a radio, start
+        authorization mode, and reset (clear all settings; the firmware,
+        the device key and the authorization code stay). Everything else
+        goes to a management app, USB, or unplugging.
+  - [x] One authorization each time authorization mode starts.
   - [x] The LED's states and events, in precedence order, with `solid`,
         `dim`, `breathe` and `dark` modes for the normal states, and the wake
         rule: while the LED is dark, a press only wakes it.
   - [x] Reset: hold the button at power-on, through a 3-second warning.
   - [x] Gestures: a single press wakes the LED in dark mode, cancels
-        pairing or closes the management window; a double press pairs; a
-        long press opens the window.
+        pairing or ends authorization mode; a double press pairs; a
+        long press starts authorization mode.
   - [x] The LED's timing, judged on a device (milestone 1). The
         gestures' durations are the first draft's, unchanged so far.
 

@@ -1064,7 +1064,7 @@ void pairing_event(const control::Pending &p, const char *step, const char *key 
 
 // Pairs with a radio and makes it the radio, keeping the old one until the
 // new one has paired. From the button (search, confirm at once) or from
-// bluetooth.pair (a given address, the client confirms).
+// bluetooth.pair (a given address, the management app confirms).
 void do_pair(const Request &req)
 {
     bool button = req.type == ReqType::button_pair;

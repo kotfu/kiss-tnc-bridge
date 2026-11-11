@@ -16,6 +16,13 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pairing's fast blink.
 - Identify shows magenta, blue and white three times instead of twice.
 - Identify and power-on use the same 1 s dark gap as the other events.
+- The project's vocabulary: the setup code is now the authorization code,
+  the management window is authorization mode, and clients that manage
+  the device are management apps. In the control API, `auth.window` is
+  now `auth.mode` and `auth.clients` is `auth.apps`, and `auth.info`
+  reports `mode` and `apps` instead of `window` and `clients`.
+  `auth.code` and `auth.rotate_code` are unchanged, and so is a device's
+  code.
 
 ## 1.0.0-rc.1 (2026-11-10)
 
