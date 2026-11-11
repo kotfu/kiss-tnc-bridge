@@ -7,3 +7,4 @@
 
 # Spike build outputs
 /spikes/*/target
+__pycache__/
