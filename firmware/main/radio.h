@@ -1,5 +1,6 @@
 // The radio: Bluetooth Classic SPP to a Kenwood TH-D74 or TH-D75 (or any
-// SPP TNC in KISS mode), its KISS init, reconnecting, and pairing.
+// SPP TNC in KISS mode), or BLE to a TIDRADIO TD-H9 as a GATT client; its
+// KISS init, reconnecting, and pairing or selecting it.
 //
 // One task owns all of it. The button and the control API send it
 // requests, and it answers them as it goes; Bluedroid's callbacks only
@@ -13,6 +14,7 @@
 
 #include "cJSON.h"
 #include "control.h"
+#include "esp_gap_ble_api.h"
 
 namespace ktb::radio {
 
@@ -43,19 +45,21 @@ void send_frame(const uint8_t *frame, size_t len, const std::string &session);
 constexpr uint32_t pairing_seconds = 60;
 
 // The button: pair with the first TH-D74 or TH-D75 found in pairing mode,
-// confirming its number at once; or cancel that.
+// confirming its number at once, or select the first TD-H9 found; or
+// cancel that.
 void start_pairing();
 void cancel_pairing();
 
 // The control API. Each answers p, at once or later, from the radio task.
-void scan(const control::Pending &p, uint32_t seconds);
+void scan(const control::Pending &p, uint32_t seconds, bool le);
 void scan_stop(const control::Pending &p, double scan_request);
 // Pairs with address, or the radio's own address if address is empty.
 void pair(const control::Pending &p, const std::string &address);
 void pair_reply(const control::Pending &p, double pair_request, bool accept);
 void unpair(const control::Pending &p, const std::string &address);
-// tnc.update: model and/or address may be empty to keep them.
-void update(const control::Pending &p, const std::string &model, const std::string &address,
+// tnc.update: model and/or address may be empty to keep them. The address
+// is spp.address for a Classic model and ble.address for the TD-H9.
+void update(const control::Pending &p, const std::string &model, const std::string &address, bool address_ble,
             bool non_disruptive);
 // port.connect, port.disconnect, port.release
 enum class Hold : uint8_t { none, up, down };
@@ -63,6 +67,10 @@ void hold(const control::Pending &p, Hold h);
 
 // public_name changed: the name the radio sees when pairing.
 void name_changed();
+
+// Every BLE GAP event, from phones' callback (Bluedroid takes one): the
+// radio's scans and its TD-H9 link.
+void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 
 // For status: the adapters, tncs and bridges arrays. Safe from any task.
 cJSON *status_json();
