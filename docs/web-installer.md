@@ -47,8 +47,8 @@ Decided:
 - **Linux:** the browser runs as the user, who needs permission to open the
   serial device: membership of `dialout` on Debian and Ubuntu (`uucp` on
   Arch). The page says so when opening the port fails on Linux.
-- **Windows:** the ATOM Lite's USB serial chip (FTDI, below) has a driver
-  that Windows installs by itself. The Core2's (WCH CH9102) may need WCH's
+- **Windows:** the ATOM Lite's USB serial chip presents itself as FTDI
+  (below), which has a driver that Windows installs by itself. The Core2's (WCH CH9102) may need WCH's
   driver on older Windows; the page links to it.
 
 ## Where the firmware comes from
@@ -179,8 +179,8 @@ likely devices:
 
 | Board | USB serial chip | `usbVendorId` | `usbProductId` | Notes |
 |---|---|---|---|---|
-| ATOM Lite | FTDI, product name "M5stack" | `0x0403` | `0x6001` | Read from the project's ATOM Lite. Other FTDI devices share these ids, so the filter narrows the list, it doesn't identify the board |
-| Core2 v1.3 | WCH CH9102 | `0x1a86` | `0x55d4` | From M5Stack's documentation; check when the Core2 arrives |
+| ATOM Lite | A CH552 presenting itself as FTDI: manufacturer "Hades2001", product "M5stack" | `0x0403` | `0x6001` | Read from the project's ATOM Lite. Other FTDI devices share these ids, so the filter narrows the list, it doesn't identify the board |
+| Core2 v1.3 | WCH CH9102, product "USB Single Serial" | `0x1a86` | `0x55d4` | Read from the project's Core2 (12 November 2026) |
 
 A link under the button connects without filters, for a board whose chip
 isn't listed.
@@ -243,8 +243,11 @@ OTA data makes it boot the first, where the new firmware was just written.
    SHA-256 with `crypto.subtle.digest` against the manifest; on a mismatch,
    stop and write nothing.
 2. Connect to the ROM bootloader (if step 4 didn't leave it connected),
-   load the flasher stub, and switch to 921600 baud, falling back to
-   115200 if that fails.
+   load the flasher stub, and switch to 1500000 baud, falling back to
+   115200 if that fails. Not 921600: the ATOM Lite's CH552 can't do it,
+   and the next command times out (see
+   [spikes/espflash-usb](../spikes/espflash-usb/README.md#baud-rates)).
+   1500000 works on both boards.
 3. Clean install: erase the whole flash.
 4. Write each part at its offset, compressed, and have the chip verify
    each one's MD5 after writing.
@@ -346,7 +349,9 @@ In Phase C, on the project's ATOM Lite:
 - [ ] Opening the port in Chrome on macOS, Windows and Linux doesn't reset
       the device, or if it does, the page copes.
 - [ ] The highest baud rate that installs reliably over the ATOM Lite's
-      FTDI chip.
+      CH552, in Chrome. With espflash on macOS, 1500000 and 750000 work and
+      230400, 460800 and 921600 don't
+      ([spikes/espflash-usb](../spikes/espflash-usb/README.md#baud-rates)).
 - [ ] Install over M5Stack's factory firmware, over B.B. Link, and over a
       blank flash, all as clean installs.
 - [ ] Update with settings kept, including after a BLE update left the

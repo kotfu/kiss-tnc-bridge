@@ -81,26 +81,50 @@ ktbctl --device PORT status | scan | pair | unpair | tnc ... | monitor | ...
 bootloader, loads the flasher stub, and writes compressed images with an
 MD5 check. Before depending on it, find out:
 
-- [ ] It builds with its default features off, on macOS and with `cross`
+- [x] It builds with its default features off, on macOS and with `cross`
       for aarch64 and armhf Linux, **without libudev**. `tokio-serial`
       already uses the `serialport` crate with its default features off,
       and Cargo merges features, so if `espflash` turns on
       `serialport/libudev` it does so for the whole of `ktbctl` and the
       daemon. That breaks the cross builds.
-- [ ] It connects to the ROM on both boards through their auto-reset
+- [x] It connects to the ROM on both boards through their auto-reset
       circuits, and reads the chip, its package, the MAC and the flash
       size: ESP32-PICO-D4 with 4 MB on the ATOM Lite, ESP32-D0WDQ6-V3 with
       16 MB on the Core2. If it doesn't report the package, read it from
       the eFuses.
-- [ ] The fastest baud rate that writes reliably on each board: 921600 is
-      the web installer's, and the CH9102 may go higher. This is also an
-      open item in the web installer's testing.
-- [ ] How long a full install takes on each board, and how much
+- [x] The fastest baud rate that writes reliably on each board.
+- [x] How long a full install takes on each board, and how much
       `espflash` adds to `ktbctl`'s release binary.
 
-Decided after the spike: `espflash` as an ordinary dependency, behind a
-cargo feature that's on by default, or not at all. Writing the ROM
-protocol ourselves is the fallback, and a large one.
+Done 12 November 2026 on macOS, and on a Pi 4 with the Core2: see
+[spikes/espflash-usb](../spikes/espflash-usb/README.md). `espflash` 4.7.0
+works on both boards:
+
+- No libudev, and one `serialport` shared with `tokio-serial`. Cross
+  builds work for both Pis. It adds about 650 KB to a Linux binary
+  (`ktbctl` for armhf is 3.3 MB now).
+- **1500000 baud works on both boards; 921600 doesn't on the ATOM Lite.**
+  Its USB serial chip is a CH552 presenting itself as FTDI, and it only
+  does some rates. An update takes 17 s on the ATOM Lite and 17 to 20 s
+  on the Core2 at 1500000; at 115200, 82 s on the ATOM Lite and 96 s on
+  the Core2. A clean install of the Core2 takes 20 s, and gives it a new
+  key and authorization code.
+- On Linux, `serialport` lists ports by device name (`/dev/ttyACM0`), so
+  a `/dev/serial/by-id` path has to be resolved before matching.
+- The package isn't in espflash's `DeviceInfo`; read it from the eFuses.
+- Connecting takes 7 to 8 s, 6 s of it waiting on a command the original
+  ESP32's ROM doesn't answer. Worth fixing upstream.
+- Write every part in one call, and reset the device after a failure:
+  a failed flash leaves it in download mode.
+
+Not yet tried: the ATOM Lite on Linux, the armhf build on a board, and
+WCH's macOS driver for the Core2. They're for D1's testing, not the
+decision.
+
+Decided 12 November 2026: `espflash` is a library compiled into
+`ktbctl`, with no cargo feature to leave it out. The packages still ship
+two binaries and need no new libraries; only `ktbctl` grows, by about
+650 KB, since the daemon doesn't call it.
 
 ### 2. Shared groundwork
 
@@ -114,7 +138,9 @@ Needed by both D1 and D2, so built first:
       second.
 - [ ] Finding devices: `serial_list.rs` on Linux, `serialport`'s list on
       macOS. `ktbctl device list` shows each likely port, and what answers
-      on it.
+      on it. `--device` takes a `/dev/serial/by-id` path or a device name;
+      resolve both before matching one against the other, since
+      `serialport` lists only device names (found in the spike).
 
 ### 3. Find the device and what's on it
 
@@ -172,8 +198,9 @@ The web installer's choices:
 ### 6. Flash
 
 - [ ] Tell the firmware a flash is coming (see [7](#7-the-install-notice)).
-- [ ] Reset into the ROM, load the stub, and switch to the spike's baud
-      rate, falling back to 115200.
+- [ ] Reset into the ROM, load the stub, and switch to 1500000 baud,
+      falling back to 115200. If anything fails once in the ROM, reset the
+      device so it doesn't stay in download mode.
 - [ ] Erase for a clean install, then write each part compressed and
       check its MD5.
 - [ ] Progress on stderr: the step (erasing, writing, verifying) and the
@@ -264,7 +291,6 @@ ATOM Lite and a Core2:
 
 ## Open
 
-- **`espflash` or not:** decided by the spike (D1, step 1).
 - **The install notice:** its name, its capability and the Core2's screen
   are defined in Phase G; the ATOM Lite's color in
   [#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22).

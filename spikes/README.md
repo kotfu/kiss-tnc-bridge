@@ -15,6 +15,14 @@ ESP-IDF project with its procedure and findings in its own README.
   client is [`ble-update`](ble-update), Rust with `bluer`, cross-built like
   the Phase 0 spikes (`spikes/ble-update/deploy.sh`).
 
+## Phase D (`ktbctl` device support)
+
+For [docs/plan-phase-d.md](../docs/plan-phase-d.md).
+
+- [`espflash-usb`](espflash-usb/README.md): `ktbctl device flash` with
+  the `espflash` crate: the ROM on both boards, baud rates, install
+  times, cross builds without libudev, and what it adds to the binary.
+
 ## Firmware 1.1
 
 - [`atom-lite-ble-tnc`](atom-lite-ble-tnc/README.md): the ATOM Lite as a

@@ -75,7 +75,9 @@ it first made in the build directory, so switching boards in one directory
 doesn't take.
 
 `erase-flash` before `flash` makes a clean install: a new device key and
-authorization code. Flash at 115200 baud; 921600 didn't hold on the ATOM Lite.
+authorization code. Flash at 1500000 or 115200 baud: the ATOM Lite's USB
+serial chip, a CH552, can't do 921600, 460800 or 230400
+([spikes/espflash-usb](../spikes/espflash-usb/README.md#baud-rates)).
 
 Images are signed, and the bootloader checks the signature at every boot,
 so an image signed with one key won't boot under a bootloader built with
