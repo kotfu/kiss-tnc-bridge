@@ -806,16 +806,20 @@ any that take effect only after `device.reboot`:
 ```
 
 The keys are provisional, from the roadmap's device settings and power
-saving tables:
+saving tables. A board has the LED's keys or the screen's, not both: the
+ATOM Lite and StickC Plus SE the `led_*` keys, the Core2 the `screen_*`
+keys (`device.settings.get` shows which):
 
 | Key | Values |
 |---|---|
 | `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon |
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
-| `led_brightness` | 0–100. On the Core2, the screen's brightness |
+| `led_brightness` | 0–100 |
 | `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
+| `screen_normal` | The Core2's screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch or the power button (see [core2-ui.md](core2-ui.md#the-screen)) |
+| `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch or an event, on battery and USB alike |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
@@ -831,7 +835,8 @@ the device's key and the authorization code stay (see [atom-lite-ui.md](atom-lit
 Answers `{}` and shows a sequence the device shows for nothing else, so
 you can tell which device you're managing when you own several: on the
 ATOM Lite, magenta, blue, white, three times, then back to its state (see
-[atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too.
+[atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too. On
+the Core2 it wakes the screen.
 
 ### `firmware.update`
 

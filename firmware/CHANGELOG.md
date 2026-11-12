@@ -10,6 +10,31 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Builds for the M5Stack StickC Plus SE (`stickc-plus-se`) and Core2 v1.3
+  (`core2`), from the same code as the ATOM Lite. The StickC Plus SE has
+  no UI yet. The Core2 has its own flash layout in its 16 MB: two 4 MB app
+  partitions, NVS at `0x810000`, a crash dump partition and storage kept
+  for later.
+- The Core2's touchscreen UI ([core2-ui.md](../docs/core2-ui.md)): the
+  Bridge, TNC and System pages under tabs, the circles below the screen
+  as labelled soft keys, the battery, a list of the radios found to pair
+  or select, comparing the number when pairing a Kenwood, errors as
+  banners, the boot splash, the reset gesture and power off. The
+  `screen_normal` (`bright`, `dim`, `dark`) and `screen_timeout_seconds`
+  settings take the place of the LED's.
+- A Kenwood renamed on the radio is found by its Class of Device
+  (`0x620204`) as well as by a name starting `TH-D74` or `TH-D75`, and
+  is taken for a TH-D75 until its answer to `ID` says which it is.
+  `bluetooth.scan` reports a Classic device's `class`.
+
+### Fixed
+
+- Pairing the radio the device already has, then cancelling, no longer
+  leaves it unpaired. The pairing it has is tried first; only if the
+  radio turns that down does the device pair afresh.
+
 ## 1.1.0 (2026-11-12)
 
 The TIDRADIO TD-H9 as the radio, for the M5Stack ATOM Lite, beside the
@@ -27,29 +52,14 @@ TH-D74 and TH-D75.
 - `bluetooth.scan` with `"transport": "le"`, `tnc.update` with `model`
   `td-h9` and `ble.address`, the `td-h9` model in `tnc.models`, and a
   `ble-client` radio port in `status`.
-- Builds for the M5Stack StickC Plus SE (`stickc-plus-se`) and Core2 v1.3
-  (`core2`), from the same code as the ATOM Lite. The StickC Plus SE has
-  no UI yet. The Core2 has its own flash layout in its 16 MB: two 4 MB app
-  partitions, NVS at `0x810000`, a crash dump partition and storage kept
-  for later.
 - `device.info` reports `heap`: free internal RAM now, the least since
   starting, and the largest block. `ble-client` is in its
   `capabilities`.
-- A Kenwood renamed on the radio is found by its Class of Device
-  (`0x620204`) as well as by a name starting `TH-D74` or `TH-D75`, and
-  is taken for a TH-D75 until its answer to `ID` says which it is.
-  `bluetooth.scan` reports a Classic device's `class`.
 
 ### Changed
 
 - The controller allows four BLE links (a TD-H9, two phones and, from
   Phase E, a management app). Phones are still limited to two.
-
-### Fixed
-
-- Pairing the radio the device already has, then cancelling, no longer
-  leaves it unpaired. The pairing it has is tried first; only if the
-  radio turns that down does the device pair afresh.
 
 ## 1.0.0 (2026-11-10)
 
