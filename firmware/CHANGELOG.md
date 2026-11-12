@@ -10,13 +10,17 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.2.0 (2026-11-12)
+
+The M5Stack Core2 v1.3, with a touchscreen, beside the ATOM Lite.
+
 ### Added
 
-- Builds for the M5Stack StickC Plus SE (`stickc-plus-se`) and Core2 v1.3
-  (`core2`), from the same code as the ATOM Lite. The StickC Plus SE has
-  no UI yet. The Core2 has its own flash layout in its 16 MB: two 4 MB app
-  partitions, NVS at `0x810000`, a crash dump partition and storage kept
-  for later.
+- The Core2 v1.3 (`core2`), from the same code as the ATOM Lite, with its
+  own flash layout in its 16 MB: two 4 MB app partitions, NVS at
+  `0x810000`, a crash dump partition and storage kept for later. The
+  StickC Plus SE (`stickc-plus-se`) builds too, but isn't released until
+  it has a UI.
 - The Core2's touchscreen UI ([core2-ui.md](../docs/core2-ui.md)): the
   Bridge, TNC and System pages under tabs, the circles below the screen
   as labelled soft keys, the battery, a list of the radios found to pair

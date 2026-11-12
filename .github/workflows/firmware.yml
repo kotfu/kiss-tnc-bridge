@@ -124,6 +124,11 @@ jobs:
           path: dist
           merge-multiple: true
 
+      # Every board builds, but only these are released. The StickC Plus SE
+      # joins once it has a UI and has been tried on a device (firmware 1.3).
+      - name: Boards not released yet
+        run: rm -fv dist/ktb-stickc-plus-se-*
+
       # Never "latest": GitHub's latest release stays the daemon's.
       - uses: softprops/action-gh-release@v3
         with:

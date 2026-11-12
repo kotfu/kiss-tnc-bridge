@@ -96,7 +96,8 @@ uses that board's layout, so any version can be installed over any other.
 Firmware releases are tagged `firmware-v<version>`, apart from the
 daemon's `v<version>` tags, and are published as not "latest", so
 GitHub's latest release stays the daemon's. One release carries every
-board's files.
+released board's files: from 1.2.0 the ATOM Lite and Core2. CI builds the
+StickC Plus SE too, but leaves it out of releases until it has a UI.
 
 ### The manifest
 
