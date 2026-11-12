@@ -280,7 +280,7 @@ things, in this order:
    page shows them, grouped as the device gives them
    (`7KQ2-M9XD-4TPA-W3HN`), and tells the user to keep them: it's how
    management apps are authorized to manage the device over Bluetooth
-   (`ktbctl`, Phase D), and it doesn't change unless someone changes it or
+   (`ktbctl` and the iOS app, Phase E), and it doesn't change unless someone changes it or
    the device is installed clean. No QR code yet: nothing scans one until the iOS app (Phase E),
    and the page adds it then, from `auth.code`'s `uri`.
 2. **The name.** `device.settings.set` with `public_name`: the name KISS
@@ -353,4 +353,4 @@ In Phase C, on the project's ATOM Lite:
       device on its second app partition.
 - [ ] Going back to an older version.
 - [ ] Unplugging mid-install, then installing again.
-- [ ] The authorization code from the page authorizes `ktbctl` over BLE (Phase D).
+- [ ] The authorization code from the page authorizes `ktbctl` over BLE (Phase E).

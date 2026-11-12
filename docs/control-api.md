@@ -160,8 +160,8 @@ software, `firmware-v1.0.0` for the firmware (roadmap decision 15).
   management app offers it when the capability is there, and otherwise says it needs
   newer firmware. Old firmware keeps working with new software, and the
   reverse.
-- **Device support starts with Phase D's `ktbctl`.** Earlier 1.x releases
-  don't manage devices.
+- **Device support starts with `ktbctl` 1.3.0** (Phase D: over USB;
+  over BLE from Phase E). Earlier 1.x releases don't manage devices.
 
 Release notes say which major a release works with, and name a minimum
 version of the other only when a new feature needs it.
