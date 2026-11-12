@@ -407,7 +407,10 @@ firmware and the spec the page follows.
 
 ### Core2 v1.3 firmware (decisions 6, 7, 8)
 
-The same firmware core as the ATOM Lite, built for a second board, plus:
+The same firmware core as the ATOM Lite, built for a second board, plus
+what follows. Firmware 1.2's screens are designed in
+[core2-ui.md](core2-ui.md), from the
+[mockups](core2-mockups/index.html).
 
 - [ ] Status screen: TNC state, connected apps, battery, and recently heard
       stations, decoded for display only, as `ktbctl monitor` does.
@@ -716,7 +719,8 @@ from a browser, with no app.
 - [ ] The Core2's own flash layout, before its first release.
 - [ ] A basic UI on each: the boot splash, the status screen, pairing a
       radio, the authorization code and authorization mode, and reset at
-      power-on. The StickC Plus SE's is provisional until it's been tried
+      power-on. The Core2's for firmware 1.2 is designed in
+      [core2-ui.md](core2-ui.md), without authorization mode. The StickC Plus SE's is provisional until it's been tried
       on a device (see [StickC Plus SE firmware](#stickc-plus-se-firmware)).
 - [ ] Bridging tested on each with a TH-D75 and a TD-H9.
 - [ ] The web installer: a choice of the three boards, installing and

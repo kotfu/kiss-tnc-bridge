@@ -154,6 +154,9 @@ table.bopts td.lab b { color: var(--ink); }
 .bi .f.stripe { background: repeating-linear-gradient(-45deg, #3ddc84 0 2px, #1d6b40 2px 4px) !important; }
 .bi svg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); overflow: visible; }
 .bi .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; }
+.spin { width: 30px; height: 30px; border-radius: 50%; border: 4px solid var(--d-line); border-top-color: var(--d-blue); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
 </style>
 </head>
 <body>
@@ -246,6 +249,12 @@ const radioBlock = ({ name = 'TH-D75', pill = '<span class="pill ok">Connected</
    <div class="row" style="margin-top:3px"><span class="small">${sub}</span>${since}</div>${ctr}`;
 const app = (addr, t, rx, tx, lrx, ltx) => `<div class="app"><span>${addr}</span><span class="meta">${t} · RX <span class="c">${rx}</span> TX <span class="c">${tx}</span> <span class="light${lrx ? ' rx' : ''}"></span><span class="light${ltx ? ' tx' : ''}"></span></span></div>`;
 const appsHead = count => `<div class="row" style="margin-bottom:2px"><span><span class="sec" style="display:inline">Apps on </span><span style="font-size:14px;font-weight:700">KTB-EF26</span></span><span class="small">${count}</span></div>`;
+const splash = msg => `<div class="center">
+   <div style="font-size:20px;font-weight:600">kiss-tnc-bridge</div>
+   <div style="font-size:14px;color:var(--d-dim);margin-top:6px">firmware 1.2.0</div>
+   <div class="spin" style="margin-top:22px"></div>
+   <div style="font-size:12px;color:var(--d-dim);margin-top:10px">${msg}</div>
+ </div>`;
 const bridgeOK = () => radioBlock() +
   `<div class="hr"></div>
    ${appsHead('2 of 2')}` +
@@ -361,12 +370,10 @@ html += section('4. The screen: modes and timeout', 'Like the ATOM\'s LED: a mod
 ]);
 
 html += section('5. Boot and reset', null, [
-  fig({ full: true, body:
-    `<div class="center">
-       <div style="font-size:20px;font-weight:600">kiss-tnc-bridge</div>
-       <div style="font-size:14px;color:var(--d-dim);margin-top:6px">firmware 1.2.0</div>
-     </div>` },
-    '<b>Splash.</b> Text only, until the Bridge page is ready, about a second. The backlight comes on once it\'s drawn.'),
+  fig({ full: true, body: splash('Starting…') },
+    '<b>Splash.</b> The name, the version, and LVGL\'s spinner with "Starting…", until the Bridge page is ready, about a second. The backlight comes on once it\'s drawn.'),
+  fig({ full: true, body: splash('Starting Bluetooth…') },
+    '<b>A slow step.</b> If one step takes longer than about 2 s, the line under the spinner says which, so a device that hangs says where.'),
   fig({ full: true, held: [0, 2], keys: soft({ t: 'Hold', c: 'warn' }, null, { t: 'Hold', c: 'warn' }), body:
     `<div style="padding:12px 6px 0">
        <div style="font-size:20px;font-weight:700;color:var(--d-amber)">Reset</div>

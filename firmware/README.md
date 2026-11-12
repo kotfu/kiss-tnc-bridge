@@ -6,7 +6,8 @@ bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic, or a
 TIDRADIO TD-H9 over BLE, to phones over BLE, managed with the
 [control API](../docs/control-api.md). The plan is
 Phase C of the [roadmap](../docs/roadmap.md#phase-c-atom-lite-firmware-and-web-installer);
-the button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md).
+the ATOM's button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md),
+and the Core2's screen in [core2-ui.md](../docs/core2-ui.md).
 
 C++ on ESP-IDF 6.1, with Bluedroid. The Phase A spikes in
 [`spikes/`](../spikes/README.md) are its reference.
