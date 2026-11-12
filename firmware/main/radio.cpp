@@ -740,6 +740,9 @@ uint16_t ble_svc_start = 0, ble_svc_end = 0, ble_tx = 0, ble_rx = 0;
 
 // A BLE scan's length, until its parameters are set; 0 once it's stopped.
 std::atomic<uint32_t> ble_scan_seconds{0};
+// The TD-H9 ble_wait_for is waiting for: set before ble_awaiting.
+Addr ble_awaited;
+std::atomic<bool> ble_awaiting{false};
 // Addresses already reported in this scan, so the task isn't flooded with
 // every advertisement (a busy room has dozens a second).
 std::mutex scan_lock;
@@ -972,10 +975,74 @@ void ble_close()
 
 enum class BleOpen : uint8_t { opened, waited, failed, interrupted };
 
-// Connects to a TD-H9 and subscribes. A direct connect waits for the radio
-// to advertise, up to 30 s; a request arriving meanwhile ends the attempt,
-// and stays in the queue for the task.
+// Connects to a TD-H9 and subscribes, once ble_wait_for has seen it
+// advertise, so the connect is quick: given up after ble_connect_limit. A
+// request arriving meanwhile ends the attempt, and stays in the queue for
+// the task. Advertising for phones stops meanwhile: the ESP32's controller
+// asserts (llc.c line 135) when it sends a connection request while
+// advertising with a phone connected.
+constexpr TickType_t ble_connect_limit = pdMS_TO_TICKS(5000);
+
+BleOpen ble_connect_now(const Record &r);
+
 BleOpen ble_connect(const Record &r)
+{
+    phones::hold_advertising(true);
+    BleOpen res = ble_connect_now(r);
+    phones::hold_advertising(false);
+    return res;
+}
+
+enum class Seen : uint8_t { seen, gone, interrupted };
+
+// Waits up to timeout for the TD-H9 to advertise, with a BLE scan, so the
+// bridge goes on advertising for phones while the radio is off or away. A
+// request arriving meanwhile ends the wait, and stays in the queue.
+Seen ble_wait_for(const Record &r, TickType_t timeout)
+{
+    TickType_t start = xTaskGetTickCount();
+    TickType_t deadline = start + timeout;
+    xQueueReset(gap_events);
+    ble_awaited = r.addr;
+    ble_awaiting = true;
+    ble_scan_start(pdTICKS_TO_MS(timeout) / 1000 + 1);
+    bool restarted = false;
+    Seen res = Seen::gone;
+    while (xTaskGetTickCount() < deadline) {
+        Request q;
+        if (xQueuePeek(requests, &q, 0) == pdTRUE) {
+            res = Seen::interrupted;
+            break;
+        }
+        // At power-on the scan can be asked for before phones registers
+        // the GAP callback that starts it (radio starts first): its
+        // parameters were set, but nobody heard. Ask again.
+        if (!restarted && ble_scan_seconds != 0 && xTaskGetTickCount() - start > pdMS_TO_TICKS(1000)) {
+            ESP_LOGI(TAG, "BLE scan didn't start: starting it again");
+            restarted = true;
+            ble_scan_start(pdTICKS_TO_MS(deadline - xTaskGetTickCount()) / 1000 + 1);
+        }
+        GapEvent e;
+        if (xQueueReceive(gap_events, &e, pdMS_TO_TICKS(100)) != pdTRUE) {
+            continue;
+        }
+        if (e.type == GapEvent::ble_found && e.addr == r.addr) {
+            ESP_LOGI(TAG, "%s is advertising%s: connecting", r.addr.str().c_str(),
+                     e.ok ? " to this device" : "");
+            res = Seen::seen;
+            break;
+        }
+        if (e.type == GapEvent::ble_scan_done) {
+            break;
+        }
+    }
+    ble_awaiting = false;
+    ble_scan_stop();
+    vTaskDelay(pdMS_TO_TICKS(50)); // let the scan stop before connecting
+    return res;
+}
+
+BleOpen ble_connect_now(const Record &r)
 {
     if (gattc_if == ESP_GATT_IF_NONE) {
         return BleOpen::failed;
@@ -1010,6 +1077,10 @@ BleOpen ble_connect(const Record &r)
         if (xQueuePeek(requests, &q, 0) == pdTRUE) {
             ble_close(); // a search or a scan gets the radio to itself
             return BleOpen::interrupted;
+        }
+        if (ble_conn == NO_CONN && xTaskGetTickCount() - start >= ble_connect_limit) {
+            ble_close(); // it was seen but went quiet: look for it again
+            return BleOpen::waited;
         }
     }
 }
@@ -2118,9 +2189,18 @@ void radio_task(void *)
         }
         set_port(PortState::connecting, r.addr.str());
         if (m.ble) {
-            // A TD-H9: the connect waits for it to advertise, so a radio
-            // that's off or away is caught within a second of coming back
-            // (spikes/atom-lite-ble-tnc).
+            // A TD-H9: a scan waits for it to advertise, so a radio that's
+            // off or away is caught within a second of coming back
+            // (spikes/atom-lite-ble-tnc), and phones can still connect
+            // meanwhile; then the connect is quick.
+            Seen seen = ble_wait_for(r, pdMS_TO_TICKS(30000));
+            if (seen == Seen::interrupted) {
+                serve_now();
+                continue;
+            }
+            if (seen == Seen::gone) {
+                continue; // not advertising yet: keep looking
+            }
             BleOpen res = ble_connect(r);
             if (res == BleOpen::opened) {
                 counters.tnc_connects++;
@@ -2643,12 +2723,19 @@ void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         // pick, and a TD-H9 is known by its name. A known radio is passed on
         // every time (a TD-H9 advertises about five times a second), as the
         // search can miss one while it waits for something else.
+        // The TD-H9 ble_wait_for waits for is passed on whatever it sends:
+        // after losing a central it knows, it advertises to that central
+        // alone, with no name in it.
         std::string name = adv_name(r);
-        if (name.empty()) {
+        e.addr = Addr::of(r.bda);
+        bool awaited = ble_awaiting && e.addr == ble_awaited;
+        if (name.empty() && !awaited) {
             return;
         }
-        e.addr = Addr::of(r.bda);
-        if (!model_for_name(name, true)) {
+        if (awaited && r.ble_evt_type == ESP_BLE_EVT_CONN_DIR_ADV) {
+            e.ok = true; // directed at us: ble_wait_for says so in the log
+        }
+        if (!awaited && !model_for_name(name, true)) {
             std::lock_guard<std::mutex> g(scan_lock);
             if (std::find(scan_seen.begin(), scan_seen.end(), e.addr) != scan_seen.end()) {
                 return;

@@ -23,7 +23,9 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or select, comparing the number when pairing a Kenwood, errors as
   banners, the boot splash, the reset gesture and power off. The
   `screen_normal` (`bright`, `dim`, `dark`) and `screen_timeout_seconds`
-  settings take the place of the LED's.
+  settings take the place of the LED's. Forget on the TNC page, the
+  System page's power line (external power is USB, the AXP192's ACIN; 99%
+  until the charger stops) and a powering-off screen.
 - A Kenwood renamed on the radio is found by its Class of Device
   (`0x620204`) as well as by a name starting `TH-D74` or `TH-D75`, and
   is taken for a TH-D75 until its answer to `ID` says which it is.
@@ -31,6 +33,13 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Bluetooth controller no longer crashes (an assert in `llc.c`, line
+  135) when a TD-H9 connects while a KISS TNC app is already connected:
+  it did whenever the radio came back, or the device started, with an
+  app connected first. While the TD-H9 is away, the device now looks for
+  it with a scan and keeps advertising to apps (before, it advertised
+  through a pending connect, which the controller can't do safely with an
+  app connected), and stops advertising only for the connect.
 - Pairing the radio the device already has, then cancelling, no longer
   leaves it unpaired. The pairing it has is tried first; only if the
   radio turns that down does the device pair afresh.

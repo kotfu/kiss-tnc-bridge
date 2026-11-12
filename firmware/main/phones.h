@@ -49,6 +49,12 @@ int send_frame(const uint8_t *frame, size_t len);
 // The name changed: advertise the new one.
 void name_changed();
 
+// While the radio task connects to a TD-H9 as a central, advertising
+// stops: the ESP32's controller asserts (llc.c line 135) when it sends a
+// connection request while advertising with a phone connected. Holding
+// blocks the caller for a moment, so advertising has stopped.
+void hold_advertising(bool hold);
+
 // session.kick: disconnects the phone with this session id.
 void kick(const control::Pending &p, const std::string &session);
 

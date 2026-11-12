@@ -148,7 +148,11 @@ battery with its level:
 
 The AXP192 reports external power and charging apart, so a full battery
 on USB shows solid green, not stripes. External power is whatever is
-plugged into the USB port, which may be another battery. The percentage
+plugged into the USB port, which may be another battery: the AXP192's
+ACIN input. Its VBUS input is the 5 V bus, which the Core2 powers from
+the battery, so it doesn't count. The voltage reaches the top of the
+curve while the charger is still topping up, so the percentage stays at
+99% until the charger stops. The percentage
 is the firmware's estimate (the AXP192 has no fuel gauge; see the
 roadmap's [Core2 firmware](roadmap.md#core2-v13-firmware-decisions-6-7-8)).
 
@@ -206,6 +210,14 @@ changing it:
 - Kenwood: Menu › Bluetooth › Pairing Mode
 - TD-H9: Bluetooth on, BT Mode set to Receiver (see
   [td-h9-ble-kiss.md](td-h9-ble-kiss.md#setting-up-the-radio))
+
+**Forget** (left), shown only while there's a radio, asks first:
+"Forget TH-D75? The bridge stops using it and deletes its pairing. To use
+it again, pair it again, after deleting KTB-EF26 from the radio's
+Bluetooth list." (for a TD-H9: it stops connecting to it, and selecting
+it again brings it back). **Cancel** (left) goes back; **Forget** (right,
+red) does what `bluetooth.unpair` does for the radio, and the TNC page
+shows no radio.
 
 The middle key, **Pair or select**, starts the flow. The device keeps one
 radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
@@ -361,11 +373,12 @@ device up or a bag. As on the ATOM, no setting can get in reset's way.
 
 **Power off** on System asks first: "Power off? The bridge stops, and
 apps lose the radio. Press the power button on the left side to turn it
-on again." **Cancel** (left) goes back; **Power off** (right, red) has the
-AXP192 cut the power.
+on again." **Cancel** (left) goes back; **Power off** (right, red) shows
+"Powering off" with a spinner for about a second, then turns the screen
+black and the backlight off, and has the AXP192 cut the power.
 
-Whether the Core2 stays off with USB plugged in, or starts again at once,
-is to check on the device. If it starts again, the confirmation says so.
+It stays off with USB plugged in (checked on the device); the power
+button turns it on again.
 
 ## Errors
 

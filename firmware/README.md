@@ -127,9 +127,12 @@ over BLE too, and the first device whose advertised name starts with
 `TD-H9` becomes the radio. It isn't paired; the ATOM keeps its address and
 connects to it as a GATT client (see
 [td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md) for the radio's settings).
-While it's off or away, the ATOM waits in a direct connect for it to
-advertise, and is ready within about a second of it coming back. Each
-frame goes to the radio in one write, which it needs.
+While it's off or away, the ATOM looks for it with a BLE scan, still
+advertising to phones, and connects once it hears it: ready within a few
+seconds of it coming back. Advertising stops for that connect, because
+the ESP32's Bluetooth controller crashes (an assert in `llc.c`, line 135)
+when it sends a connection request while advertising with a phone
+connected. Each frame goes to the radio in one write, which it needs.
 Opening the port must not reboot the device. The ATOM's reset circuit
 pulls EN low while RTS is asserted without DTR, so a management app has to
 drop RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`

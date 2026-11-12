@@ -185,7 +185,9 @@ Power read()
     Power p;
     uint8_t status = read8(REG_POWER_STATUS);
     uint8_t charge = read8(REG_CHARGE_STATUS);
-    p.external = status & 0xa0; // ACIN or VBUS
+    // USB comes in on ACIN. VBUS is the 5 V bus, which EXTEN powers from
+    // the battery (init), so it's always there: it isn't external power.
+    p.external = status & 0x80;
     p.battery = charge & 0x20;
     p.charging = (charge & 0x40) && p.external;
     uint8_t b[2];
@@ -199,6 +201,11 @@ Power read()
         p.discharge_ma = ((b[0] << 5) | (b[1] & 0x1f)) * 0.5f;
     }
     p.percent = p.battery ? percent_from(p.battery_v) : 0;
+    // The voltage reaches the top of the curve while the charger is still
+    // topping up (until under 10% of its current): not full until it stops.
+    if (p.charging && p.percent > 99) {
+        p.percent = 99;
+    }
     return p;
 }
 

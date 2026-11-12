@@ -213,9 +213,11 @@ void configure_advertising()
     esp_ble_gap_config_scan_rsp_data_raw(rsp, n);
 }
 
+std::atomic<bool> adv_held{false};
+
 void start_advertising()
 {
-    if (adv_data_set && scan_rsp_set && connected() < MAX_CONNS) {
+    if (adv_data_set && scan_rsp_set && !adv_held && connected() < MAX_CONNS) {
         esp_ble_gap_start_advertising(&adv_params);
     }
 }
@@ -463,6 +465,19 @@ int send_frame(const uint8_t *frame, size_t len)
         }
     }
     return delivered;
+}
+
+void hold_advertising(bool hold)
+{
+    if (adv_held.exchange(hold) == hold) {
+        return;
+    }
+    if (hold) {
+        esp_ble_gap_stop_advertising();
+        vTaskDelay(pdMS_TO_TICKS(30)); // stopped before the caller connects
+    } else {
+        start_advertising();
+    }
 }
 
 void name_changed()

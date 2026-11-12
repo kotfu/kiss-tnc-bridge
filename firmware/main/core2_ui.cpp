@@ -151,7 +151,7 @@ std::string step;
 int64_t step_since = 0;
 
 enum class Page : uint8_t { bridge, tnc, system };
-enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off };
+enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off, forget };
 Page page = Page::bridge;
 Flow flow = Flow::none;
 int64_t flow_since = 0;
@@ -164,6 +164,7 @@ axp192::Backlight lit = axp192::Backlight::off;
 
 // What wakes it, compared each tick
 bool was_connected = false;
+bool had_radio = false; // the TNC page's keys depend on it
 size_t last_sessions = 0;
 size_t last_errors = 0;
 
@@ -771,6 +772,7 @@ struct {
     lv_obj_t *failed, *failed_why;
     lv_obj_t *screen, *opts[3], *chips[4];
     lv_obj_t *power_off;
+    lv_obj_t *forget, *forget_title, *forget_text;
 } fl;
 
 constexpr uint16_t timeouts[4] = {15, 30, 60, 300};
@@ -946,6 +948,24 @@ void build_flows()
     lv_obj_set_pos(p2, 10, 80);
     lv_obj_set_width(p2, W - 20);
     lv_label_set_long_mode(p2, LV_LABEL_LONG_MODE_WRAP);
+
+    fl.forget = flow_screen();
+    fl.forget_title = title(fl.forget, "", 4, &lv_font_montserrat_20);
+    fl.forget_text = label(fl.forget, &lv_font_montserrat_14, c_fg);
+    lv_obj_set_pos(fl.forget_text, 10, 36);
+    lv_obj_set_width(fl.forget_text, W - 20);
+    lv_label_set_long_mode(fl.forget_text, LV_LABEL_LONG_MODE_WRAP);
+}
+
+// Forget: the confirmation's words for the radio there is now.
+void fill_forget()
+{
+    radio::View v = radio::view();
+    set_text(fl.forget_title, "Forget " + v.name + "?");
+    set_text(fl.forget_text,
+             v.ble ? "The bridge stops connecting to it. To use it again, select it again."
+                   : "The bridge stops using it and deletes its pairing. To use it again, pair it again, "
+                     "after deleting " + settings::public_name() + " from the radio's Bluetooth list.");
 }
 
 void update_screen_settings()
@@ -1091,6 +1111,7 @@ void set_flow(Flow f)
     show(fl.failed, f == Flow::pair_failed);
     show(fl.screen, f == Flow::screen_settings);
     show(fl.power_off, f == Flow::power_off);
+    show(fl.forget, f == Flow::forget);
     show(flow_box, f != Flow::none);
     for (int i = 0; i < 3; i++) {
         show(pages[i], f == Flow::none && static_cast<int>(page) == i);
@@ -1119,33 +1140,65 @@ void set_flow(Flow f)
     case Flow::power_off:
         set_keys({"Cancel", 0, [] { set_flow(Flow::none); }}, {}, {"Power off", 3, [] { power_off_now(); }});
         break;
+    case Flow::forget:
+        fill_forget();
+        set_keys({"Cancel", 0, [] { set_flow(Flow::none); }}, {}, {"Forget", 3, [] {
+                     radio::unpair(control::Pending{}, "");
+                     set_flow(Flow::none);
+                 }});
+        break;
     }
     update_tabs();
 }
 
 void open_screen_settings() { set_flow(Flow::screen_settings); }
 
-// Black, with the backlight off, so nothing lingers while the power falls.
+// "Powering off" with a spinner for a moment, then black with the
+// backlight off, so nothing lingers while the power falls.
 void power_off_now()
 {
-    lv_obj_t *black = lv_obj_create(nullptr);
-    fill(black, c_bg);
-    lv_screen_load(black);
-    lv_refr_now(core2::display());
-    axp192::backlight(axp192::Backlight::off);
-    axp192::power_off();
+    set_keys(); // nothing more to press
+    lv_obj_t *scr = lv_obj_create(nullptr);
+    fill(scr, c_bg);
+    lv_obj_t *t = label(scr, &lv_font_montserrat_20, c_fg, "Powering off");
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 80);
+    lv_obj_t *sp = lv_spinner_create(scr);
+    lv_obj_set_size(sp, 34, 34);
+    lv_obj_align(sp, LV_ALIGN_TOP_MID, 0, 128);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(sp, c_line, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(sp, c_red, LV_PART_INDICATOR);
+    lv_screen_load(scr);
+    lv_timer_t *after = lv_timer_create(
+        [](lv_timer_t *) {
+            lv_obj_t *black = lv_obj_create(nullptr);
+            fill(black, c_bg);
+            lv_screen_load(black);
+            lv_refr_now(core2::display());
+            axp192::backlight(axp192::Backlight::off);
+            axp192::power_off();
+        },
+        1200, nullptr);
+    lv_timer_set_repeat_count(after, 1);
 }
 
 void page_keys()
 {
     switch (page) {
     case Page::bridge: set_keys(); break;
-    case Page::tnc:
-        set_keys({}, {"Pair or select", 1, [] {
-                      radio::start_pairing();
-                      set_flow(Flow::pairing);
-                  }});
+    case Page::tnc: {
+        Key pair{"Pair or select", 1, [] {
+            radio::start_pairing();
+            set_flow(Flow::pairing);
+        }};
+        if (radio::view().present) {
+            set_keys({"Forget", 0, [] { set_flow(Flow::forget); }}, pair);
+        } else {
+            set_keys({}, pair);
+        }
         break;
+    }
     case Page::system: set_keys({}, {"Power off", 1, [] { set_flow(Flow::power_off); }}); break;
     }
 }
@@ -1309,6 +1362,12 @@ void tick(lv_timer_t *)
         wake();
     }
     was_connected = connected;
+    if (v.present != had_radio) {
+        had_radio = v.present;
+        if (flow == Flow::none && page == Page::tnc) {
+            page_keys(); // Forget comes and goes with the radio
+        }
+    }
     last_sessions = apps.size();
     last_errors = errs.size();
 

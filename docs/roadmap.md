@@ -218,7 +218,7 @@ as they're found.
 | Idle cores waiting for an interrupt | CPU power: a core with nothing to run stops in `WAITI` until the next interrupt | On a power source with a low-current cut-off, too little draw cuts the power. The development build's `debug.set spin_cores=1\|2` spins idle cores through the idle hook instead, and `modem_sleep=false` keeps the Bluetooth controller awake, to keep the draw up. Neither was needed on a charged Tail Bat; kept for testing other power banks | Waiting |
 | Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
 | Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
-| Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. A direct connect scans at Bluedroid's fast rate, a 30 ms window every 60 ms; on an ATOM Lite that took the draw from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). `esp_ble_gattc_enh_open` takes a scan interval and window, so a slower rate (1.28 s is Bluedroid's slow one) is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within 1 s of the TD-H9 turning on | Bluedroid's fast rate |
+| Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. The firmware scans for it (a 30 ms window every 50 ms) and connects once it hears it; the spike's direct connect, at Bluedroid's fast rate, took an ATOM Lite from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). A slower scan is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within a few seconds of the TD-H9 turning on | The fast rate |
 | BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting. The firmware drew mostly 60–70 mA bridging a TD-H9 to one phone, with bursts of several seconds up to 100 mA | The TD-H9's choice |
 | LED or screen brightness | LED or backlight current. On a Core2 the backlight is a voltage output of the AXP192 | Visibility | — |
 | Screen timeout (Core2, StickC Plus SE) | Backlight current, the largest draw on a board with a screen, while nobody's looking | A touch or press to see the screen again | — |
@@ -734,6 +734,16 @@ from a browser, with no app.
 - [ ] Bridging tested on each with a TH-D75 and a TD-H9.
 - [ ] The web installer: a choice of the three boards, installing and
       updating each.
+- [ ] Installing over USB shows on the device. A USB flash resets the
+      ESP32 into its ROM download mode, so no firmware runs and there
+      can't be a progress bar on the device; but the screen (and the
+      ATOM's LED) keeps what it last showed. So a control API command
+      tells our firmware a flash is coming, and the Core2 shows
+      "Installing firmware over USB. Keep it plugged in; it restarts when
+      done." (the ATOM a color), which stays up through the flash. The
+      web installer and `ktbctl device flash` send it first and show the
+      progress themselves. Over firmware that isn't ours (a new device)
+      the screen shows whatever that firmware left.
 
 The rest of the Core2 and StickC Plus SE workstreams (the power page,
 sound, the SD card log and so on) follow as they're ready and don't hold
@@ -753,7 +763,9 @@ the iOS app's first release, managing them all.
 ### Phase F: firmware updates over BLE
 
 In the firmware for every board, the iOS app and `ktbctl`, if Phase A
-showed it's workable.
+showed it's workable. The update runs in our firmware, so the Core2 shows "Updating
+firmware" with a progress bar (the hook is `ui::set_updating`), and the
+ATOM its updating color.
 
 ### Phase H: Core2 Wi-Fi
 
