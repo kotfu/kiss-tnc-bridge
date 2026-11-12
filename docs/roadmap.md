@@ -583,6 +583,13 @@ The Phase A update spike showed this works on the ATOM Lite:
 - A microSD slot on the screen's SPI bus (its own chip select, GPIO4) and
   no card-detect pin, so the firmware finds a card by mounting it. A
   BM8563 real-time clock with backup power keeps the time once it's set.
+- **Internal RAM** (measured with firmware 1.2.0-dev, `device.info`'s
+  `heap`): 74.8 KB free with a TD-H9 and one KISS TNC app, 70.8 KB with
+  two (never below 69.1 KB over 38 minutes of traffic, largest block
+  68 KB). That's about 37 KB under the ATOM Lite's figure for the same
+  load: the screen's two 15 KB draw strips have to be in internal RAM,
+  which SPI DMA can read and PSRAM it can't, and LVGL's task needs a
+  stack. LVGL's own memory is in PSRAM. Static IRAM is 98% used.
 - **Wi-Fi with Classic and BLE together.** Espressif's coexistence table
   lists Wi-Fi station mode with BLE and station mode with Classic as
   supported, but has no entry for all three. A soft access point with
