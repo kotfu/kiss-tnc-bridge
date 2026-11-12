@@ -9,6 +9,7 @@
 #include "ui.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -764,8 +765,10 @@ void update_system(const std::vector<errors::Item> &errs, int64_t now)
 
 struct {
     lv_obj_t *pairing, *pair_title, *pair_time, *pair_bar, *pair_text, *pair_small, *pair_digits, *pair_big;
+    lv_obj_t *pair_list, *pair_foot;
+    lv_obj_t *rows[5], *row_name[5], *row_desc[5], *row_signal[5];
     lv_obj_t *paired, *paired_text;
-    lv_obj_t *failed;
+    lv_obj_t *failed, *failed_why;
     lv_obj_t *screen, *opts[3], *chips[4];
     lv_obj_t *power_off;
 } fl;
@@ -816,6 +819,7 @@ void apply_setting(const char *key, cJSON *value)
 }
 
 void update_screen_settings();
+void choose_row(int i);
 
 void build_flows()
 {
@@ -834,6 +838,33 @@ void build_flows()
     lv_obj_set_style_text_letter_space(fl.pair_digits, 2, 0);
     fl.pair_big = title(fl.pairing, "", 98, &lv_font_montserrat_16);
 
+    // The radios found, while searching: a row each, tapped to choose.
+    fl.pair_list = box(fl.pairing, 10, 38, W - 20, 134);
+    lv_obj_set_flex_flow(fl.pair_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollable(fl.pair_list, true);
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *r = box(fl.pair_list, 0, 0, W - 20, 42);
+        lv_obj_set_style_border_side(r, LV_BORDER_SIDE_BOTTOM, 0);
+        lv_obj_set_style_border_width(r, 1, 0);
+        lv_obj_set_style_border_color(r, c_line, 0);
+        lv_obj_set_style_bg_color(r, c_panel, LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(r, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_clickable(r, true);
+        lv_obj_add_event_cb(r, [](lv_event_t *e) { choose_row((int)(intptr_t)lv_event_get_user_data(e)); },
+                            LV_EVENT_CLICKED, (void *)(intptr_t)i);
+        fl.row_name[i] = label(r, &lv_font_montserrat_16, c_fg);
+        lv_obj_set_pos(fl.row_name[i], 0, 4);
+        fl.row_desc[i] = label(r, &lv_font_montserrat_12, c_dim);
+        lv_obj_set_pos(fl.row_desc[i], 0, 24);
+        fl.row_signal[i] = label(r, &lv_font_montserrat_12, c_dim);
+        lv_obj_align(fl.row_signal[i], LV_ALIGN_RIGHT_MID, 0, 0);
+        fl.rows[i] = r;
+        show(r, false);
+    }
+    fl.pair_foot = title(fl.pairing, "", 178, &lv_font_montserrat_12, c_dim);
+    lv_obj_set_width(fl.pair_foot, W - 20);
+    lv_label_set_long_mode(fl.pair_foot, LV_LABEL_LONG_MODE_WRAP);
+
     fl.paired = flow_screen();
     title(fl.paired, "Done", 6);
     fl.paired_text = title(fl.paired, "", 30, &lv_font_montserrat_20, c_green);
@@ -843,12 +874,18 @@ void build_flows()
     fl.failed = flow_screen();
     title(fl.failed, "Pairing", 6);
     title(fl.failed, "Didn't pair", 30, &lv_font_montserrat_20, c_amber);
-    lv_obj_t *ft = label(fl.failed, &lv_font_montserrat_12, c_dim,
-                         "No radio was found, it refused, or you cancelled. "
-                         "The bridge is back on the radio it had.");
-    lv_obj_set_pos(ft, 10, 62);
+    // Why, as the radio puts it, then what happens now.
+    fl.failed_why = label(fl.failed, &lv_font_montserrat_14, c_fg);
+    lv_obj_set_width(fl.failed_why, W - 20);
+    lv_label_set_long_mode(fl.failed_why, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_t *ft = label(fl.failed, &lv_font_montserrat_12, c_dim, "The bridge is back on the radio it had.");
     lv_obj_set_width(ft, W - 20);
     lv_label_set_long_mode(ft, LV_LABEL_LONG_MODE_WRAP);
+    lv_obj_t *fcol = box(fl.failed, 10, 62, W - 20, 130);
+    lv_obj_set_flex_flow(fcol, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(fcol, 8, 0);
+    lv_obj_set_parent(fl.failed_why, fcol);
+    lv_obj_set_parent(ft, fcol);
 
     fl.screen = flow_screen();
     title(fl.screen, "Screen", 2);
@@ -938,6 +975,49 @@ void power_off_now();
 // The pairing screen for the radio's stage (docs/core2-ui.md, Pairing a
 // radio): parts shown, keys and the countdown.
 int pair_stage_shown = -1;
+std::string row_address[5]; // the radio each row shows
+bool chosen = false;        // a row was tapped: the search ends there
+
+void update_list()
+{
+    radio::SearchView sv = radio::search_view();
+    int n = std::min<int>(sv.radios.size(), 5);
+    for (int i = 0; i < 5; i++) {
+        show(fl.rows[i], i < n);
+        if (i >= n) {
+            continue;
+        }
+        const radio::FoundRadio &r = sv.radios[i];
+        row_address[i] = r.address;
+        set_text(fl.row_name[i], r.name);
+        std::string maker = r.make.substr(0, r.make.find(' '));
+        set_text(fl.row_desc[i], (maker.empty() ? std::string("Unknown") : maker) +
+                                     (r.ble ? ", Bluetooth LE" : ", in pairing mode"));
+        set_text(fl.row_signal[i], (r.has_rssi ? std::to_string(r.rssi) + " dBm  >" : std::string(">")));
+    }
+    std::string foot;
+    if (chosen) {
+        foot = "Stopping the search...";
+    } else if (n == 0) {
+        foot = "Put the radio in pairing mode. Kenwood: Menu > Bluetooth > Pairing Mode. TD-H9: Bluetooth on.";
+    } else {
+        foot = "Tap a radio.";
+    }
+    if (!chosen && sv.others > 0) {
+        foot += " " + std::to_string(sv.others) + (sv.others == 1 ? " other device isn't a radio." : " other devices aren't radios.");
+    }
+    set_text(fl.pair_foot, foot);
+}
+
+void choose_row(int i)
+{
+    if (chosen || row_address[i].empty()) {
+        return;
+    }
+    chosen = true;
+    radio::choose_radio(row_address[i]);
+    update_list();
+}
 
 void update_pairing()
 {
@@ -948,9 +1028,12 @@ void update_pairing()
     bool press_ok = st == S::press_ok;
     if (static_cast<int>(st) != pair_stage_shown) {
         pair_stage_shown = static_cast<int>(st);
+        bool searching = st == S::searching;
+        show(fl.pair_list, searching);
+        show(fl.pair_foot, searching);
         show(fl.pair_small, compare);
         show(fl.pair_digits, compare);
-        show(fl.pair_text, !compare);
+        show(fl.pair_text, !compare && !searching);
         show(fl.pair_bar, !compare);
         show(fl.pair_time, !compare);
         show(fl.pair_big, compare || press_ok);
@@ -961,9 +1044,7 @@ void update_pairing()
         lv_obj_align(fl.pair_time, LV_ALIGN_TOP_RIGHT, -10, press_ok ? 76 : 8);
         switch (st) {
         case S::searching:
-            set_text(fl.pair_title, "Looking for a radio");
-            set_text(fl.pair_text, "The first TH-D74 or TH-D75 in pairing mode, or TD-H9, is paired or "
-                                   "selected. (This test build doesn't show a list yet.)");
+            set_text(fl.pair_title, "Looking for radios");
             break;
         case S::pairing:
             set_text(fl.pair_text, "Connecting to the radio. If it still knows this device, that's all; "
@@ -984,7 +1065,9 @@ void update_pairing()
         }
         wake();
     }
-    if (st != S::searching) {
+    if (st == S::searching) {
+        update_list();
+    } else {
         set_text(fl.pair_title, "Pairing with " + (v.name.empty() ? std::string("the radio") : v.name));
     }
     if (compare && v.number.size() == 6) {
@@ -1016,6 +1099,10 @@ void set_flow(Flow f)
     case Flow::none: page_keys(); break;
     case Flow::pairing:
         pair_stage_shown = -1; // update_pairing sets the keys
+        chosen = false;
+        for (auto &a : row_address) {
+            a.clear();
+        }
         update_pairing();
         break;
     case Flow::paired: set_keys({}, {}, {"OK", 2, [] { set_flow(Flow::none); }}); break;
@@ -1174,6 +1261,14 @@ void on_event(Event e)
     }
     case Event::pairing_failed:
         if (flow == Flow::pairing || flow == Flow::none) {
+            std::string why = radio::pairing_failure();
+            if (why.empty()) {
+                why = "Another pairing or scan is running.";
+            } else {
+                why[0] = static_cast<char>(toupper(static_cast<unsigned char>(why[0])));
+                why += ".";
+            }
+            set_text(fl.failed_why, why);
             set_flow(Flow::pair_failed);
         }
         break;

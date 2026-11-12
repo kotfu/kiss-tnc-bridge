@@ -40,8 +40,12 @@ Double press: two presses, the second within 400 ms (provisional) of
 letting go of the first. Pairing starts straight away; its state is the
 feedback (blue, fast blink).
 
-Pairing scans for 60 seconds. The radio's model, TH-D74 or TH-D75, comes
-from its Bluetooth name, so pairing needs no other setup. The device keeps the old radio until a new
+Pairing scans for 60 seconds. A Kenwood is found by its Bluetooth name
+(starting `TH-D74` or `TH-D75`) or, whatever it's been named on the
+radio, by its Class of Device (`0x620204`, which both report). Its model
+comes from the name, so pairing needs no other setup; a renamed one is
+taken for a TH-D75 until its answer to `ID` at the first connect says
+which it is. The device keeps the old radio until a new
 one pairs. If pairing fails, times out, or is cancelled with a single
 press, it goes back to the radio
 it had (or to no radio). So an accidental double press costs only the

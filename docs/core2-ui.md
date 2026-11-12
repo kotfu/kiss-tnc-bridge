@@ -213,9 +213,16 @@ radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
 1. **Looking for radios.** Up to 60 s, with the time left. The device
    scans Bluetooth Classic and LE together, as the ATOM's double press
    does, and lists each radio as it's found: a Kenwood whose name starts
-   with `TH-D74` or `TH-D75`, or a TD-H9 whose name starts with `TD-H9`,
-   with its make and signal strength. Anything else is counted ("3 other
-   devices aren't radios") and not listed. Bridging stops while the
+   with `TH-D74` or `TH-D75`, or whose Class of Device is a Kenwood's
+   (`0x620204`, which renaming the radio doesn't change: a D75 called
+   "marconi" is listed as marconi), or a TD-H9 whose name starts with
+   `TD-H9`, with its make and signal strength. A renamed Kenwood is taken
+   for a TH-D75 until its answer to `ID` at the first connect says which
+   it is, as on the ATOM. Anything else is counted ("3 other
+   devices aren't radios") and not listed. Until a radio turns up, the
+   foot of the list says how to put one in pairing mode. A Kenwood that
+   doesn't give its name while it's found is asked for it between
+   inquiries of about 10 s, so it can take that long to appear. Bridging stops while the
    device looks, as on the ATOM. Tap a radio to pair or select it.
    **Cancel** (left) goes back to the radio the device had. Pairing the
    radio the device already has tries the pairing it has first, as on
@@ -236,8 +243,11 @@ radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
 5. **Done.** When the Kenwood confirms, the TNC page comes back with the
    new radio, connecting.
 
-If pairing fails, times out, or is refused: **Didn't pair**, and that the
-device is back on the radio it had. **Back** (left) goes to the TNC page;
+If pairing fails, times out, or is refused: **Didn't pair**, why (as the
+log puts it: "The pairing timed out.", "No radio was chosen in time.")
+and that the device is back on the radio it had. A first connection that
+fails before the number appears is tried up to three times first: a
+radio just put in pairing mode sometimes turns it down. **Back** (left) goes to the TNC page;
 **Try again** (middle) starts looking again.
 
 A new radio replaces the old one, as on the ATOM, and a Kenwood paired

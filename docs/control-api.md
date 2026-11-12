@@ -621,7 +621,9 @@ knows it. With `"transport": "le"` it looks over Bluetooth LE instead, for
 the BLE KISS service (`known_tnc` "BLE KISS TNC") and radios the daemon
 knows first. It doesn't filter on the service, because some radios (the
 TIDRADIO TD-H9) don't advertise the one their KISS link is on. The default
-is `"classic"`.
+is `"classic"`. On a device (the firmware), a Classic result also has
+`class`, its Class of Device as a number: a TH-D74 or TH-D75 reports
+`0x620204` (6423044) whatever it's been named on the radio.
 
 ```jsonc
 [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,

@@ -35,6 +35,10 @@ TH-D74 and TH-D75.
 - `device.info` reports `heap`: free internal RAM now, the least since
   starting, and the largest block. `ble-client` is in its
   `capabilities`.
+- A Kenwood renamed on the radio is found by its Class of Device
+  (`0x620204`) as well as by a name starting `TH-D74` or `TH-D75`, and
+  is taken for a TH-D75 until its answer to `ID` says which it is.
+  `bluetooth.scan` reports a Classic device's `class`.
 
 ### Changed
 

@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "cJSON.h"
 #include "control.h"
@@ -95,6 +96,27 @@ struct PairView {
     uint32_t total_s = 0; // and how long it has in all
 };
 PairView pairing_view();
+// While a board with a screen searches (PairStage::searching), the radios
+// it has found so far, for the screen to list. Safe from any task.
+struct FoundRadio {
+    std::string address;
+    std::string name; // "TH-D75"
+    std::string make; // "Kenwood TH-D75"
+    bool ble = false; // a TD-H9
+    int rssi = 0;     // dBm, if has_rssi
+    bool has_rssi = false;
+};
+struct SearchView {
+    std::vector<FoundRadio> radios; // in the order found
+    int others = 0;                 // devices found that aren't radios
+};
+SearchView search_view();
+// The radio to pair or select, from search_view: the search stops there.
+void choose_radio(const std::string &address);
+
+// Why the last pairing didn't pair, as the log says it: "cancelled", "the
+// pairing timed out" and so on.
+std::string pairing_failure();
 
 // The control API. Each answers p, at once or later, from the radio task.
 void scan(const control::Pending &p, uint32_t seconds, bool le);
