@@ -74,6 +74,19 @@ bool is_set(Error e) { return bits & bit(e); }
 
 bool any() { return bits != 0; }
 
+std::vector<Item> list()
+{
+    std::vector<Item> out;
+    uint32_t b = bits;
+    std::lock_guard<std::mutex> g(lock);
+    for (size_t i = 0; i < count; i++) {
+        if (b & (1u << i)) {
+            out.push_back({static_cast<Error>(i), messages[i]});
+        }
+    }
+    return out;
+}
+
 cJSON *json()
 {
     cJSON *a = cJSON_CreateArray();

@@ -8,3 +8,17 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 # device.info's heap counts internal RAM only.
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_USE_MALLOC=y
+
+# LVGL (docs/core2-ui.md). Its memory comes from PSRAM through
+# core2_hw.cpp, so internal RAM stays for Bluetooth and the draw strips.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_THEME_DEFAULT_DARK=y
+
+# No PSRAM test at boot: it took 0.9 s, during which the screen still
+# shows what it had before a reset.
+CONFIG_SPIRAM_MEMTEST=n
+CONFIG_LV_FONT_MONTSERRAT_36=y

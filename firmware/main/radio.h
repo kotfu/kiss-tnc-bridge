@@ -36,6 +36,32 @@ bool pairing();
 // Phones with a KISS session (or what debug.set says).
 int phones();
 
+// The radio as a screen shows it (docs/core2-ui.md, Bridge page). Safe
+// from any task.
+enum class State : uint8_t {
+    none,       // no radio paired or selected
+    idle,       // held down, pairing, or Bluetooth didn't start: see detail
+    connecting, // connecting, or waiting for a TD-H9 to advertise
+    connected,  // bridging
+    retrying,   // the link failed; it tries again in retry_in_s
+};
+struct View {
+    bool present = false; // a radio is paired or selected
+    bool ble = false;     // a TD-H9
+    bool paired = false;  // a Kenwood that's bonded
+    std::string name;     // its Bluetooth name, "TH-D75"
+    std::string make;     // "Kenwood TH-D75", or "" for an unknown model
+    std::string address;
+    State state = State::none;
+    std::string detail;
+    uint32_t state_s = 0;    // seconds in this state
+    uint32_t down_s = 0;     // not connected: seconds since it was last (or since starting)
+    uint32_t retry_in_s = 0; // retrying: seconds to the next try
+    uint32_t rx = 0;         // connected: frames from the radio since it connected
+    uint32_t tx = 0;         // and to it
+};
+View view();
+
 // A frame from a phone (stuffed, without FENDs) for the radio. Safe from
 // the Bluetooth task: it only queues.
 void send_frame(const uint8_t *frame, size_t len, const std::string &session);
@@ -45,10 +71,30 @@ void send_frame(const uint8_t *frame, size_t len, const std::string &session);
 constexpr uint32_t pairing_seconds = 60;
 
 // The button: pair with the first TH-D74 or TH-D75 found in pairing mode,
-// confirming its number at once, or select the first TD-H9 found; or
-// cancel that.
+// or select the first TD-H9 found; or cancel that. The ATOM confirms the
+// number at once; a board with a screen shows it and waits for
+// answer_pairing.
 void start_pairing();
 void cancel_pairing();
+void answer_pairing(bool same);
+
+// The pairing as a screen shows it (docs/core2-ui.md, Pairing a radio).
+// Safe from any task.
+enum class PairStage : uint8_t {
+    none,      // not pairing
+    searching, // looking for a radio
+    pairing,   // found one, connecting to it
+    compare,   // the number: does the radio show it? answer_pairing
+    press_ok,  // this side confirmed: press OK on the radio
+};
+struct PairView {
+    PairStage stage = PairStage::none;
+    std::string name;   // the radio's, from pairing on
+    std::string number; // compare and press_ok: "774523"
+    uint32_t left_s = 0;  // seconds left in this stage
+    uint32_t total_s = 0; // and how long it has in all
+};
+PairView pairing_view();
 
 // The control API. Each answers p, at once or later, from the radio task.
 void scan(const control::Pending &p, uint32_t seconds, bool le);

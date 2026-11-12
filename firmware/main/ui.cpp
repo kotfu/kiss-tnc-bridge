@@ -527,4 +527,7 @@ void wait_idle(uint32_t timeout_ms)
 
 void set_updating(bool on) { updating_on = on; }
 
+void starting(const char *) {}
+void started() {}
+
 } // namespace ktb::ui

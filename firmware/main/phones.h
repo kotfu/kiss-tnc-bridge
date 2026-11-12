@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "cJSON.h"
 #include "control.h"
@@ -26,6 +27,20 @@ bool wait_advertising(uint32_t timeout_ms);
 
 // Sessions: phones subscribed to KISS notifications.
 int sessions();
+
+// The most sessions at once.
+int max_sessions();
+
+// Each session as a screen shows it (docs/core2-ui.md, Bridge page): the
+// phone's address, how long it's been a session, and frames since then,
+// from the phone's side: rx from the phone, tx to it. Safe from any task.
+struct SessionView {
+    std::string address;
+    uint32_t connected_s = 0;
+    uint32_t rx = 0;
+    uint32_t tx = 0;
+};
+std::vector<SessionView> session_views();
 
 // A frame from the radio (stuffed, without FENDs) to every session.
 // Returns how many got it.

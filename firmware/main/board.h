@@ -19,6 +19,9 @@ constexpr gpio_num_t button = GPIO_NUM_39;
 // One SK6812 RGB LED, under the button.
 constexpr gpio_num_t rgb_led = GPIO_NUM_27;
 
+// The UI is the LED and the button (docs/atom-lite-ui.md).
+constexpr bool screen = false;
+
 #elif CONFIG_KTB_BOARD_STICKC_PLUS_SE
 
 constexpr const char *name = "stickc-plus-se";
@@ -31,16 +34,21 @@ constexpr gpio_num_t button = GPIO_NUM_37;
 // No RGB LED: one red LED (GPIO10) and a screen, both still to design.
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
+// Its screen has no UI yet: it runs the ATOM's, with button A.
+constexpr bool screen = false;
+
 #elif CONFIG_KTB_BOARD_CORE2
 
 constexpr const char *name = "core2";
 
-// No physical button: the touch buttons under the screen come with its
-// UI. Until then a radio is paired over USB.
+// No button: the touch screen and the circles below it.
 constexpr gpio_num_t button = GPIO_NUM_NC;
 
-// No RGB LED: the screen shows state, once it's designed.
+// No RGB LED: the screen shows state.
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
+
+// The UI is the touch screen (docs/core2-ui.md, core2_ui.cpp).
+constexpr bool screen = true;
 
 #else
 #error "A board in Kconfig.projbuild has no section in board.h"

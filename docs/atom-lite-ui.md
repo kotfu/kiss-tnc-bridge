@@ -47,6 +47,13 @@ press, it goes back to the radio
 it had (or to no radio). So an accidental double press costs only the
 bridging that stops while the device scans, and a single press ends that.
 
+Pairing the radio the device already has tries the pairing it has first.
+If the radio still knows the device, that's it: no number, and the radio
+can leave pairing mode. If the radio has forgotten it, the radio shows a
+number as usual, and if the radio turns the old pairing down outright,
+the device deletes it and pairs afresh. Cancelling keeps the old pairing
+unless the radio had already turned it down.
+
 The same scan looks for a TIDRADIO TD-H9 over Bluetooth LE, by its name.
 A TD-H9 isn't paired: it takes a connection from anything, and advertises
 whenever nothing is connected to it, so it has no pairing mode. The first

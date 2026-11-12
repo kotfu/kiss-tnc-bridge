@@ -38,6 +38,12 @@ TH-D74 and TH-D75.
 - The controller allows four BLE links (a TD-H9, two phones and, from
   Phase E, a management app). Phones are still limited to two.
 
+### Fixed
+
+- Pairing the radio the device already has, then cancelling, no longer
+  leaves it unpaired. The pairing it has is tried first; only if the
+  radio turns that down does the device pair afresh.
+
 ## 1.0.0 (2026-11-10)
 
 The first release, for the M5Stack ATOM Lite. It's the same firmware as

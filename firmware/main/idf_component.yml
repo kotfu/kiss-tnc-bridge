@@ -1,3 +1,10 @@
 dependencies:
   # cJSON left ESP-IDF in v6; the control API is JSON.
   espressif/cjson: "^1.7.19"
+  # The Core2's screen (docs/core2-ui.md; its touch is read directly). Every board lists
+  # them, so one dependencies.lock serves all three and switching boards
+  # doesn't download them again; on the ATOM Lite and StickC Plus SE
+  # nothing calls them, and the linker leaves them out of the image.
+  lvgl/lvgl: "^9.6"
+  espressif/esp_lvgl_port: "^2.9"
+  espressif/esp_lcd_ili9341: "^2"

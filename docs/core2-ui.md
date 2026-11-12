@@ -3,9 +3,15 @@
 The M5Stack Core2 v1.3 has a 320×240 color screen with a capacitive touch
 panel (an FT6336U). The panel runs past the bottom of the screen, where
 three circles are printed on the glass: those are touch zones, not
-buttons. The power button on its side goes to the AXP192 power chip, not
-to the ESP32, and the reset button next to it restarts the ESP32 the way
-unplugging would. This is the design of what you can do with them in
+buttons. The firmware reads the FT6336U as the panel maker tuned it, and
+writes none of its thresholds or timings. With Espressif's FT5x06 driver,
+which writes a generic tuning over the panel maker's, touch stopped as
+soon as the Core2 came off USB. At every start, LDO2, which
+powers the touch controller, goes off for a moment, since the reset button
+doesn't reach the controller. It has two real buttons, the power button
+and the reset button (see [The buttons](#the-buttons)). This is the design
+of what you can do
+with them in
 firmware 1.2, the Core2's first firmware (Phase G of the
 [roadmap](roadmap.md#phase-g-core2-and-stickc-plus-se-firmware)).
 Everything else is done from a management app over the
@@ -99,6 +105,35 @@ don't respond, so a half-answered question can't get lost behind
 another tab, and the left key is always the way out. A flow keeps the
 screen lit until it ends.
 
+## The buttons
+
+The Core2 has two buttons, and neither is an ordinary input to the
+firmware:
+
+| Button | Where | Wired to |
+|---|---|---|
+| **Power button** | The left side, beside the USB port | The AXP192 power chip |
+| **Reset button** | The bottom, beside the microSD slot | The ESP32's enable pin |
+
+**The power button** is the AXP192's. Some of what it does is the chip's
+alone, and the firmware can only tell the chip what timings to use (it
+sets them at start-up):
+
+| Press | While | What happens | Whose |
+|---|---|---|---|
+| Hold about half a second | Off | Turns the Core2 on | The AXP192's: the firmware isn't running |
+| Short press | On | Turns the screen off, or wakes it (see [The screen](#the-screen)) | The firmware's: the chip reports the press, and the firmware decides what it does |
+| Hold 6 s | On | Cuts the power, whatever the firmware is doing | The AXP192's. The firmware sets the time; it could switch it off, but it's the way out of a firmware that has hung, so it stays |
+
+A press of about 1 s is a long press to the chip, which reports it too;
+the firmware doesn't use it in 1.2.
+
+**The reset button** restarts the ESP32, as unplugging and plugging in
+the ATOM Lite does. The firmware can't see it or stop it, and
+`device.info`'s `last_reset` says `power_on`. The AXP192 isn't reset, so
+the power stays on. Holding the left and right circles while pressing it
+is the [reset gesture](#reset).
+
 ## The battery
 
 The right end of the tab bar shows the battery's percentage, then the
@@ -182,13 +217,17 @@ radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
    with its make and signal strength. Anything else is counted ("3 other
    devices aren't radios") and not listed. Bridging stops while the
    device looks, as on the ATOM. Tap a radio to pair or select it.
-   **Cancel** (left) goes back to the radio the device had.
-2. **A Kenwood: comparing the number.** "Pairing with TH-D75", the
-   six-digit number, and "Does it show this number?" **No** (left) ends
-   pairing; **Yes** (right) confirms the device's side. Unlike the ATOM,
-   which accepts the number without asking, the Core2 waits for your
-   answer. Nothing is on the middle key, so a thumb in the middle can't
-   answer.
+   **Cancel** (left) goes back to the radio the device had. Pairing the
+   radio the device already has tries the pairing it has first, as on
+   the ATOM: if the radio still knows the device, there's no number to
+   compare, and cancelling keeps the old pairing.
+2. **A Kenwood: comparing the number.** First "Pairing with TH-D75"
+   while the device connects to it; then the six-digit number, in 36 px,
+   and "Does it show this number?" **No** (left) ends pairing; **Yes**
+   (right) confirms the device's side. Unlike the ATOM, which accepts
+   the number without asking, the Core2 waits for your answer, for the
+   same 30 s or so the radio gives from showing the number. Nothing is
+   on the middle key, so a thumb in the middle can't answer.
 3. **A Kenwood: Press OK on the radio.** With the time the radio gives,
    about 30 s, counting down. **Cancel** (left).
 4. **A TD-H9: Selected.** "Selected TD-H9, connecting", and that the
@@ -249,8 +288,8 @@ readable.
 
 **The power button:** a short press turns the screen off at once, in any
 mode, and the next short press, or a touch, wakes it. In `bright` it then
-stays on. A long hold, about 6 s (provisional), always cuts the power in
-the AXP192, whatever the firmware is doing.
+stays on. Holding it 6 s cuts the power in the AXP192, whatever the
+firmware is doing (see [The buttons](#the-buttons)).
 
 **What wakes it on its own,** and restarts the timeout:
 
@@ -295,7 +334,7 @@ circles:
 
 1. Hold the left and right circles.
 2. Turn the device on with the power button, or press the reset button
-   on the side if it's on. Keep holding.
+   on the bottom if it's on. Keep holding.
 3. The firmware sees both held before it loads any settings or starts
    Bluetooth. **Reset:** "Keep holding to clear the settings, the radio
    and the authorized apps", the soft keys over both circles reading
@@ -311,8 +350,8 @@ device up or a bag. As on the ATOM, no setting can get in reset's way.
 ## Power off
 
 **Power off** on System asks first: "Power off? The bridge stops, and
-apps lose the radio. Press the power button on the side to turn it on
-again." **Cancel** (left) goes back; **Power off** (right, red) has the
+apps lose the radio. Press the power button on the left side to turn it
+on again." **Cancel** (left) goes back; **Power off** (right, red) has the
 AXP192 cut the power.
 
 Whether the Core2 stays off with USB plugged in, or starts again at once,
@@ -345,7 +384,7 @@ An error wakes the screen.
 | Sound and vibration | Later: see the roadmap |
 | Forget the radio | Pairing or selecting a new one replaces it; reset removes it |
 | Disconnect an app | Not offered |
-| Restart | The reset button on the side |
+| Restart | The reset button on the bottom |
 | Roll back a firmware update | Reflash from the web installer or `ktbctl` |
 
 ## To judge on the device
@@ -356,5 +395,7 @@ An error wakes the screen.
 - Text sizes and contrast at arm's length; the activity lights' 0.3 s.
 - Whether the panel is an ILI9342C or an ILI9342E (Core2s since August
   2026 have the E).
-- Power off with USB plugged in, and the power button's hold time.
-- The reset gesture: holding two circles while pressing the power button.
+- Power off with USB plugged in, and whether plugging in USB turns an
+  off Core2 on.
+- The reset gesture: holding two circles while pressing the power button
+  or the reset button.

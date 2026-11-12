@@ -16,6 +16,7 @@
 #include "esp_gattc_api.h"
 #include "esp_log.h"
 #include "esp_spp_api.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -23,6 +24,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "activity.h"
+#include "board.h"
 #include "errors.h"
 #include "freertos/message_buffer.h"
 #include "kiss.h"
@@ -254,6 +256,22 @@ std::atomic<PortState> port_state{PortState::unpaired};
 std::string port_detail; // under state_lock
 std::atomic<bool> pairing_now{false};
 std::atomic<bool> busy_now{false}; // a scan or a pairing is running
+
+// For pairing_view
+std::mutex pair_view_lock;
+PairView pair_view_now;       // left_s unused: from pair_view_until
+int64_t pair_view_until = 0;  // esp_timer microseconds
+
+void set_pair_stage(PairStage stage, uint32_t seconds, const std::string &name = "",
+                    const std::string &number = "")
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    pair_view_now.stage = stage;
+    pair_view_now.name = name;
+    pair_view_now.number = number;
+    pair_view_now.total_s = seconds;
+    pair_view_until = esp_timer_get_time() + int64_t(seconds) * 1000000;
+}
 // True while Bluetooth and the radio task are up. Otherwise nothing answers
 // requests, so post refuses them.
 std::atomic<bool> running{false};
@@ -269,6 +287,13 @@ struct Counters {
     std::atomic<uint32_t> tnc_connects{0};
 } counters;
 
+// For view(): when the port entered its state, and the counters when the
+// link last connected, so a screen counts frames since then.
+std::atomic<int64_t> state_since_us{0};
+std::atomic<int64_t> link_down_us{0}; // when the link last dropped, or 0
+std::atomic<uint32_t> link_start_up{0};
+std::atomic<uint32_t> link_start_down{0};
+
 void set_port(PortState s, const std::string &detail = "")
 {
     PortState was = port_state.exchange(s);
@@ -277,6 +302,13 @@ void set_port(PortState s, const std::string &detail = "")
         port_detail = detail;
     }
     if (was != s) {
+        state_since_us = esp_timer_get_time();
+        if (s == PortState::connected) {
+            link_start_up = counters.frames_up.load();
+            link_start_down = counters.frames_down.load();
+        } else if (was == PortState::connected) {
+            link_down_us = state_since_us.load();
+        }
         ESP_LOGI(TAG, "port: %s%s%s", port_state_name(s), detail.empty() ? "" : ", ",
                  detail.c_str());
         if (control::subscribed(control::topic_state)) {
@@ -562,6 +594,7 @@ bool spp_write_all(const uint8_t *data, size_t len)
 enum class ReqType : uint8_t {
     button_pair,
     button_cancel,
+    button_answer, // flag: the radio shows the same number
     scan,
     scan_stop,
     pair,
@@ -1518,6 +1551,7 @@ void do_pair(const Request &req)
     Found target;
     const char *failure = nullptr;
     bool cancelled = false;
+    set_pair_stage(PairStage::searching, pairing_seconds);
     if (button) {
         ESP_LOGI(TAG, "pairing: searching for a TH-D74 or TH-D75 in pairing mode, or a TD-H9");
         switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target)) {
@@ -1525,6 +1559,7 @@ void do_pair(const Request &req)
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
             if (target.ble) {
                 select_ble(target);
+                set_pair_stage(PairStage::none, 0);
                 pairing_now = false;
                 busy_now = false;
                 return;
@@ -1548,12 +1583,19 @@ void do_pair(const Request &req)
 
     bool authed = false;
     bool opened = false;
-    if (!failure && !cancelled) {
+    // A radio we're bonded with (pairing the radio again) is tried with
+    // that bond first, so cancelling leaves it as it was. If the radio
+    // has forgotten us, Bluedroid usually pairs afresh by itself on the
+    // same connection; if that attempt fails instead, the bond goes and
+    // the pairing starts once more from scratch.
+    bool keep_bond = !failure && !cancelled && bonded(target.addr);
+    if (keep_bond) {
+        ESP_LOGI(TAG, "pairing: already bonded with %s, trying that bond first", target.addr.str().c_str());
+    }
+    for (bool again = !failure && !cancelled; again;) {
+        again = false;
+        bool auth_failed = false;
         pairing_event(p, "pairing", "name", target.name);
-        if (bonded(target.addr)) {
-            // Pair afresh: the radio may have forgotten us.
-            esp_bt_gap_remove_bond_device(target.addr.raw());
-        }
         xQueueReset(gap_events);
         xEventGroupClearBits(events, EV_OPEN | EV_CLOSED | EV_FAILED);
         connect_addr = target.addr;
@@ -1563,11 +1605,32 @@ void do_pair(const Request &req)
         TickType_t deadline = xTaskGetTickCount() + pair_timeout;
         bool confirm_pending = false;
         TickType_t confirm_deadline = 0;
+        std::string number;
+        TickType_t confirm_at = 0;
+        // The radio gives about as long as confirm_timeout from showing
+        // the number.
+        auto confirm_left_s = [&]() -> uint32_t {
+            TickType_t gone = xTaskGetTickCount() - confirm_at;
+            return gone < confirm_timeout ? pdTICKS_TO_MS(confirm_timeout - gone) / 1000 : 0;
+        };
+        set_pair_stage(PairStage::pairing, pdTICKS_TO_MS(pair_timeout) / 1000, target.name);
         while (!failure && !cancelled && xTaskGetTickCount() < deadline) {
             Request q;
             while (xQueueReceive(requests, &q, 0) == pdTRUE) {
                 if (button && q.type == ReqType::button_cancel) {
                     cancelled = true;
+                } else if (button && q.type == ReqType::button_answer) {
+                    if (confirm_pending) {
+                        esp_bt_gap_ssp_confirm_reply(target.addr.raw(), q.flag);
+                        confirm_pending = false;
+                        if (q.flag) {
+                            ESP_LOGI(TAG, "pairing: the number is the same: press OK on the radio");
+                            set_pair_stage(PairStage::press_ok, confirm_left_s(), target.name, number);
+                        } else {
+                            ESP_LOGI(TAG, "pairing: the radio shows another number");
+                            cancelled = true;
+                        }
+                    }
                 } else if (!button && q.type == ReqType::pair_reply && q.ref == p.id) {
                     if (confirm_pending) {
                         esp_bt_gap_ssp_confirm_reply(target.addr.raw(), q.flag);
@@ -1597,9 +1660,17 @@ void do_pair(const Request &req)
                 if (e.type == GapEvent::confirm) {
                     char num[8];
                     snprintf(num, sizeof(num), "%06" PRIu32, e.number);
-                    if (button) {
+                    number = num;
+                    confirm_at = xTaskGetTickCount();
+                    if (button && !board::screen) {
                         ESP_LOGI(TAG, "pairing: the radio shows %s: press OK on it", num);
                         esp_bt_gap_ssp_confirm_reply(target.addr.raw(), true);
+                        set_pair_stage(PairStage::press_ok, confirm_left_s(), target.name, number);
+                    } else if (button) {
+                        ESP_LOGI(TAG, "pairing: does the radio show %s?", num);
+                        confirm_pending = true;
+                        confirm_deadline = xTaskGetTickCount() + confirm_timeout;
+                        set_pair_stage(PairStage::compare, confirm_left_s(), target.name, number);
                     } else {
                         pairing_event(p, "confirm", "passkey", num);
                         confirm_pending = true;
@@ -1612,6 +1683,7 @@ void do_pair(const Request &req)
                             target.name = e.name;
                         }
                     } else {
+                        auth_failed = true;
                         failure = "the pairing failed: press OK on the radio within 30 s of the number "
                                   "appearing, and dismiss any old prompt before trying again";
                     }
@@ -1620,6 +1692,12 @@ void do_pair(const Request &req)
             EventBits_t bits = xEventGroupGetBits(events);
             if (bits & EV_OPEN) {
                 opened = true;
+                if (keep_bond && !authed) {
+                    // The link opens only once authenticated: the bond
+                    // still works, with no new pairing to report.
+                    ESP_LOGI(TAG, "pairing: the radio still knows us");
+                    authed = true;
+                }
             }
             if (authed && (opened || (bits & (EV_FAILED | EV_CLOSED)))) {
                 break; // paired; the link is open or won't be
@@ -1628,11 +1706,24 @@ void do_pair(const Request &req)
                 failure = "the radio didn't accept the connection: is it in pairing mode?";
             }
         }
-        if (!authed && !failure && !cancelled) {
-            failure = "the pairing timed out";
-        }
         if (spp_handle != 0) {
             drop_link(); // the task connects afresh
+        }
+        if (keep_bond && auth_failed && !authed && !cancelled) {
+            // Only when the radio turned the bond down: a link that just
+            // failed is no reason to lose it.
+            ESP_LOGI(TAG, "pairing: the radio turned the bond down, pairing afresh");
+            keep_bond = false;
+            failure = nullptr;
+            if (bonded(target.addr)) {
+                esp_bt_gap_remove_bond_device(target.addr.raw());
+            }
+            vTaskDelay(pdMS_TO_TICKS(500)); // let the failed link go
+            again = true;
+            continue;
+        }
+        if (!authed && !failure && !cancelled) {
+            failure = "the pairing timed out";
         }
     }
 
@@ -1662,8 +1753,10 @@ void do_pair(const Request &req)
             control::reply_error(p, "internal", "paired, but couldn't save the radio");
         }
     } else {
-        if (authed) {
-            // Cancelled after the radio's OK: forget the new radio.
+        Record current = record();
+        if (authed && !(current.present && current.addr == target.addr)) {
+            // Cancelled after the radio's OK: forget the new radio, but
+            // never the radio we have.
             esp_bt_gap_remove_bond_device(target.addr.raw());
         }
         const char *why = cancelled ? "cancelled" : failure;
@@ -1671,6 +1764,7 @@ void do_pair(const Request &req)
         ui::post(ui::Event::pairing_failed);
         control::reply_error(p, "failed", why);
     }
+    set_pair_stage(PairStage::none, 0);
     pairing_now = false;
     busy_now = false;
 }
@@ -1761,7 +1855,8 @@ void handle(const Request &r)
         do_pair(r);
         break;
     case ReqType::button_cancel:
-        break; // nothing to cancel
+    case ReqType::button_answer:
+        break; // nothing to cancel or answer
     case ReqType::scan:
         do_scan(r);
         break;
@@ -1814,8 +1909,10 @@ void radio_task(void *)
         xQueueReset(gap_events); // only pairing and scans read these
         Record r = record();
         if (!r.present) {
-            set_port(PortState::unpaired,
-                     "no radio: double press the button to pair a TH-D74 or TH-D75, or select a TD-H9");
+            set_port(PortState::unpaired, board::screen
+                                              ? "no radio: pair a TH-D74 or TH-D75, or select a TD-H9, on the TNC page"
+                                              : "no radio: double press the button to pair a TH-D74 or TH-D75, "
+                                                "or select a TD-H9");
             serve_until(portMAX_DELAY);
             continue;
         }
@@ -1825,7 +1922,9 @@ void radio_task(void *)
             // radio has forgotten this device. Retrying can't help.
             set_port(PortState::unpaired, r.addr.str() +
                                               " isn't paired any more (the radio may have forgotten this "
-                                              "device): double press the button to pair it again");
+                                              "device): " +
+                                              (board::screen ? "pair it again on the TNC page"
+                                                             : "double press the button to pair it again"));
             serve_until(portMAX_DELAY);
             continue;
         }
@@ -1954,6 +2053,44 @@ int phones()
     return d >= 0 ? d : phones::sessions();
 }
 
+View view()
+{
+    Record r = record();
+    View v;
+    v.present = r.present;
+    v.ble = r.ble();
+    v.paired = r.present && !v.ble && bonded(r.addr);
+    v.name = r.name.empty() ? r.model : r.name;
+    const Model *m = find_model(r.model);
+    v.make = m && m->radio ? m->radio : "";
+    v.address = r.present ? r.addr.str() : "";
+    {
+        std::lock_guard<std::mutex> g(state_lock);
+        v.detail = port_detail;
+    }
+    int64_t since = state_since_us;
+    uint32_t elapsed = static_cast<uint32_t>((esp_timer_get_time() - since) / 1000000);
+    v.state_s = elapsed;
+    v.down_s = static_cast<uint32_t>((esp_timer_get_time() - link_down_us) / 1000000);
+    switch (port_state.load()) {
+    case PortState::unpaired: v.state = State::none; break;
+    case PortState::idle: v.state = State::idle; break;
+    case PortState::connecting: v.state = State::connecting; break;
+    case PortState::connected:
+        v.state = State::connected;
+        v.rx = counters.frames_down - link_start_down;
+        v.tx = counters.frames_up - link_start_up;
+        break;
+    case PortState::backoff: {
+        v.state = State::retrying;
+        uint32_t total = pdTICKS_TO_MS(retry_delay) / 1000;
+        v.retry_in_s = elapsed < total ? total - elapsed : 0;
+        break;
+    }
+    }
+    return v;
+}
+
 void send_frame(const uint8_t *frame, size_t len, const std::string &session)
 {
     uint8_t msg[1 + 64 + kiss::Splitter::max_frame];
@@ -1985,6 +2122,22 @@ void cancel_pairing()
 {
     Request r{ReqType::button_cancel, {}};
     post(r);
+}
+
+void answer_pairing(bool same)
+{
+    Request r{ReqType::button_answer, {}};
+    r.flag = same;
+    post(r);
+}
+
+PairView pairing_view()
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    PairView v = pair_view_now;
+    int64_t left = pair_view_until - esp_timer_get_time();
+    v.left_s = left > 0 ? static_cast<uint32_t>((left + 999999) / 1000000) : 0;
+    return v;
 }
 
 void scan(const control::Pending &p, uint32_t seconds, bool le)

@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "cJSON.h"
 
@@ -32,5 +33,12 @@ bool any();
 // For device.info: [{"code": "bluetooth", "message": "..."}], in the order
 // above.
 cJSON *json();
+
+// The same, for a screen.
+struct Item {
+    Error error;
+    std::string message;
+};
+std::vector<Item> list();
 
 } // namespace ktb::errors
