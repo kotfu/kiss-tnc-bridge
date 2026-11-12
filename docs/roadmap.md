@@ -716,7 +716,9 @@ from a browser, with no app.
 - [ ] A spike on each new board: the AXP192, the screen and touch with LVGL
       on `esp_lcd`, the SD card beside the screen on the Core2, and memory
       and flash on the StickC Plus SE's 4 MB layout.
-- [ ] The Core2's own flash layout, before its first release.
+- [x] The Core2's own flash layout, before its first release: two 4 MB
+      app partitions, 256 KB of NVS, a crash dump partition and about
+      7.6 MB of storage kept for later (`partitions-core2.csv`).
 - [ ] A basic UI on each: the boot splash, the status screen, pairing a
       radio, the authorization code and authorization mode, and reset at
       power-on. The Core2's for firmware 1.2 is designed in

@@ -1,5 +1,5 @@
 # M5Stack Core2 v1.3: ESP32-D0WDQ6-V3, 16 MB flash, 8 MB PSRAM. Layered on
-# sdkconfig.defaults. The flash layout stays the 4 MB one in partitions.csv.
+# sdkconfig.defaults, with its own flash layout (partitions-core2.csv).
 CONFIG_KTB_BOARD_CORE2=y
 CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 
@@ -22,3 +22,6 @@ CONFIG_LV_THEME_DEFAULT_DARK=y
 # shows what it had before a reset.
 CONFIG_SPIRAM_MEMTEST=n
 CONFIG_LV_FONT_MONTSERRAT_36=y
+
+# Its own flash layout, in 16 MB.
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-core2.csv"

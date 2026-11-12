@@ -28,7 +28,10 @@ TH-D74 and TH-D75.
   `td-h9` and `ble.address`, the `td-h9` model in `tnc.models`, and a
   `ble-client` radio port in `status`.
 - Builds for the M5Stack StickC Plus SE (`stickc-plus-se`) and Core2 v1.3
-  (`core2`), from the same code as the ATOM Lite. Neither has a UI yet.
+  (`core2`), from the same code as the ATOM Lite. The StickC Plus SE has
+  no UI yet. The Core2 has its own flash layout in its 16 MB: two 4 MB app
+  partitions, NVS at `0x810000`, a crash dump partition and storage kept
+  for later.
 - `device.info` reports `heap`: free internal RAM now, the least since
   starting, and the largest block. `ble-client` is in its
   `capabilities`.

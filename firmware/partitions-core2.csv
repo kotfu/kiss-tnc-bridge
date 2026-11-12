@@ -1,0 +1,15 @@
+# The Core2's layout, in its 16 MB of flash, fixed from its first release.
+# The start is the same as the 4 MB layout (partitions.csv): the table at
+# 0xA000, OTA data at 0xB000 and the first app partition at 0x10000. The
+# app partitions are 4 MB each, room for Wi-Fi (Phase H), sounds and larger
+# fonts. NVS is 256 KB. coredump is for a crash dump, once the firmware
+# writes one. storage, about 7.6 MB, is kept for files the firmware may
+# need later (sounds, images, a frame log when there's no card); nothing
+# uses it yet.
+# Name,   Type, SubType,  Offset,   Size
+otadata,  data, ota,      0xb000,   0x2000
+ota_0,    app,  ota_0,    0x10000,  0x400000
+ota_1,    app,  ota_1,    0x410000, 0x400000
+nvs,      data, nvs,      0x810000, 0x40000
+coredump, data, coredump, 0x850000, 0x10000
+storage,  data, littlefs, 0x860000, 0x7A0000

@@ -35,7 +35,8 @@ authorized over BLE.
 
 | File | What |
 |---|---|
-| `partitions.csv` | The flash layout, fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
+| `partitions.csv` | The 4 MB flash layout (ATOM Lite, StickC Plus SE), fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
+| `partitions-core2.csv` | The Core2's 16 MB layout, fixed from its first release: the same start, two 4 MB app partitions, NVS, a crash dump partition and storage kept for later |
 | `sdkconfig.defaults` | The build configuration every board shares; `sdkconfig.<board>` adds a board's, `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
 | `main/board.h` | Each board's name and pins |
 | `version.txt` | The version for local builds; release builds pass `-DPROJECT_VER` |
@@ -165,16 +166,18 @@ Every board is an ESP32 with Bluetooth Classic and BLE, so one project
 builds them all: `sdkconfig.defaults` is the shared configuration, and a
 board's `sdkconfig.<board>` picks it (`CONFIG_KTB_BOARD_*`) and adds what
 differs. `main/board.h` holds each board's name, as `device.info` reports
-it, and its pins. All three use the same flash layout and signing key.
+it, and its pins. All three use the same signing key. The ATOM Lite and
+StickC Plus SE share the 4 MB flash layout; the Core2 has its own.
 
 | Board | `<board>` | Chip | Flash | PSRAM | State |
 |---|---|---|---|---|---|
 | M5Stack ATOM Lite | `atom-lite` | ESP32-PICO-D4 | 4 MB | — | The LED and button UI |
 | M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | Builds; no UI yet. Button A works as the ATOM's button; the screen and red LED are dark |
-| M5Stack Core2 v1.3 | `core2` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | Builds; no UI yet. No button: pair a radio over USB |
+| M5Stack Core2 v1.3 | `core2` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | The touchscreen UI for 1.2 ([core2-ui.md](../docs/core2-ui.md)), in progress |
 
-The StickC Plus SE and Core2 haven't been tried on a device yet. Both have
-an AXP192 power chip, which the firmware doesn't set up yet.
+The StickC Plus SE hasn't been tried on a device yet. The Core2 has been:
+its AXP192 power chip, screen and touch are set up as M5Stack's own code
+does, and it bridges a TH-D75.
 
 ## Releases
 

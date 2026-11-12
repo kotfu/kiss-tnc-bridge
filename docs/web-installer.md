@@ -83,12 +83,15 @@ attaches these files to the GitHub release:
 `<board>` is `atom-lite`, `stickc-plus-se` or `core2`, as in `device.info`'s `board`.
 `<version>` is the firmware's version, without a `v`.
 
-The ATOM Lite's layout is fixed from the first release (see the roadmap's
-ATOM Lite firmware items): the bootloader at `0x1000`, the partition table
-at `0xA000`, OTA data at `0xB000`, two app partitions at `0x10000` and
-`0x1F0000`, and NVS, which holds the settings, the device's key and its
-authorization code, at `0x3D0000`. Every version uses the same layout, so any
-version can be installed over any other.
+Each board's layout is fixed from its first release (see the roadmap's
+ATOM Lite firmware items). Every board has the bootloader at `0x1000`, the
+partition table at `0xA000`, OTA data at `0xB000` and the first app
+partition at `0x10000`, so the parts above go to the same places on all
+three. The ATOM Lite and StickC Plus SE have a second app partition at
+`0x1F0000` and NVS, which holds the settings, the device's key and its
+authorization code, at `0x3D0000`. The Core2 has 4 MB app partitions, at
+`0x10000` and `0x410000`, and NVS at `0x810000`. Every version for a board
+uses that board's layout, so any version can be installed over any other.
 
 Firmware releases are tagged `firmware-v<version>`, apart from the
 daemon's `v<version>` tags, and are published as not "latest", so
