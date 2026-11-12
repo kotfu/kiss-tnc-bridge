@@ -1,5 +1,20 @@
 menu "kiss-tnc-bridge"
 
+    choice KTB_BOARD
+        prompt "Board"
+        default KTB_BOARD_ATOM_LITE
+        help
+            The board this firmware is built for. Each board's
+            sdkconfig.<board> file picks one; board.h holds its pins.
+
+        config KTB_BOARD_ATOM_LITE
+            bool "M5Stack ATOM Lite"
+        config KTB_BOARD_STICKC_PLUS_SE
+            bool "M5Stack StickC Plus SE"
+        config KTB_BOARD_CORE2
+            bool "M5Stack Core2 v1.3"
+    endchoice
+
     config KTB_DEBUG_COMMANDS
         bool "debug.* commands on USB serial"
         default n

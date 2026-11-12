@@ -26,7 +26,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        board: [atom-lite]
+        board: [atom-lite, stickc-plus-se, core2]
     defaults:
       run:
         shell: bash
@@ -74,7 +74,7 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           . "$IDF_PATH/export.sh" > /dev/null
           idf.py -B build-release -DSDKCONFIG=build-release/sdkconfig \
-            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+            -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.${{ matrix.board }};sdkconfig.release" \
             -DPROJECT_VER="${{ steps.version.outputs.version }}" build
           espsecure verify-signature --version 1 --keyfile release_signing_key.pem \
             build-release/ktb-firmware.bin

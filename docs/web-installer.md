@@ -80,7 +80,7 @@ attaches these files to the GitHub release:
 | `ktb-<board>-<version>-ota-data-initial.bin` | Blank OTA data, at `0xB000`. Writing it makes the device boot the first app partition |
 | `ktb-<board>-<version>-app.bin` | The signed firmware, at `0x10000`. The same file is the image for updates over BLE |
 
-`<board>` is `atom-lite` (later `core2`), as in `device.info`'s `board`.
+`<board>` is `atom-lite`, `stickc-plus-se` or `core2`, as in `device.info`'s `board`.
 `<version>` is the firmware's version, without a `v`.
 
 The ATOM Lite's layout is fixed from the first release (see the roadmap's

@@ -27,6 +27,8 @@ TH-D74 and TH-D75.
 - `bluetooth.scan` with `"transport": "le"`, `tnc.update` with `model`
   `td-h9` and `ble.address`, the `td-h9` model in `tnc.models`, and a
   `ble-client` radio port in `status`.
+- Builds for the M5Stack StickC Plus SE (`stickc-plus-se`) and Core2 v1.3
+  (`core2`), from the same code as the ATOM Lite. Neither has a UI yet.
 - `device.info` reports `heap`: free internal RAM now, the least since
   starting, and the largest block. `ble-client` is in its
   `capabilities`.

@@ -748,7 +748,7 @@ A device's `status`, trimmed:
 ### `device.info`
 
 ```jsonc
-{"board": "atom-lite",                 // or "core2"
+{"board": "atom-lite",                 // or "stickc-plus-se", "core2"
  "firmware": {"version": "1.1.0", "built": "2026-11-08T02:00:00Z",
               "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
               "rolled_back": "1.2.0"},                  // present when the last update was rolled back

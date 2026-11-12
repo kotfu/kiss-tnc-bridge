@@ -1,4 +1,4 @@
-// kiss-tnc-bridge firmware for the M5Stack ATOM Lite. See README.md.
+// kiss-tnc-bridge firmware for M5Stack boards (board.h). See README.md.
 
 #include "auth.h"
 #include "console.h"

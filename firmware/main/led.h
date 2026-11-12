@@ -1,4 +1,5 @@
-// The ATOM Lite's one SK6812 RGB LED.
+// The ATOM Lite's one SK6812 RGB LED. On boards without one (board.h),
+// init() and show() do nothing.
 #pragma once
 
 #include <cstdint>

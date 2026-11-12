@@ -1,0 +1,3 @@
+# M5Stack ATOM Lite: ESP32-PICO-D4, 4 MB flash, no PSRAM. Layered on
+# sdkconfig.defaults, which already fits it.
+CONFIG_KTB_BOARD_ATOM_LITE=y

@@ -1,6 +1,7 @@
 # kiss-tnc-bridge firmware
 
-Firmware for the M5Stack ATOM Lite (and the Core2, in Phase G): a KISS
+Firmware for the M5Stack ATOM Lite, StickC Plus SE and Core2 v1.3 (see
+[Boards](#boards)): a KISS
 bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic, or a
 TIDRADIO TD-H9 over BLE, to phones over BLE, managed with the
 [control API](../docs/control-api.md). The plan is
@@ -34,7 +35,8 @@ authorized over BLE.
 | File | What |
 |---|---|
 | `partitions.csv` | The flash layout, fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
-| `sdkconfig.defaults` | The build configuration; `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
+| `sdkconfig.defaults` | The build configuration every board shares; `sdkconfig.<board>` adds a board's, `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
+| `main/board.h` | Each board's name and pins |
 | `version.txt` | The version for local builds; release builds pass `-DPROJECT_VER` |
 | `CHANGELOG.md` | The firmware's changes; a release's notes come from its section |
 | `main/main.cpp` | Start-up: reset at power-on, then settings, key, UI and the control API |
@@ -60,10 +62,15 @@ authorized over BLE.
 . ~/src/esp/esp-idf/export.sh
 cd firmware
 tools/dev-key.sh        # once: the development signing key, never committed
-idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig \
-  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
-idf.py -B build-dev -p /dev/cu.usbserial-XXXX -b 115200 flash
+BOARD=atom-lite          # or stickc-plus-se, core2
+idf.py -B build-dev-$BOARD -DSDKCONFIG=build-dev-$BOARD/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.$BOARD;sdkconfig.dev" build
+idf.py -B build-dev-$BOARD -p /dev/cu.usbserial-XXXX -b 115200 flash
 ```
+
+Each board builds in its own directory: `idf.py` keeps the configuration
+it first made in the build directory, so switching boards in one directory
+doesn't take.
 
 `erase-flash` before `flash` makes a clean install: a new device key and
 authorization code. Flash at 115200 baud; 921600 didn't hold on the ATOM Lite.
@@ -151,6 +158,23 @@ fails, and `tools/ktbdev.py info` shows each error's code and what to do;
 [atom-lite-ui.md](../docs/atom-lite-ui.md#errors) has the list. With the
 development build, `ktbdev.py debug error=true` turns on a `debug` error.
 
+## Boards
+
+Every board is an ESP32 with Bluetooth Classic and BLE, so one project
+builds them all: `sdkconfig.defaults` is the shared configuration, and a
+board's `sdkconfig.<board>` picks it (`CONFIG_KTB_BOARD_*`) and adds what
+differs. `main/board.h` holds each board's name, as `device.info` reports
+it, and its pins. All three use the same flash layout and signing key.
+
+| Board | `<board>` | Chip | Flash | PSRAM | State |
+|---|---|---|---|---|---|
+| M5Stack ATOM Lite | `atom-lite` | ESP32-PICO-D4 | 4 MB | — | The LED and button UI |
+| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | Builds; no UI yet. Button A works as the ATOM's button; the screen and red LED are dark |
+| M5Stack Core2 v1.3 | `core2` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | Builds; no UI yet. No button: pair a radio over USB |
+
+The StickC Plus SE and Core2 haven't been tried on a device yet. Both have
+an AXP192 power chip, which the firmware doesn't set up yet.
+
 ## Releases
 
 [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)
@@ -174,8 +198,9 @@ The tag sets the version; `version.txt` is only for local builds. A build
 like CI's, with your own key in `release_signing_key.pem`:
 
 ```
-idf.py -B build-release -DSDKCONFIG=build-release/sdkconfig \
-  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+BOARD=atom-lite
+idf.py -B build-release-$BOARD -DSDKCONFIG=build-release-$BOARD/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.$BOARD;sdkconfig.release" \
   -DPROJECT_VER=1.0.0 build
-tools/package.py build-release atom-lite 1.0.0 dist
+tools/package.py build-release-$BOARD $BOARD 1.0.0 dist
 ```

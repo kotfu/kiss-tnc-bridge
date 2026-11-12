@@ -1,8 +1,11 @@
-# kiss-tnc-bridge firmware, ATOM Lite. Most of this is from the Phase A
-# spikes (spikes/atom-lite-memory and spikes/atom-lite-update).
+# kiss-tnc-bridge firmware, common to every board: each is an ESP32 with
+# Bluetooth Classic and BLE. A board's sdkconfig.<board> is layered on top
+# (README.md, Boards). Most of this is from the Phase A spikes
+# (spikes/atom-lite-memory and spikes/atom-lite-update).
 CONFIG_IDF_TARGET="esp32"
 
-# ATOM Lite: ESP32-PICO-D4, 4 MB flash, no PSRAM
+# At least 4 MB of flash, which partitions.csv needs: the ATOM Lite and
+# StickC Plus SE have 4 MB, and the Core2 sets its 16 MB.
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
 CONFIG_ESPTOOLPY_FLASHFREQ_40M=y
@@ -56,7 +59,8 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # Signed app images without hardware secure boot: no eFuses are burned
 # (roadmap decision 12). The ATOM Lite's chip is revision 1.1, so ECDSA
-# (the V1 scheme) is the only one available. The app checks an update's
+# (the V1 scheme) is the only one available; it works on every ESP32
+# revision, so one key signs every board's images. The app checks an update's
 # signature before switching to it; the bootloader checks at every boot.
 CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=y
 CONFIG_SECURE_SIGNED_APPS_ECDSA_SCHEME=y
