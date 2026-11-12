@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "cJSON.h"
 #include "control.h"
@@ -27,12 +28,32 @@ bool wait_advertising(uint32_t timeout_ms);
 // Sessions: phones subscribed to KISS notifications.
 int sessions();
 
+// The most sessions at once.
+int max_sessions();
+
+// Each session as a screen shows it (docs/core2-ui.md, Bridge page): the
+// phone's address, how long it's been a session, and frames since then,
+// from the phone's side: rx from the phone, tx to it. Safe from any task.
+struct SessionView {
+    std::string address;
+    uint32_t connected_s = 0;
+    uint32_t rx = 0;
+    uint32_t tx = 0;
+};
+std::vector<SessionView> session_views();
+
 // A frame from the radio (stuffed, without FENDs) to every session.
 // Returns how many got it.
 int send_frame(const uint8_t *frame, size_t len);
 
 // The name changed: advertise the new one.
 void name_changed();
+
+// While the radio task connects to a TD-H9 as a central, advertising
+// stops: the ESP32's controller asserts (llc.c line 135) when it sends a
+// connection request while advertising with a phone connected. Holding
+// blocks the caller for a moment, so advertising has stopped.
+void hold_advertising(bool hold);
 
 // session.kick: disconnects the phone with this session id.
 void kick(const control::Pending &p, const std::string &session);

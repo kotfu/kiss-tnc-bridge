@@ -1,4 +1,4 @@
-// kiss-tnc-bridge firmware for the M5Stack ATOM Lite. See README.md.
+// kiss-tnc-bridge firmware for M5Stack boards (board.h). See README.md.
 
 #include "auth.h"
 #include "console.h"
@@ -36,6 +36,7 @@ extern "C" void app_main()
         esp_restart();
     }
 
+    ui::starting("Loading settings");
     settings::load();
     if (!auth::load()) {
         // Without its key the device can't be managed over BLE; USB still
@@ -47,6 +48,7 @@ extern "C" void app_main()
     ui::start();
     // Whatever fails from here on, the control API still starts, so a
     // management app on USB can see the errors.
+    ui::starting("Starting Bluetooth");
     bool bluetooth = radio::start();
     if (bluetooth) {
         power::start();
@@ -55,6 +57,7 @@ extern "C" void app_main()
     activity::start();
 
     console::serve(control::handle_line);
+    ui::started();
 
     // The self-test: no errors, so settings loaded, the key in hand and
     // Bluetooth up; the UI and the control API running; and phones can find

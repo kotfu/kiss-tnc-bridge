@@ -59,10 +59,16 @@ uint8_t scale(uint8_t c, float k)
 
 } // namespace
 
+// Boards without an RGB LED show nothing here.
+constexpr bool present = board::rgb_led != GPIO_NUM_NC;
+
 void init()
 {
+    if constexpr (!present) {
+        return;
+    }
     rmt_tx_channel_config_t cfg = {};
-    cfg.gpio_num = board::led;
+    cfg.gpio_num = board::rgb_led;
     cfg.clk_src = RMT_CLK_SRC_DEFAULT;
     cfg.resolution_hz = resolution_hz;
     cfg.mem_block_symbols = 64;
@@ -77,6 +83,9 @@ void init()
 
 void show(Rgb color, uint8_t brightness, float level)
 {
+    if constexpr (!present) {
+        return;
+    }
     float b = brightness / 100.0f;
     float k = b * b * level;
     Rgb out{scale(color.r, k), scale(color.g, k), scale(color.b, k)};

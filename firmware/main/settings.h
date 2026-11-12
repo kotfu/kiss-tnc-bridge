@@ -14,6 +14,10 @@ namespace ktb::settings {
 // The values are stored in NVS: add new ones at the end.
 enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 
+// A board with a screen (board::screen) has these in place of the LED's
+// (docs/core2-ui.md, The screen). Stored in NVS: add new ones at the end.
+enum class ScreenNormal : uint8_t { bright, dim, dark };
+
 // Reads the settings from NVS, with defaults for any that aren't there.
 void load();
 
@@ -22,6 +26,8 @@ std::string public_name();
 LedNormal led_normal();
 uint16_t led_wake_seconds();
 uint8_t led_brightness();
+ScreenNormal screen_normal();
+uint16_t screen_timeout_seconds();
 
 // Every setting, as device.settings.get returns them.
 cJSON *to_json();

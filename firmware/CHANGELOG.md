@@ -10,6 +10,44 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.2.0 (2026-11-12)
+
+The M5Stack Core2 v1.3, with a touchscreen, beside the ATOM Lite.
+
+### Added
+
+- The Core2 v1.3 (`core2`), from the same code as the ATOM Lite, with its
+  own flash layout in its 16 MB: two 4 MB app partitions, NVS at
+  `0x810000`, a crash dump partition and storage kept for later. The
+  StickC Plus SE (`stickc-plus-se`) builds too, but isn't released until
+  it has a UI.
+- The Core2's touchscreen UI ([core2-ui.md](../docs/core2-ui.md)): the
+  Bridge, TNC and System pages under tabs, the circles below the screen
+  as labelled soft keys, the battery, a list of the radios found to pair
+  or select, comparing the number when pairing a Kenwood, errors as
+  banners, the boot splash, the reset gesture and power off. The
+  `screen_normal` (`bright`, `dim`, `dark`) and `screen_timeout_seconds`
+  settings take the place of the LED's. Forget on the TNC page, the
+  System page's power line (external power is USB, the AXP192's ACIN; 99%
+  until the charger stops) and a powering-off screen.
+- A Kenwood renamed on the radio is found by its Class of Device
+  (`0x620204`) as well as by a name starting `TH-D74` or `TH-D75`, and
+  is taken for a TH-D75 until its answer to `ID` says which it is.
+  `bluetooth.scan` reports a Classic device's `class`.
+
+### Fixed
+
+- The Bluetooth controller no longer crashes (an assert in `llc.c`, line
+  135) when a TD-H9 connects while a KISS TNC app is already connected:
+  it did whenever the radio came back, or the device started, with an
+  app connected first. While the TD-H9 is away, the device now looks for
+  it with a scan and keeps advertising to apps (before, it advertised
+  through a pending connect, which the controller can't do safely with an
+  app connected), and stops advertising only for the connect.
+- Pairing the radio the device already has, then cancelling, no longer
+  leaves it unpaired. The pairing it has is tried first; only if the
+  radio turns that down does the device pair afresh.
+
 ## 1.1.0 (2026-11-12)
 
 The TIDRADIO TD-H9 as the radio, for the M5Stack ATOM Lite, beside the

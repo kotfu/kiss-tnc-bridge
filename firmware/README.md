@@ -1,11 +1,13 @@
 # kiss-tnc-bridge firmware
 
-Firmware for the M5Stack ATOM Lite (and the Core2, in Phase G): a KISS
+Firmware for the M5Stack ATOM Lite, StickC Plus SE and Core2 v1.3 (see
+[Boards](#boards)): a KISS
 bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic, or a
 TIDRADIO TD-H9 over BLE, to phones over BLE, managed with the
 [control API](../docs/control-api.md). The plan is
 Phase C of the [roadmap](../docs/roadmap.md#phase-c-atom-lite-firmware-and-web-installer);
-the button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md).
+the ATOM's button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md),
+and the Core2's screen in [core2-ui.md](../docs/core2-ui.md).
 
 C++ on ESP-IDF 6.1, with Bluedroid. The Phase A spikes in
 [`spikes/`](../spikes/README.md) are its reference.
@@ -33,8 +35,10 @@ authorized over BLE.
 
 | File | What |
 |---|---|
-| `partitions.csv` | The flash layout, fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
-| `sdkconfig.defaults` | The build configuration; `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
+| `partitions.csv` | The 4 MB flash layout (ATOM Lite, StickC Plus SE), fixed from the first release: table at 0xA000, two 1.875 MB app partitions, NVS at the end |
+| `partitions-core2.csv` | The Core2's 16 MB layout, fixed from its first release: the same start, two 4 MB app partitions, NVS, a crash dump partition and storage kept for later |
+| `sdkconfig.defaults` | The build configuration every board shares; `sdkconfig.<board>` adds a board's, `sdkconfig.dev` adds the `debug.*` commands, and `sdkconfig.release` points at the release key |
+| `main/board.h` | Each board's name and pins |
 | `version.txt` | The version for local builds; release builds pass `-DPROJECT_VER` |
 | `CHANGELOG.md` | The firmware's changes; a release's notes come from its section |
 | `main/main.cpp` | Start-up: reset at power-on, then settings, key, UI and the control API |
@@ -60,10 +64,15 @@ authorized over BLE.
 . ~/src/esp/esp-idf/export.sh
 cd firmware
 tools/dev-key.sh        # once: the development signing key, never committed
-idf.py -B build-dev -DSDKCONFIG=build-dev/sdkconfig \
-  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.dev" build
-idf.py -B build-dev -p /dev/cu.usbserial-XXXX -b 115200 flash
+BOARD=atom-lite          # or stickc-plus-se, core2
+idf.py -B build-dev-$BOARD -DSDKCONFIG=build-dev-$BOARD/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.$BOARD;sdkconfig.dev" build
+idf.py -B build-dev-$BOARD -p /dev/cu.usbserial-XXXX -b 115200 flash
 ```
+
+Each board builds in its own directory: `idf.py` keeps the configuration
+it first made in the build directory, so switching boards in one directory
+doesn't take.
 
 `erase-flash` before `flash` makes a clean install: a new device key and
 authorization code. Flash at 115200 baud; 921600 didn't hold on the ATOM Lite.
@@ -118,9 +127,12 @@ over BLE too, and the first device whose advertised name starts with
 `TD-H9` becomes the radio. It isn't paired; the ATOM keeps its address and
 connects to it as a GATT client (see
 [td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md) for the radio's settings).
-While it's off or away, the ATOM waits in a direct connect for it to
-advertise, and is ready within about a second of it coming back. Each
-frame goes to the radio in one write, which it needs.
+While it's off or away, the ATOM looks for it with a BLE scan, still
+advertising to phones, and connects once it hears it: ready within a few
+seconds of it coming back. Advertising stops for that connect, because
+the ESP32's Bluetooth controller crashes (an assert in `llc.c`, line 135)
+when it sends a connection request while advertising with a phone
+connected. Each frame goes to the radio in one write, which it needs.
 Opening the port must not reboot the device. The ATOM's reset circuit
 pulls EN low while RTS is asserted without DTR, so a management app has to
 drop RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
@@ -151,6 +163,25 @@ fails, and `tools/ktbdev.py info` shows each error's code and what to do;
 [atom-lite-ui.md](../docs/atom-lite-ui.md#errors) has the list. With the
 development build, `ktbdev.py debug error=true` turns on a `debug` error.
 
+## Boards
+
+Every board is an ESP32 with Bluetooth Classic and BLE, so one project
+builds them all: `sdkconfig.defaults` is the shared configuration, and a
+board's `sdkconfig.<board>` picks it (`CONFIG_KTB_BOARD_*`) and adds what
+differs. `main/board.h` holds each board's name, as `device.info` reports
+it, and its pins. All three use the same signing key. The ATOM Lite and
+StickC Plus SE share the 4 MB flash layout; the Core2 has its own.
+
+| Board | `<board>` | Chip | Flash | PSRAM | State |
+|---|---|---|---|---|---|
+| M5Stack ATOM Lite | `atom-lite` | ESP32-PICO-D4 | 4 MB | — | The LED and button UI |
+| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | Builds; no UI yet. Button A works as the ATOM's button; the screen and red LED are dark |
+| M5Stack Core2 v1.3 | `core2` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | The touchscreen UI for 1.2 ([core2-ui.md](../docs/core2-ui.md)), in progress |
+
+The StickC Plus SE hasn't been tried on a device yet. The Core2 has been:
+its AXP192 power chip, screen and touch are set up as M5Stack's own code
+does, and it bridges a TH-D75.
+
 ## Releases
 
 [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)
@@ -160,7 +191,8 @@ tagging it, run the workflow by hand from the Actions tab. Pushing a `firmware-v
 builds with the release key, from the `FIRMWARE_SIGNING_KEY` repository
 secret, and publishes a GitHub release, never marked latest (that stays
 the daemon's), with the files the
-[web installer](../docs/web-installer.md#what-a-release-publishes) reads.
+[web installer](../docs/web-installer.md#what-a-release-publishes) reads
+for every released board (not the StickC Plus SE yet).
 A version with a hyphen is a prerelease. Betas and release candidates
 are numbered with no dot: `1.1.0-beta1`, `1.1.0-rc1`. (`1.0.0-rc.1` came
 before this convention.)
@@ -174,8 +206,9 @@ The tag sets the version; `version.txt` is only for local builds. A build
 like CI's, with your own key in `release_signing_key.pem`:
 
 ```
-idf.py -B build-release -DSDKCONFIG=build-release/sdkconfig \
-  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.release" \
+BOARD=atom-lite
+idf.py -B build-release-$BOARD -DSDKCONFIG=build-release-$BOARD/sdkconfig \
+  -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.$BOARD;sdkconfig.release" \
   -DPROJECT_VER=1.0.0 build
-tools/package.py build-release atom-lite 1.0.0 dist
+tools/package.py build-release-$BOARD $BOARD 1.0.0 dist
 ```

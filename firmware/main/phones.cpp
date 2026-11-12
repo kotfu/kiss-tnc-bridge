@@ -14,6 +14,7 @@
 #include "esp_gatt_common_api.h"
 #include "esp_gatts_api.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "kiss.h"
@@ -72,6 +73,9 @@ struct Conn {
     bool subscribed = false; // a session
     std::string session;     // ktbr0/phones/<address>
     kiss::Splitter splitter;
+    int64_t session_us = 0; // when it became a session
+    uint32_t rx = 0;        // frames from it, since then
+    uint32_t tx = 0;        // frames to it
 };
 
 std::mutex lock;
@@ -209,9 +213,11 @@ void configure_advertising()
     esp_ble_gap_config_scan_rsp_data_raw(rsp, n);
 }
 
+std::atomic<bool> adv_held{false};
+
 void start_advertising()
 {
-    if (adv_data_set && scan_rsp_set && connected() < MAX_CONNS) {
+    if (adv_data_set && scan_rsp_set && !adv_held && connected() < MAX_CONNS) {
         esp_ble_gap_start_advertising(&adv_params);
     }
 }
@@ -273,7 +279,8 @@ void on_write(esp_ble_gatts_cb_param_t *param)
     }
     if (w.handle == handles[IDX_TX_VAL]) {
         std::string session = c->session;
-        c->splitter.feed(w.value, w.len, [&session](const uint8_t *frame, size_t len) {
+        c->splitter.feed(w.value, w.len, [&session, c](const uint8_t *frame, size_t len) {
+            c->rx++;
             if (activity::wanted()) {
                 activity::add(session, activity::Dir::rx, len);
             }
@@ -283,6 +290,11 @@ void on_write(esp_ble_gatts_cb_param_t *param)
         bool on = w.value[0] & 0x01;
         if (on != c->subscribed) {
             c->subscribed = on;
+            if (on) {
+                c->session_us = esp_timer_get_time();
+                c->rx = 0;
+                c->tx = 0;
+            }
             session_event(c->session, on ? "opened" : "closed");
         }
     }
@@ -444,6 +456,7 @@ int send_frame(const uint8_t *frame, size_t len)
         }
         if (ok) {
             delivered++;
+            c.tx++;
             if (activity::wanted()) {
                 activity::add(c.session, activity::Dir::tx, len);
             }
@@ -452,6 +465,19 @@ int send_frame(const uint8_t *frame, size_t len)
         }
     }
     return delivered;
+}
+
+void hold_advertising(bool hold)
+{
+    if (adv_held.exchange(hold) == hold) {
+        return;
+    }
+    if (hold) {
+        esp_ble_gap_stop_advertising();
+        vTaskDelay(pdMS_TO_TICKS(30)); // stopped before the caller connects
+    } else {
+        start_advertising();
+    }
 }
 
 void name_changed()
@@ -473,6 +499,26 @@ void kick(const control::Pending &p, const std::string &session)
         }
     }
     control::reply_error(p, "not_found", "no session " + session);
+}
+
+int max_sessions() { return MAX_CONNS; }
+
+std::vector<SessionView> session_views()
+{
+    std::vector<SessionView> out;
+    int64_t now = esp_timer_get_time();
+    std::lock_guard<std::mutex> g(lock);
+    for (auto &c : conns) {
+        if (c.used && c.subscribed) {
+            SessionView v;
+            v.address = addr_str(c.bda);
+            v.connected_s = static_cast<uint32_t>((now - c.session_us) / 1000000);
+            v.rx = c.rx;
+            v.tx = c.tx;
+            out.push_back(v);
+        }
+    }
+    return out;
 }
 
 cJSON *port_json()

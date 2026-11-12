@@ -174,12 +174,25 @@ std::atomic<uint32_t> finished{0}; // sequences shown
 bool led_ready = false;
 bool power_on_shown = false;
 
-bool button_down() { return gpio_get_level(board::button) == 0; }
+// A board without a button (board.h) never sees a press.
+constexpr bool has_button = board::button != GPIO_NUM_NC;
+
+bool button_down()
+{
+    if constexpr (!has_button) {
+        return false;
+    }
+    return gpio_get_level(board::button) == 0;
+}
 
 void button_init()
 {
+    if constexpr (!has_button) {
+        return;
+    }
     gpio_config_t cfg = {};
-    cfg.pin_bit_mask = 1ULL << board::button;
+    // Still compiled without a button, so the shift can't use GPIO_NUM_NC.
+    cfg.pin_bit_mask = 1ULL << (has_button ? board::button : 0);
     cfg.mode = GPIO_MODE_INPUT;
     gpio_config(&cfg);
 }
@@ -513,5 +526,8 @@ void wait_idle(uint32_t timeout_ms)
 }
 
 void set_updating(bool on) { updating_on = on; }
+
+void starting(const char *) {}
+void started() {}
 
 } // namespace ktb::ui

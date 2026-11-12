@@ -16,6 +16,7 @@
 #include "esp_gattc_api.h"
 #include "esp_log.h"
 #include "esp_spp_api.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 #include "freertos/queue.h"
@@ -23,6 +24,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 #include "activity.h"
+#include "board.h"
 #include "errors.h"
 #include "freertos/message_buffer.h"
 #include "kiss.h"
@@ -105,6 +107,18 @@ const Model *model_for_name(const std::string &name, bool ble)
         }
     }
     return nullptr;
+}
+
+// A device a search found: by its name, or, for a Kenwood renamed on the
+// radio (a ham can call it anything), by its Class of Device, which the
+// name doesn't change. A renamed Kenwood is taken for a TH-D75, the same
+// as a TH-D74 here, until its answer to ID says which (kiss_init).
+const Model *model_for_found(const std::string &name, bool ble, uint32_t cod)
+{
+    if (const Model *m = model_for_name(name, ble)) {
+        return m;
+    }
+    return !ble && cod == cod_kenwood ? &model_of("th-d75") : nullptr;
 }
 
 // ---- Addresses ----
@@ -254,6 +268,34 @@ std::atomic<PortState> port_state{PortState::unpaired};
 std::string port_detail; // under state_lock
 std::atomic<bool> pairing_now{false};
 std::atomic<bool> busy_now{false}; // a scan or a pairing is running
+
+// For pairing_view and pairing_failure
+std::mutex pair_view_lock;
+std::string last_failure;
+
+// For search_view: only search_list writes it, and says whether it
+// listed any radio.
+SearchView search_now;
+bool listed_any = false;
+
+void set_pairing_failure(const char *why)
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    last_failure = why;
+}
+PairView pair_view_now;       // left_s unused: from pair_view_until
+int64_t pair_view_until = 0;  // esp_timer microseconds
+
+void set_pair_stage(PairStage stage, uint32_t seconds, const std::string &name = "",
+                    const std::string &number = "")
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    pair_view_now.stage = stage;
+    pair_view_now.name = name;
+    pair_view_now.number = number;
+    pair_view_now.total_s = seconds;
+    pair_view_until = esp_timer_get_time() + int64_t(seconds) * 1000000;
+}
 // True while Bluetooth and the radio task are up. Otherwise nothing answers
 // requests, so post refuses them.
 std::atomic<bool> running{false};
@@ -269,6 +311,13 @@ struct Counters {
     std::atomic<uint32_t> tnc_connects{0};
 } counters;
 
+// For view(): when the port entered its state, and the counters when the
+// link last connected, so a screen counts frames since then.
+std::atomic<int64_t> state_since_us{0};
+std::atomic<int64_t> link_down_us{0}; // when the link last dropped, or 0
+std::atomic<uint32_t> link_start_up{0};
+std::atomic<uint32_t> link_start_down{0};
+
 void set_port(PortState s, const std::string &detail = "")
 {
     PortState was = port_state.exchange(s);
@@ -277,6 +326,13 @@ void set_port(PortState s, const std::string &detail = "")
         port_detail = detail;
     }
     if (was != s) {
+        state_since_us = esp_timer_get_time();
+        if (s == PortState::connected) {
+            link_start_up = counters.frames_up.load();
+            link_start_down = counters.frames_down.load();
+        } else if (was == PortState::connected) {
+            link_down_us = state_since_us.load();
+        }
         ESP_LOGI(TAG, "port: %s%s%s", port_state_name(s), detail.empty() ? "" : ", ",
                  detail.c_str());
         if (control::subscribed(control::topic_state)) {
@@ -562,6 +618,8 @@ bool spp_write_all(const uint8_t *data, size_t len)
 enum class ReqType : uint8_t {
     button_pair,
     button_cancel,
+    button_answer, // flag: the radio shows the same number
+    button_choose, // addr: the radio the screen chose from the search
     scan,
     scan_stop,
     pair,
@@ -593,6 +651,7 @@ void post(Request &r)
     if (!running) {
         control::reply_error(r.p, "failed", "Bluetooth didn't start");
         if (r.type == ReqType::button_pair) {
+            set_pairing_failure("Bluetooth didn't start");
             pairing_now = false;
             ui::post(ui::Event::pairing_failed);
         }
@@ -601,6 +660,7 @@ void post(Request &r)
     if (xQueueSend(requests, &r, 0) != pdTRUE) {
         control::reply_error(r.p, "busy", "the radio has too many requests waiting");
         if (r.type == ReqType::button_pair) {
+            set_pairing_failure("the radio has too many requests waiting");
             pairing_now = false;
             ui::post(ui::Event::pairing_failed);
         }
@@ -640,6 +700,7 @@ void refuse_busy(const Request &r)
 {
     switch (r.type) {
     case ReqType::button_pair:
+        set_pairing_failure("a Bluetooth scan or pairing is already running");
         ui::post(ui::Event::pairing_failed);
         break;
     case ReqType::hold:
@@ -679,6 +740,9 @@ uint16_t ble_svc_start = 0, ble_svc_end = 0, ble_tx = 0, ble_rx = 0;
 
 // A BLE scan's length, until its parameters are set; 0 once it's stopped.
 std::atomic<uint32_t> ble_scan_seconds{0};
+// The TD-H9 ble_wait_for is waiting for: set before ble_awaiting.
+Addr ble_awaited;
+std::atomic<bool> ble_awaiting{false};
 // Addresses already reported in this scan, so the task isn't flooded with
 // every advertisement (a busy room has dozens a second).
 std::mutex scan_lock;
@@ -911,10 +975,74 @@ void ble_close()
 
 enum class BleOpen : uint8_t { opened, waited, failed, interrupted };
 
-// Connects to a TD-H9 and subscribes. A direct connect waits for the radio
-// to advertise, up to 30 s; a request arriving meanwhile ends the attempt,
-// and stays in the queue for the task.
+// Connects to a TD-H9 and subscribes, once ble_wait_for has seen it
+// advertise, so the connect is quick: given up after ble_connect_limit. A
+// request arriving meanwhile ends the attempt, and stays in the queue for
+// the task. Advertising for phones stops meanwhile: the ESP32's controller
+// asserts (llc.c line 135) when it sends a connection request while
+// advertising with a phone connected.
+constexpr TickType_t ble_connect_limit = pdMS_TO_TICKS(5000);
+
+BleOpen ble_connect_now(const Record &r);
+
 BleOpen ble_connect(const Record &r)
+{
+    phones::hold_advertising(true);
+    BleOpen res = ble_connect_now(r);
+    phones::hold_advertising(false);
+    return res;
+}
+
+enum class Seen : uint8_t { seen, gone, interrupted };
+
+// Waits up to timeout for the TD-H9 to advertise, with a BLE scan, so the
+// bridge goes on advertising for phones while the radio is off or away. A
+// request arriving meanwhile ends the wait, and stays in the queue.
+Seen ble_wait_for(const Record &r, TickType_t timeout)
+{
+    TickType_t start = xTaskGetTickCount();
+    TickType_t deadline = start + timeout;
+    xQueueReset(gap_events);
+    ble_awaited = r.addr;
+    ble_awaiting = true;
+    ble_scan_start(pdTICKS_TO_MS(timeout) / 1000 + 1);
+    bool restarted = false;
+    Seen res = Seen::gone;
+    while (xTaskGetTickCount() < deadline) {
+        Request q;
+        if (xQueuePeek(requests, &q, 0) == pdTRUE) {
+            res = Seen::interrupted;
+            break;
+        }
+        // At power-on the scan can be asked for before phones registers
+        // the GAP callback that starts it (radio starts first): its
+        // parameters were set, but nobody heard. Ask again.
+        if (!restarted && ble_scan_seconds != 0 && xTaskGetTickCount() - start > pdMS_TO_TICKS(1000)) {
+            ESP_LOGI(TAG, "BLE scan didn't start: starting it again");
+            restarted = true;
+            ble_scan_start(pdTICKS_TO_MS(deadline - xTaskGetTickCount()) / 1000 + 1);
+        }
+        GapEvent e;
+        if (xQueueReceive(gap_events, &e, pdMS_TO_TICKS(100)) != pdTRUE) {
+            continue;
+        }
+        if (e.type == GapEvent::ble_found && e.addr == r.addr) {
+            ESP_LOGI(TAG, "%s is advertising%s: connecting", r.addr.str().c_str(),
+                     e.ok ? " to this device" : "");
+            res = Seen::seen;
+            break;
+        }
+        if (e.type == GapEvent::ble_scan_done) {
+            break;
+        }
+    }
+    ble_awaiting = false;
+    ble_scan_stop();
+    vTaskDelay(pdMS_TO_TICKS(50)); // let the scan stop before connecting
+    return res;
+}
+
+BleOpen ble_connect_now(const Record &r)
 {
     if (gattc_if == ESP_GATT_IF_NONE) {
         return BleOpen::failed;
@@ -949,6 +1077,10 @@ BleOpen ble_connect(const Record &r)
         if (xQueuePeek(requests, &q, 0) == pdTRUE) {
             ble_close(); // a search or a scan gets the radio to itself
             return BleOpen::interrupted;
+        }
+        if (ble_conn == NO_CONN && xTaskGetTickCount() - start >= ble_connect_limit) {
+            ble_close(); // it was seen but went quiet: look for it again
+            return BleOpen::waited;
         }
     }
 }
@@ -1057,6 +1189,23 @@ bool command(const std::string &cmd, std::string &reply)
     return false;
 }
 
+// "ID TH-D74": a Kenwood paired by its Class of Device (model_for_found)
+// was taken for a TH-D75; its answer to ID says which it is.
+void model_from_id(const std::string &reply)
+{
+    if (reply.compare(0, 3, "ID ") != 0) {
+        return;
+    }
+    const Model *said = model_for_name(reply.substr(3), false);
+    Record r = record();
+    if (!said || !said->kiss_init || !r.present || r.model == said->name || !model_of(r.model).kiss_init) {
+        return;
+    }
+    ESP_LOGI(TAG, "init: the radio says it's a %s, not a %s", said->radio, r.model.c_str());
+    r.model = said->name;
+    save_record(r);
+}
+
 bool kiss_init(const Model &model)
 {
     pending_rx.clear();
@@ -1076,7 +1225,9 @@ bool kiss_init(const Model &model)
             return false;
         }
     }
-    command("ID", reply);
+    if (command("ID", reply)) {
+        model_from_id(reply);
+    }
     if (!command("TN", reply)) {
         return false;
     }
@@ -1250,13 +1401,122 @@ enum class SearchResult : uint8_t { found, none, cancelled };
 // over BLE whenever nothing is connected to it, so a BLE scan runs
 // alongside the inquiries.
 SearchResult search_both(TickType_t deadline, Found &out);
+SearchResult search_list(TickType_t deadline, Found &out);
 
-SearchResult search(TickType_t deadline, Found &out)
+// list: keep searching and list what's found until the screen chooses a
+// radio (search_view, choose_radio); otherwise take the first one found.
+SearchResult search(TickType_t deadline, Found &out, bool list)
 {
     xQueueReset(gap_events);
     ble_scan_start(pdTICKS_TO_MS(deadline - xTaskGetTickCount()) / 1000 + 1);
-    SearchResult res = search_both(deadline, out);
+    SearchResult res = list ? search_list(deadline, out) : search_both(deadline, out);
     ble_scan_stop();
+    return res;
+}
+
+SearchResult search_list(TickType_t deadline, Found &out)
+{
+    std::vector<Found> radios;
+    std::vector<Addr> others;
+    std::vector<Addr> asked;
+    auto publish = [&]() {
+        SearchView v;
+        for (const Found &f : radios) {
+            const Model *m = model_for_found(f.name, f.ble, f.cod);
+            v.radios.push_back({f.addr.str(), f.name.empty() ? f.addr.str() : f.name, m && m->radio ? m->radio : "",
+                                f.ble, f.rssi, f.has_rssi});
+        }
+        v.others = static_cast<int>(others.size());
+        std::lock_guard<std::mutex> g(pair_view_lock);
+        search_now = std::move(v);
+    };
+    auto note = [&](const Found &f) {
+        if (!model_for_found(f.name, f.ble, f.cod)) {
+            if (std::find(others.begin(), others.end(), f.addr) == others.end()) {
+                others.push_back(f.addr);
+                publish();
+            }
+            return;
+        }
+        auto it = std::find_if(radios.begin(), radios.end(), [&](const Found &r) { return r.addr == f.addr; });
+        if (it == radios.end()) {
+            ESP_LOGI(TAG, "search: found %s, %s", f.name.c_str(), f.addr.str().c_str());
+            radios.push_back(f);
+        } else if (f.has_rssi) {
+            it->rssi = f.rssi;
+            it->has_rssi = true;
+        }
+        publish();
+    };
+    publish();
+    SearchResult res = SearchResult::none;
+    // Inquiries of about 10 s, so a Kenwood that didn't give its name is
+    // asked for it, and listed, between them.
+    while (res == SearchResult::none && xTaskGetTickCount() < deadline) {
+        TickType_t left = deadline - xTaskGetTickCount();
+        if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
+                                       std::min<uint8_t>(inquiry_len(left), 8), 0) != ESP_OK) {
+            ESP_LOGW(TAG, "couldn't start a search");
+            break;
+        }
+        std::vector<Addr> unnamed;
+        bool stopped = false;
+        while (!stopped && res == SearchResult::none && xTaskGetTickCount() < deadline) {
+            Request r;
+            while (res == SearchResult::none && xQueueReceive(requests, &r, 0) == pdTRUE) {
+                if (r.type == ReqType::button_cancel) {
+                    res = SearchResult::cancelled;
+                } else if (r.type == ReqType::button_choose) {
+                    Addr a;
+                    Addr::parse(r.addr, a);
+                    auto it = std::find_if(radios.begin(), radios.end(), [&](const Found &f) { return f.addr == a; });
+                    if (it != radios.end()) {
+                        out = *it;
+                        res = SearchResult::found;
+                    }
+                } else if (r.type != ReqType::button_answer) {
+                    refuse_busy(r);
+                }
+            }
+            if (res != SearchResult::none) {
+                break;
+            }
+            GapEvent e;
+            if (xQueueReceive(gap_events, &e, pdMS_TO_TICKS(100)) != pdTRUE) {
+                continue;
+            }
+            if (e.type == GapEvent::disc_stopped) {
+                stopped = true;
+            } else if (e.type == GapEvent::found || e.type == GapEvent::ble_found) {
+                bool le = e.type == GapEvent::ble_found;
+                if (!le && !e.has_name && e.cod == cod_kenwood) {
+                    if (std::find(asked.begin(), asked.end(), e.addr) == asked.end() &&
+                        std::find(unnamed.begin(), unnamed.end(), e.addr) == unnamed.end()) {
+                        unnamed.push_back(e.addr);
+                    }
+                    continue;
+                }
+                note(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type});
+            }
+        }
+        if (!stopped) {
+            stop_discovery();
+        }
+        for (const Addr &a : unnamed) {
+            if (res != SearchResult::none || xTaskGetTickCount() >= deadline) {
+                break;
+            }
+            asked.push_back(a);
+            std::string name = read_name(a);
+            ESP_LOGI(TAG, "%s is called \"%s\"", a.str().c_str(), name.c_str());
+            note(Found{a, name, cod_kenwood, 0, false, false, BLE_ADDR_TYPE_PUBLIC});
+        }
+    }
+    listed_any = !radios.empty();
+    {
+        std::lock_guard<std::mutex> g(pair_view_lock);
+        search_now = SearchView{};
+    }
     return res;
 }
 
@@ -1296,10 +1556,14 @@ SearchResult search_both(TickType_t deadline, Found &out)
                     return SearchResult::found;
                 }
             } else if (e.type == GapEvent::found) {
-                if (e.has_name && model_for_name(e.name, false)) {
+                // A Kenwood by its name, or by its Class of Device whatever
+                // it's called (model_for_found); one that gave no name is
+                // asked for it below.
+                if (e.has_name && model_for_found(e.name, false, e.cod)) {
                     stop_discovery();
                     out.addr = e.addr;
                     out.name = e.name;
+                    out.cod = e.cod;
                     return SearchResult::found;
                 }
                 if (!e.has_name && e.cod == cod_kenwood &&
@@ -1316,9 +1580,10 @@ SearchResult search_both(TickType_t deadline, Found &out)
             asked.push_back(a);
             std::string name = read_name(a);
             ESP_LOGI(TAG, "%s is called \"%s\"", a.str().c_str(), name.c_str());
-            if (model_for_name(name, false)) {
+            if (model_for_found(name, false, cod_kenwood)) { // only Kenwoods are asked
                 out.addr = a;
                 out.name = name;
+                out.cod = cod_kenwood;
                 return SearchResult::found;
             }
         }
@@ -1336,6 +1601,9 @@ cJSON *device_json(const Found &f, const Record &r)
     }
     if (f.has_rssi) {
         cJSON_AddNumberToObject(d, "rssi", f.rssi);
+    }
+    if (!f.ble && f.cod != 0) {
+        cJSON_AddNumberToObject(d, "class", f.cod); // Classic's Class of Device
     }
     cJSON_AddBoolToObject(d, "paired", !f.ble && bonded(f.addr));
     if (const Model *m = model_for_name(f.name, f.ble)) {
@@ -1518,13 +1786,15 @@ void do_pair(const Request &req)
     Found target;
     const char *failure = nullptr;
     bool cancelled = false;
+    set_pair_stage(PairStage::searching, pairing_seconds);
     if (button) {
         ESP_LOGI(TAG, "pairing: searching for a TH-D74 or TH-D75 in pairing mode, or a TD-H9");
-        switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target)) {
+        switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target, board::screen)) {
         case SearchResult::found:
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
             if (target.ble) {
                 select_ble(target);
+                set_pair_stage(PairStage::none, 0);
                 pairing_now = false;
                 busy_now = false;
                 return;
@@ -1534,7 +1804,8 @@ void do_pair(const Request &req)
             cancelled = true;
             break;
         case SearchResult::none:
-            failure = "no TH-D74 or TH-D75 in pairing mode, and no TD-H9, was found";
+            failure = board::screen && listed_any ? "no radio was chosen in time"
+                                                  : "no TH-D74 or TH-D75 in pairing mode, and no TD-H9, was found";
             break;
         }
     } else {
@@ -1548,26 +1819,61 @@ void do_pair(const Request &req)
 
     bool authed = false;
     bool opened = false;
-    if (!failure && !cancelled) {
+    // A radio we're bonded with (pairing the radio again) is tried with
+    // that bond first, so cancelling leaves it as it was. If the radio
+    // has forgotten us, Bluedroid usually pairs afresh by itself on the
+    // same connection; if that attempt fails instead, the bond goes and
+    // the pairing starts once more from scratch.
+    bool keep_bond = !failure && !cancelled && bonded(target.addr);
+    if (keep_bond) {
+        ESP_LOGI(TAG, "pairing: already bonded with %s, trying that bond first", target.addr.str().c_str());
+    }
+    // A radio just put in pairing mode sometimes fails the first
+    // connection, before any number (seen on the Core2 with a TH-D75):
+    // that step is tried up to 3 times.
+    int link_tries = 0;
+    for (bool again = !failure && !cancelled; again;) {
+        again = false;
+        bool auth_failed = false;
+        bool link_failed = false;
+        bool got_number = false;
         pairing_event(p, "pairing", "name", target.name);
-        if (bonded(target.addr)) {
-            // Pair afresh: the radio may have forgotten us.
-            esp_bt_gap_remove_bond_device(target.addr.raw());
-        }
         xQueueReset(gap_events);
         xEventGroupClearBits(events, EV_OPEN | EV_CLOSED | EV_FAILED);
         connect_addr = target.addr;
         if (esp_spp_start_discovery(connect_addr.raw()) != ESP_OK) {
             failure = "couldn't start pairing";
+            link_failed = true;
         }
         TickType_t deadline = xTaskGetTickCount() + pair_timeout;
         bool confirm_pending = false;
         TickType_t confirm_deadline = 0;
+        std::string number;
+        TickType_t confirm_at = 0;
+        // The radio gives about as long as confirm_timeout from showing
+        // the number.
+        auto confirm_left_s = [&]() -> uint32_t {
+            TickType_t gone = xTaskGetTickCount() - confirm_at;
+            return gone < confirm_timeout ? pdTICKS_TO_MS(confirm_timeout - gone) / 1000 : 0;
+        };
+        set_pair_stage(PairStage::pairing, pdTICKS_TO_MS(pair_timeout) / 1000, target.name);
         while (!failure && !cancelled && xTaskGetTickCount() < deadline) {
             Request q;
             while (xQueueReceive(requests, &q, 0) == pdTRUE) {
                 if (button && q.type == ReqType::button_cancel) {
                     cancelled = true;
+                } else if (button && q.type == ReqType::button_answer) {
+                    if (confirm_pending) {
+                        esp_bt_gap_ssp_confirm_reply(target.addr.raw(), q.flag);
+                        confirm_pending = false;
+                        if (q.flag) {
+                            ESP_LOGI(TAG, "pairing: the number is the same: press OK on the radio");
+                            set_pair_stage(PairStage::press_ok, confirm_left_s(), target.name, number);
+                        } else {
+                            ESP_LOGI(TAG, "pairing: the radio shows another number");
+                            cancelled = true;
+                        }
+                    }
                 } else if (!button && q.type == ReqType::pair_reply && q.ref == p.id) {
                     if (confirm_pending) {
                         esp_bt_gap_ssp_confirm_reply(target.addr.raw(), q.flag);
@@ -1597,9 +1903,18 @@ void do_pair(const Request &req)
                 if (e.type == GapEvent::confirm) {
                     char num[8];
                     snprintf(num, sizeof(num), "%06" PRIu32, e.number);
-                    if (button) {
+                    number = num;
+                    got_number = true;
+                    confirm_at = xTaskGetTickCount();
+                    if (button && !board::screen) {
                         ESP_LOGI(TAG, "pairing: the radio shows %s: press OK on it", num);
                         esp_bt_gap_ssp_confirm_reply(target.addr.raw(), true);
+                        set_pair_stage(PairStage::press_ok, confirm_left_s(), target.name, number);
+                    } else if (button) {
+                        ESP_LOGI(TAG, "pairing: does the radio show %s?", num);
+                        confirm_pending = true;
+                        confirm_deadline = xTaskGetTickCount() + confirm_timeout;
+                        set_pair_stage(PairStage::compare, confirm_left_s(), target.name, number);
                     } else {
                         pairing_event(p, "confirm", "passkey", num);
                         confirm_pending = true;
@@ -1612,6 +1927,7 @@ void do_pair(const Request &req)
                             target.name = e.name;
                         }
                     } else {
+                        auth_failed = true;
                         failure = "the pairing failed: press OK on the radio within 30 s of the number "
                                   "appearing, and dismiss any old prompt before trying again";
                     }
@@ -1620,19 +1936,46 @@ void do_pair(const Request &req)
             EventBits_t bits = xEventGroupGetBits(events);
             if (bits & EV_OPEN) {
                 opened = true;
+                if (keep_bond && !authed) {
+                    // The link opens only once authenticated: the bond
+                    // still works, with no new pairing to report.
+                    ESP_LOGI(TAG, "pairing: the radio still knows us");
+                    authed = true;
+                }
             }
             if (authed && (opened || (bits & (EV_FAILED | EV_CLOSED)))) {
                 break; // paired; the link is open or won't be
             }
             if (!authed && (bits & (EV_FAILED | EV_CLOSED))) {
                 failure = "the radio didn't accept the connection: is it in pairing mode?";
+                link_failed = true;
             }
-        }
-        if (!authed && !failure && !cancelled) {
-            failure = "the pairing timed out";
         }
         if (spp_handle != 0) {
             drop_link(); // the task connects afresh
+        }
+        if (link_failed && !auth_failed && !got_number && !authed && !cancelled && ++link_tries < 3) {
+            ESP_LOGI(TAG, "pairing: %s, trying again (%d of 3)", failure, link_tries + 1);
+            failure = nullptr;
+            vTaskDelay(pdMS_TO_TICKS(1000)); // let the failed link go
+            again = true;
+            continue;
+        }
+        if (keep_bond && auth_failed && !authed && !cancelled) {
+            // Only when the radio turned the bond down: a link that just
+            // failed is no reason to lose it.
+            ESP_LOGI(TAG, "pairing: the radio turned the bond down, pairing afresh");
+            keep_bond = false;
+            failure = nullptr;
+            if (bonded(target.addr)) {
+                esp_bt_gap_remove_bond_device(target.addr.raw());
+            }
+            vTaskDelay(pdMS_TO_TICKS(500)); // let the failed link go
+            again = true;
+            continue;
+        }
+        if (!authed && !failure && !cancelled) {
+            failure = "the pairing timed out";
         }
     }
 
@@ -1642,7 +1985,7 @@ void do_pair(const Request &req)
         r.present = true;
         r.addr = target.addr;
         r.name = target.name;
-        const Model *m = model_for_name(target.name, false);
+        const Model *m = model_for_found(target.name, false, target.cod);
         r.model = m ? m->name : (old.present && old.addr == target.addr ? old.model : "generic");
         if (save_record(r)) {
             if (old.present && old.addr != r.addr) {
@@ -1662,15 +2005,19 @@ void do_pair(const Request &req)
             control::reply_error(p, "internal", "paired, but couldn't save the radio");
         }
     } else {
-        if (authed) {
-            // Cancelled after the radio's OK: forget the new radio.
+        Record current = record();
+        if (authed && !(current.present && current.addr == target.addr)) {
+            // Cancelled after the radio's OK: forget the new radio, but
+            // never the radio we have.
             esp_bt_gap_remove_bond_device(target.addr.raw());
         }
         const char *why = cancelled ? "cancelled" : failure;
         ESP_LOGI(TAG, "pairing: %s", why);
+        set_pairing_failure(why);
         ui::post(ui::Event::pairing_failed);
         control::reply_error(p, "failed", why);
     }
+    set_pair_stage(PairStage::none, 0);
     pairing_now = false;
     busy_now = false;
 }
@@ -1761,7 +2108,9 @@ void handle(const Request &r)
         do_pair(r);
         break;
     case ReqType::button_cancel:
-        break; // nothing to cancel
+    case ReqType::button_answer:
+    case ReqType::button_choose:
+        break; // nothing to cancel, answer or choose
     case ReqType::scan:
         do_scan(r);
         break;
@@ -1814,8 +2163,10 @@ void radio_task(void *)
         xQueueReset(gap_events); // only pairing and scans read these
         Record r = record();
         if (!r.present) {
-            set_port(PortState::unpaired,
-                     "no radio: double press the button to pair a TH-D74 or TH-D75, or select a TD-H9");
+            set_port(PortState::unpaired, board::screen
+                                              ? "no radio: pair a TH-D74 or TH-D75, or select a TD-H9, on the TNC page"
+                                              : "no radio: double press the button to pair a TH-D74 or TH-D75, "
+                                                "or select a TD-H9");
             serve_until(portMAX_DELAY);
             continue;
         }
@@ -1825,7 +2176,9 @@ void radio_task(void *)
             // radio has forgotten this device. Retrying can't help.
             set_port(PortState::unpaired, r.addr.str() +
                                               " isn't paired any more (the radio may have forgotten this "
-                                              "device): double press the button to pair it again");
+                                              "device): " +
+                                              (board::screen ? "pair it again on the TNC page"
+                                                             : "double press the button to pair it again"));
             serve_until(portMAX_DELAY);
             continue;
         }
@@ -1836,9 +2189,18 @@ void radio_task(void *)
         }
         set_port(PortState::connecting, r.addr.str());
         if (m.ble) {
-            // A TD-H9: the connect waits for it to advertise, so a radio
-            // that's off or away is caught within a second of coming back
-            // (spikes/atom-lite-ble-tnc).
+            // A TD-H9: a scan waits for it to advertise, so a radio that's
+            // off or away is caught within a second of coming back
+            // (spikes/atom-lite-ble-tnc), and phones can still connect
+            // meanwhile; then the connect is quick.
+            Seen seen = ble_wait_for(r, pdMS_TO_TICKS(30000));
+            if (seen == Seen::interrupted) {
+                serve_now();
+                continue;
+            }
+            if (seen == Seen::gone) {
+                continue; // not advertising yet: keep looking
+            }
             BleOpen res = ble_connect(r);
             if (res == BleOpen::opened) {
                 counters.tnc_connects++;
@@ -1954,6 +2316,44 @@ int phones()
     return d >= 0 ? d : phones::sessions();
 }
 
+View view()
+{
+    Record r = record();
+    View v;
+    v.present = r.present;
+    v.ble = r.ble();
+    v.paired = r.present && !v.ble && bonded(r.addr);
+    v.name = r.name.empty() ? r.model : r.name;
+    const Model *m = find_model(r.model);
+    v.make = m && m->radio ? m->radio : "";
+    v.address = r.present ? r.addr.str() : "";
+    {
+        std::lock_guard<std::mutex> g(state_lock);
+        v.detail = port_detail;
+    }
+    int64_t since = state_since_us;
+    uint32_t elapsed = static_cast<uint32_t>((esp_timer_get_time() - since) / 1000000);
+    v.state_s = elapsed;
+    v.down_s = static_cast<uint32_t>((esp_timer_get_time() - link_down_us) / 1000000);
+    switch (port_state.load()) {
+    case PortState::unpaired: v.state = State::none; break;
+    case PortState::idle: v.state = State::idle; break;
+    case PortState::connecting: v.state = State::connecting; break;
+    case PortState::connected:
+        v.state = State::connected;
+        v.rx = counters.frames_down - link_start_down;
+        v.tx = counters.frames_up - link_start_up;
+        break;
+    case PortState::backoff: {
+        v.state = State::retrying;
+        uint32_t total = pdTICKS_TO_MS(retry_delay) / 1000;
+        v.retry_in_s = elapsed < total ? total - elapsed : 0;
+        break;
+    }
+    }
+    return v;
+}
+
 void send_frame(const uint8_t *frame, size_t len, const std::string &session)
 {
     uint8_t msg[1 + 64 + kiss::Splitter::max_frame];
@@ -1973,6 +2373,7 @@ void send_frame(const uint8_t *frame, size_t len, const std::string &session)
 void start_pairing()
 {
     if (pairing_now || busy_now) {
+        set_pairing_failure("a Bluetooth scan or pairing is already running");
         ui::post(ui::Event::pairing_failed);
         return;
     }
@@ -1985,6 +2386,41 @@ void cancel_pairing()
 {
     Request r{ReqType::button_cancel, {}};
     post(r);
+}
+
+void answer_pairing(bool same)
+{
+    Request r{ReqType::button_answer, {}};
+    r.flag = same;
+    post(r);
+}
+
+void choose_radio(const std::string &address)
+{
+    Request r{ReqType::button_choose, {}};
+    snprintf(r.addr, sizeof(r.addr), "%s", address.c_str());
+    post(r);
+}
+
+SearchView search_view()
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    return search_now;
+}
+
+std::string pairing_failure()
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    return last_failure;
+}
+
+PairView pairing_view()
+{
+    std::lock_guard<std::mutex> g(pair_view_lock);
+    PairView v = pair_view_now;
+    int64_t left = pair_view_until - esp_timer_get_time();
+    v.left_s = left > 0 ? static_cast<uint32_t>((left + 999999) / 1000000) : 0;
+    return v;
 }
 
 void scan(const control::Pending &p, uint32_t seconds, bool le)
@@ -2287,12 +2723,19 @@ void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         // pick, and a TD-H9 is known by its name. A known radio is passed on
         // every time (a TD-H9 advertises about five times a second), as the
         // search can miss one while it waits for something else.
+        // The TD-H9 ble_wait_for waits for is passed on whatever it sends:
+        // after losing a central it knows, it advertises to that central
+        // alone, with no name in it.
         std::string name = adv_name(r);
-        if (name.empty()) {
+        e.addr = Addr::of(r.bda);
+        bool awaited = ble_awaiting && e.addr == ble_awaited;
+        if (name.empty() && !awaited) {
             return;
         }
-        e.addr = Addr::of(r.bda);
-        if (!model_for_name(name, true)) {
+        if (awaited && r.ble_evt_type == ESP_BLE_EVT_CONN_DIR_ADV) {
+            e.ok = true; // directed at us: ble_wait_for says so in the log
+        }
+        if (!awaited && !model_for_name(name, true)) {
             std::lock_guard<std::mutex> g(scan_lock);
             if (std::find(scan_seen.begin(), scan_seen.end(), e.addr) != scan_seen.end()) {
                 return;

@@ -1,7 +1,8 @@
 # kiss-tnc-bridge family roadmap
 
 Status: decided 7 November 2026; firmware toolchain, eFuses, USB flashing
-and web home 8 November 2026; nothing built yet
+and web home 8 November 2026; the StickC Plus SE added, and Phase G moved
+ahead of Phase D, 11 November 2026
 
 ## Goal
 
@@ -14,12 +15,14 @@ that share one protocol:
   Link adapter.
 - **Firmware for the M5Stack Core2 v1.3**, the same bridge with a screen,
   buttons and a built-in battery. Wi-Fi is added later if it proves reliable.
+- **Firmware for the M5Stack StickC Plus SE**, the ATOM Lite's chip with a
+  small screen, two buttons and a built-in battery, for about $19.
 - **An iOS app** that configures all of them over Bluetooth.
 - **`ktbctl`**, which already manages the daemon, also manages the ESP32
   devices.
-- **A web installer** that flashes either device from a Chromium browser. A
-  ham can buy an ATOM Lite or Core2 and have it bridging their radio in a few
-  minutes, with no development tools.
+- **A web installer** that flashes any of the devices from a Chromium
+  browser. A ham can buy an ATOM Lite, StickC Plus SE or Core2 and have it
+  bridging their radio in a few minutes, with no development tools.
 
 ```
                          ┌──────────────── one management protocol ────────────────┐
@@ -122,8 +125,8 @@ that share one protocol:
   BLE-only, so they can't talk to a TH-D74 or TH-D75 over SPP. That rules out
   the M5StickS3 and similar boards.
 - **The M5StickC Plus2.** It would fit well, but it's end-of-life and
-  unavailable. The M5StickC Plus SE is a candidate in its place (see
-  [Open questions](#open-questions)).
+  unavailable. The M5StickC Plus SE takes its place (see
+  [Phase G](#phase-g-core2-and-stickc-plus-se-firmware)).
 - **Compatibility with B.B. Link Configurator.** The new iOS app replaces it.
   The firmware doesn't need to answer the Configurator's commands. The
   in-band commands RadioMail sends are a separate question; see
@@ -215,9 +218,12 @@ as they're found.
 | Idle cores waiting for an interrupt | CPU power: a core with nothing to run stops in `WAITI` until the next interrupt | On a power source with a low-current cut-off, too little draw cuts the power. The development build's `debug.set spin_cores=1\|2` spins idle cores through the idle hook instead, and `modem_sleep=false` keeps the Bluetooth controller awake, to keep the draw up. Neither was needed on a charged Tail Bat; kept for testing other power banks | Waiting |
 | Automatic light sleep (`CONFIG_PM_ENABLE`) | CPU power between events | Wake-up latency. Can trip the Tail Bat's low-current cut-off | Off |
 | Reconnect interval to the radio | Paging attempts while the radio is away | Slower recovery after the radio comes back | 15 s |
-| Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. A direct connect scans at Bluedroid's fast rate, a 30 ms window every 60 ms; on an ATOM Lite that took the draw from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). `esp_ble_gattc_enh_open` takes a scan interval and window, so a slower rate (1.28 s is Bluedroid's slow one) is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within 1 s of the TD-H9 turning on | Bluedroid's fast rate |
+| Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. The firmware scans for it (a 30 ms window every 50 ms) and connects once it hears it; the spike's direct connect, at Bluedroid's fast rate, took an ATOM Lite from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). A slower scan is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within a few seconds of the TD-H9 turning on | The fast rate |
 | BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting. The firmware drew mostly 60–70 mA bridging a TD-H9 to one phone, with bursts of several seconds up to 100 mA | The TD-H9's choice |
-| LED or screen brightness | LED or backlight current | Visibility | — |
+| LED or screen brightness | LED or backlight current. On a Core2 the backlight is a voltage output of the AXP192 | Visibility | — |
+| Screen timeout (Core2, StickC Plus SE) | Backlight current, the largest draw on a board with a screen, while nobody's looking | A touch or press to see the screen again | — |
+| Speaker amplifier (Core2) | The NS4168 amplifier's idle current, by switching it off through the AXP192 between sounds | A few milliseconds to switch it on before a sound | — |
+| 5 V output to the expansion port (Core2) | The AXP192's boost converter, which feeds the expansion port's 5 V from the battery | Nothing plugged into the port gets power | — |
 | Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
 
 The Tail Bat turns this upside down: its power chip switches off below
@@ -380,7 +386,8 @@ release assets, because GitHub doesn't send CORS headers for them (checked
       images and a manifest per board. Written:
       [`firmware.yml`](../.github/workflows/firmware.yml); not yet run on a
       tag.
-- [ ] One page with a choice of board: ATOM Lite or Core2.
+- [ ] One page with a choice of board: ATOM Lite, StickC Plus SE or Core2,
+      installing or updating each (Phase G).
 - [ ] After flashing, the same page connects to the device over Web Serial and
       runs first setup over the control API: show the authorization code, name the
       device, and choose the LED mode. Pairing is on the device's button,
@@ -400,17 +407,92 @@ firmware and the spec the page follows.
 
 ### Core2 v1.3 firmware (decisions 6, 7, 8)
 
-The same firmware core as the ATOM Lite, built for a second board, plus:
+The same firmware core as the ATOM Lite, built for a second board, plus
+what follows. Firmware 1.2's screens are designed in
+[core2-ui.md](core2-ui.md), from the
+[mockups](core2-mockups/index.html).
 
 - [ ] Status screen: TNC state, connected apps, battery, and recently heard
       stations, decoded for display only, as `ktbctl monitor` does.
+- [ ] Boot: the screen stays dark until the firmware has set up the AXP192
+      and the screen and drawn the splash (a logo, the name and the
+      firmware version), then the backlight comes on, about half a second
+      after the power button. Nothing waits: no prompts, and no waiting for
+      an SD card. The startup log shows on the screen only in development
+      builds or when starting fails, and an error at startup goes on the
+      screen with what to do, where the ATOM blinks red.
+- [ ] Reset at power-on: a gesture of its own, since the Core2 has no button
+      to hold at power-on, such as holding the left and right touch buttons
+      through the splash. The same warning and the same reset as the
+      ATOM's: settings cleared, and the firmware, the device key and the
+      authorization code kept.
 - [ ] On-device setup: scan for and pair a radio, show the authorization
       code, start authorization mode, change settings.
-- [ ] Battery level and charging through M5Unified, with a power-off menu
-      item.
+- [ ] Battery and power from the AXP192, with a small driver of our own:
+      battery voltage, charge and discharge current, charging state, USB
+      input, and the coulomb counter. The AXP192 has no fuel gauge, so the
+      percentage is ours, from the voltage at rest and the coulomb counter
+      once it has seen a full charge; time remaining comes from the
+      discharge current. A battery icon with charging shown, and a power
+      page with the numbers and a graph over time. `device.info` and a
+      `state` event carry the same numbers under the `battery` capability,
+      so management apps can show them.
+- [ ] Power controls through the AXP192: a power-off menu item; the side
+      power button as an input (the chip reports short presses; a long hold
+      always cuts the power in hardware); backlight brightness and a screen
+      timeout; the charge target voltage as a setting (4.1 V is kinder to a
+      battery that lives on USB); the 5 V output to the expansion port, off
+      when nothing needs it; the vibration motor for a buzz on a touch
+      button; and the green power LED.
+- [ ] The three touch buttons: the circles below the screen are a strip of
+      the touch panel past the display (y beyond 240), split into three
+      zones in software, wide and with gaps, measured on a device. Soft-key
+      labels along the bottom of the screen say what each does there. Taps,
+      long presses and holds are ours to define; a press counts on release
+      inside its zone, so picking the device up doesn't act, and the
+      vibration motor buzzes to confirm it. LVGL takes them as a button
+      input device, the same way the StickC Plus SE's two buttons drive the
+      same menus.
+- [ ] Sound from the speaker: tones and short sounds synthesized in the
+      firmware, so each event can sound different (a phone joining, the
+      radio dropping, an error, a frame heard) at any pitch and with
+      envelopes, not one fixed beep. Volume is a setting, scaled in
+      software, with mute; maybe the callsign in Morse code. The amplifier
+      is switched off between sounds.
+- [ ] Power measurement: on battery, the discharge current measures the
+      whole device's draw, so the [Power saving](#power-saving) mechanisms
+      can be compared on a Core2 in milliamps without a USB meter. Shown on
+      the power page, and in `device.info` for development builds.
+- [ ] Frame log on a microSD card, when one is in: every frame each way,
+      timestamped from the RTC, as pcap (AX.25 in KISS, which Wireshark
+      decodes) and as text lines like `ktbctl monitor`'s. A setting, off by
+      default. A low-priority task writes from a queue, so a slow, full or
+      missing card loses log entries, never frames; files roll over daily
+      or at a size limit, and a flush every few seconds bounds what pulling
+      the card loses. An eject menu item, the card's state on the screen,
+      and a capability in `device.info`. The logs are read by taking the
+      card out.
 - [ ] Wi-Fi, if it passes the soak test below: station mode only, a
       `tcp-server` port announced with DNS-SD as `_kiss-tnc._tcp`, matching
       the daemon.
+
+### StickC Plus SE firmware
+
+**Provisional.** The StickC Plus SE is a supported board, but everything
+below is from M5Stack's specifications and stays open until it's been
+tried on a device.
+
+The same firmware core again, on the ATOM Lite's chip and flash layout,
+with the Core2's UI made to fit a 135×240 screen and two buttons:
+
+- [ ] Status screen: TNC state, connected apps and battery, compact.
+- [ ] Buttons A and B drive the same menus as the Core2's touch buttons;
+      the side power button through the AXP192, as on the Core2.
+- [ ] Boot splash, and reset by holding button A at power-on, as the ATOM
+      does with its button.
+- [ ] Battery and charging from the AXP192, as on the Core2.
+- [ ] The red LED and the passive buzzer: square-wave tones at any pitch,
+      in patterns, for the events the Core2 plays sounds for.
 
 ---
 
@@ -484,16 +566,39 @@ The Phase A update spike showed this works on the ATOM Lite:
 
 - ESP32-D0WDQ6-V3 with Bluetooth Classic and BLE, 16 MB flash, 8 MB PSRAM, a
   320×240 touchscreen with three touch buttons below it, and a 500 mAh
-  battery.
+  battery. Its chip is revision 3.1, which fixes the PSRAM cache bug that
+  earlier revisions need a workaround for.
+- An AXP192 power chip on the internal I2C bus (address 0x34) runs the
+  battery, the backlight, the vibration motor, the speaker amplifier, the
+  green power LED and the expansion port's 5 V. It measures battery voltage
+  and current each way, USB input and its own temperature, and counts
+  charge in and out, but has no fuel gauge. The side power button goes to
+  it, not to the ESP32.
+- A speaker behind an NS4168 class-D amplifier on I2S (bit clock GPIO12,
+  word select GPIO0, data GPIO2), switched on by the AXP192. The amplifier
+  has no volume control, so the firmware scales the samples. The PDM
+  microphone shares GPIO0, so the speaker and microphone can't run at
+  once. The touch panel runs past the display: the three circles below it
+  are touch zones, not buttons.
+- A microSD slot on the screen's SPI bus (its own chip select, GPIO4) and
+  no card-detect pin, so the firmware finds a card by mounting it. A
+  BM8563 real-time clock with backup power keeps the time once it's set.
+- **Internal RAM** (measured with firmware 1.2.0-dev, `device.info`'s
+  `heap`): 74.8 KB free with a TD-H9 and one KISS TNC app, 70.8 KB with
+  two (never below 69.1 KB over 38 minutes of traffic, largest block
+  68 KB). That's about 37 KB under the ATOM Lite's figure for the same
+  load: the screen's two 15 KB draw strips have to be in internal RAM,
+  which SPI DMA can read and PSRAM it can't, and LVGL's task needs a
+  stack. LVGL's own memory is in PSRAM. Static IRAM is 98% used.
 - **Wi-Fi with Classic and BLE together.** Espressif's coexistence table
   lists Wi-Fi station mode with BLE and station mode with Classic as
   supported, but has no entry for all three. A soft access point with
   connected clients is marked unstable. So Wi-Fi means station mode only,
   and only after a soak test passes.
 
-### M5StickC Plus SE (candidate)
+### M5StickC Plus SE
 
-Not yet tested on a device; from M5Stack's specifications.
+**Provisional:** not yet tested on a device; from M5Stack's specifications.
 
 - ESP32-PICO-D4, the ATOM Lite's chip: Bluetooth Classic and BLE, 4 MB
   flash, 520 KB SRAM and no PSRAM. M5Stack's page lists only Wi-Fi, but the
@@ -515,7 +620,9 @@ Not yet tested on a device; from M5Stack's specifications.
 
 ## Phases
 
-This is the proposed order. Each phase leaves something usable.
+This is the proposed order. Each phase leaves something usable. Phases
+keep the letters they were planned with: Phase G, the Core2 and StickC Plus
+SE, comes before Phase D (11 November 2026).
 
 ### Phase A: spikes
 
@@ -603,25 +710,62 @@ radio with a standard BLE KISS TNC gains little from a bridge.
 - [ ] A word in the vocabulary for selecting a radio, since pairing is
       Bluetooth Classic only.
 
+### Phase G: Core2 and StickC Plus SE firmware
+
+Before Phase D. A basic UI and the bridge on the Core2 and the StickC Plus
+SE, and the web installer installing and updating all three boards over
+USB. At the end of this phase a ham can buy any of the three and set it up
+from a browser, with no app.
+
+- [x] One firmware project builds all three boards from shared code: a
+      board's `sdkconfig.<board>` picks it and adds what differs, and
+      `board.h` holds its pins.
+- [ ] A spike on each new board: the AXP192, the screen and touch with LVGL
+      on `esp_lcd`, the SD card beside the screen on the Core2, and memory
+      and flash on the StickC Plus SE's 4 MB layout.
+- [x] The Core2's own flash layout, before its first release: two 4 MB
+      app partitions, 256 KB of NVS, a crash dump partition and about
+      7.6 MB of storage kept for later (`partitions-core2.csv`).
+- [ ] A basic UI on each: the boot splash, the status screen, pairing a
+      radio, the authorization code and authorization mode, and reset at
+      power-on. The Core2's for firmware 1.2 is designed in
+      [core2-ui.md](core2-ui.md), without authorization mode. The StickC Plus SE's is provisional until it's been tried
+      on a device (see [StickC Plus SE firmware](#stickc-plus-se-firmware)).
+- [ ] Bridging tested on each with a TH-D75 and a TD-H9.
+- [ ] The web installer: a choice of the three boards, installing and
+      updating each.
+- [ ] Installing over USB shows on the device. A USB flash resets the
+      ESP32 into its ROM download mode, so no firmware runs and there
+      can't be a progress bar on the device; but the screen (and the
+      ATOM's LED) keeps what it last showed. So a control API command
+      tells our firmware a flash is coming, and the Core2 shows
+      "Installing firmware over USB. Keep it plugged in; it restarts when
+      done." (the ATOM a color), which stays up through the flash. The
+      web installer and `ktbctl device flash` send it first and show the
+      progress themselves. Over firmware that isn't ours (a new device)
+      the screen shows whatever that firmware left.
+
+The rest of the Core2 and StickC Plus SE workstreams (the power page,
+sound, the SD card log and so on) follow as they're ready and don't hold
+up Phase D. App and `ktbctl` support for the new boards comes with Phases D
+and E, which cover every board.
+
 ### Phase D: `ktbctl` device support
 
 Device management over USB serial, `ktbctl device flash`, then BLE
-management on Linux.
+management on Linux, for every board.
 
 ### Phase E: iOS app and `ktb-gateway` BLE management
 
-BLE management in the ATOM Lite firmware and in `ktb-gateway`, and the iOS
-app's first release, managing both.
+BLE management in the firmware for every board and in `ktb-gateway`, and
+the iOS app's first release, managing them all.
 
 ### Phase F: firmware updates over BLE
 
-In the ATOM Lite firmware, the iOS app and `ktbctl`, if Phase A showed it's
-workable.
-
-### Phase G: Core2 firmware
-
-The shared core on the Core2, the screen and button features, a Core2 choice
-on the web installer, and Core2 support in the app and `ktbctl`.
+In the firmware for every board, the iOS app and `ktbctl`, if Phase A
+showed it's workable. The update runs in our firmware, so the Core2 shows "Updating
+firmware" with a progress bar (the hook is `ui::set_updating`), and the
+ATOM its updating color.
 
 ### Phase H: Core2 Wi-Fi
 
@@ -676,9 +820,7 @@ USB. To work out:
    still open.
 4. **`ktbctl` or a new program** for device management. `ktbctl` is the
    recommendation.
-5. **More boards later.** The leading candidate is the M5StickC Plus SE
-   (see [Hardware notes](#m5stickc-plus-se-candidate)): the ATOM Lite's
-   chip with a screen and a battery, in stock at about $19. It needs a
-   spike on a device before it gets a phase. The LILYGO T-Display (original
-   ESP32, 1.14" screen) fits the same architecture for people willing to add
-   their own battery and case.
+5. **More boards later.** The M5StickC Plus SE was the leading candidate
+   and joined in Phase G (see [Hardware notes](#m5stickc-plus-se)). The
+   LILYGO T-Display (original ESP32, 1.14" screen) fits the same
+   architecture for people willing to add their own battery and case.

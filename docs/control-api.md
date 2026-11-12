@@ -621,7 +621,9 @@ knows it. With `"transport": "le"` it looks over Bluetooth LE instead, for
 the BLE KISS service (`known_tnc` "BLE KISS TNC") and radios the daemon
 knows first. It doesn't filter on the service, because some radios (the
 TIDRADIO TD-H9) don't advertise the one their KISS link is on. The default
-is `"classic"`.
+is `"classic"`. On a device (the firmware), a Classic result also has
+`class`, its Class of Device as a number: a TH-D74 or TH-D75 reports
+`0x620204` (6423044) whatever it's been named on the radio.
 
 ```jsonc
 [{"address": "40:79:12:E4:95:9D", "name": "TH-D75", "rssi": -52, "paired": false,
@@ -748,7 +750,7 @@ A device's `status`, trimmed:
 ### `device.info`
 
 ```jsonc
-{"board": "atom-lite",                 // or "core2"
+{"board": "atom-lite",                 // or "stickc-plus-se", "core2"
  "firmware": {"version": "1.1.0", "built": "2026-11-08T02:00:00Z",
               "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
               "rolled_back": "1.2.0"},                  // present when the last update was rolled back
@@ -804,16 +806,20 @@ any that take effect only after `device.reboot`:
 ```
 
 The keys are provisional, from the roadmap's device settings and power
-saving tables:
+saving tables. A board has the LED's keys or the screen's, not both: the
+ATOM Lite and StickC Plus SE the `led_*` keys, the Core2 the `screen_*`
+keys (`device.settings.get` shows which):
 
 | Key | Values |
 |---|---|
 | `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon |
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
-| `led_brightness` | 0–100. On the Core2, the screen's brightness |
+| `led_brightness` | 0–100 |
 | `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
+| `screen_normal` | The Core2's screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch or the power button (see [core2-ui.md](core2-ui.md#the-screen)) |
+| `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch or an event, on battery and USB alike |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
@@ -829,7 +835,8 @@ the device's key and the authorization code stay (see [atom-lite-ui.md](atom-lit
 Answers `{}` and shows a sequence the device shows for nothing else, so
 you can tell which device you're managing when you own several: on the
 ATOM Lite, magenta, blue, white, three times, then back to its state (see
-[atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too.
+[atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too. On
+the Core2 it wakes the screen.
 
 ### `firmware.update`
 

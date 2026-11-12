@@ -1,4 +1,5 @@
-# kiss-tnc-bridge firmware for the M5Stack ATOM Lite (and later the Core2).
+# kiss-tnc-bridge firmware for the M5Stack ATOM Lite, StickC Plus SE and Core2.
+# One project for every board; a board's sdkconfig.<board> picks it.
 # See README.md, and docs/roadmap.md for the plan.
 cmake_minimum_required(VERSION 3.22)
 

@@ -1,4 +1,5 @@
-# The layout the firmware needs on a 4 MB ATOM Lite: two app partitions of
+# The layout the firmware needs in 4 MB, the ATOM Lite's and StickC Plus
+# SE's flash (the Core2 has its own, partitions-core2.csv). Two app partitions of
 # 0x1E0000 (1.875 MB) for over-the-air updates. The table sits at 0xA000
 # (CONFIG_PARTITION_TABLE_OFFSET) because a bootloader that checks
 # signatures is about 31 KB, too big for the default 0x8000. NVS moves to

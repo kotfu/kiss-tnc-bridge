@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Core2 UI Mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page: #f4f4f1; --ink: #1f1f1f; --muted: #5f5f5f; --rule: #d8d8d4;
+  --case: #f7f7f5; --case-edge: #d5d5d0;
+  /* the device's own palette (LVGL dark theme, roughly) */
+  --d-bg: #000; --d-fg: #fff; --d-dim: #9aa0a6; --d-faint: #5c6066; --d-line: #26292d;
+  --d-green: #3ddc84; --d-amber: #ffb300; --d-red: #ff5252; --d-blue: #2196f3; --d-panel: #121417;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --page: #18191b; --ink: #ececec; --muted: #a4a4a4; --rule: #34363a; --case: #e9e9e6; --case-edge: #8d8d88; }
+}
+:root[data-theme="dark"] { --page: #18191b; --ink: #ececec; --muted: #a4a4a4; --rule: #34363a; --case: #e9e9e6; --case-edge: #8d8d88; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 1480px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 40px 0 6px; padding-top: 16px; border-top: 1px solid var(--rule); }
+p.lead, .note { color: var(--muted); max-width: 860px; margin: 4px 0 12px; }
+.controls { display: flex; gap: 8px; align-items: center; margin: 12px 0 8px; color: var(--muted); font-size: 14px; }
+.controls button { font: inherit; padding: 4px 10px; border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 6px; cursor: pointer; }
+.controls button[aria-pressed="true"] { background: var(--ink); color: var(--page); }
+.grid { display: flex; flex-wrap: wrap; gap: 28px 32px; align-items: flex-start; }
+figure { margin: 0; }
+figcaption { width: calc(352px * var(--z, 2)); max-width: 100%; font-size: 14px; color: var(--muted); margin-top: 10px; }
+figcaption b { color: var(--ink); }
+table.conv { border-collapse: collapse; margin: 8px 0 4px; font-size: 14px; }
+table.conv th, table.conv td { text-align: left; padding: 4px 14px 4px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.conv th { color: var(--muted); font-weight: 600; }
+ul.q { max-width: 880px; padding-left: 20px; }
+ul.q li { margin: 6px 0; }
+
+/* ---- the device ---- */
+.dev { zoom: var(--z, 2); width: 352px; padding: 8px; background: var(--case); border: 1px solid var(--case-edge); border-radius: 16px; }
+.glass { background: #050505; border-radius: 10px; padding: 8px 8px 0; }
+.scr { position: relative; width: 320px; height: 240px; overflow: hidden; background: var(--d-bg); color: var(--d-fg);
+       font-family: Montserrat, sans-serif; font-size: 14px; line-height: 1.2; }
+.strip { position: relative; height: 40px; }
+.strip i { position: absolute; top: 12px; width: 16px; height: 16px; margin-left: -8px; border: 1.5px solid #b23a3a; border-radius: 50%; }
+.strip i.held { background: #b23a3a; box-shadow: 0 0 0 4px rgba(178,58,58,.35); }
+.strip i:nth-child(1) { left: 53px; } .strip i:nth-child(2) { left: 160px; } .strip i:nth-child(3) { left: 267px; }
+
+/* tabs along the top, with the battery at the right */
+.tabs { position: absolute; top: 0; left: 0; right: 0; height: 32px; display: flex; border-bottom: 1px solid var(--d-line); }
+.tabs .t { flex: 0 0 var(--tw, 80px); display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 600; color: var(--d-faint); }
+.tabs .t.on { color: var(--d-fg); background: var(--d-panel); box-shadow: inset 0 -3px 0 var(--d-blue); }
+.tabs.locked .t { opacity: .35; }
+.tabs.locked .t.on { box-shadow: inset 0 -3px 0 var(--d-faint); }
+.tabs .rest { flex: 1; display: flex; align-items: center; justify-content: flex-end; padding-right: 8px; font-size: 12px; color: var(--d-dim); }
+.batt { display: inline-flex; align-items: center; gap: 4px; }
+.batt .cell { position: relative; width: 20px; height: 10px; border: 1.5px solid var(--d-dim); border-radius: 2px; }
+.batt .cell::after { content: ""; position: absolute; right: -4px; top: 2px; width: 2px; height: 4px; background: var(--d-dim); border-radius: 0 1px 1px 0; }
+.batt .lvl { position: absolute; left: 1px; top: 1px; bottom: 1px; background: var(--d-fg); border-radius: 1px; }
+.bolt { color: var(--d-amber); font-size: 11px; }
+
+/* soft keys: a label above each circle; tapping the label or the circle does the same */
+.soft { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; display: grid; grid-template-columns: repeat(3, 1fr); padding: 0 0 4px; }
+.soft span { margin: 0 8px; border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; }
+.soft span.k { border: 1.5px solid var(--d-faint); color: var(--d-fg); }
+.soft span.k.yes { background: var(--d-green); border-color: var(--d-green); color: #04140a; }
+.soft span.k.main { background: var(--d-blue); border-color: var(--d-blue); color: #fff; }
+.soft span.k.warn { border-color: var(--d-amber); color: var(--d-amber); }
+
+/* body */
+.body { position: absolute; top: 33px; bottom: 0; left: 0; right: 0; padding: 6px 10px; }
+.body.keys { bottom: 29px; }
+.body.full { top: 0; }
+.body.full.keys { top: 0; bottom: 29px; }
+.sec { display: flex; justify-content: space-between; align-items: baseline; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--d-faint); margin-bottom: 3px; }
+.sec .r { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--d-dim); }
+.row { display: flex; justify-content: space-between; align-items: center; }
+.big { font-size: 20px; font-weight: 700; }
+.small { font-size: 12px; color: var(--d-dim); }
+.tiny { font-size: 11px; color: var(--d-dim); }
+.pill { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 10px; }
+.pill.ok { color: #04140a; background: var(--d-green); }
+.pill.warn { color: #1c1400; background: var(--d-amber); }
+.pill.off { color: var(--d-dim); background: var(--d-line); }
+.hr { height: 1px; background: var(--d-line); margin: 7px 0; }
+.ctr { display: flex; gap: 10px; margin-top: 6px; }
+.ctr > div { flex: 1; background: var(--d-panel); border-radius: 6px; padding: 4px 8px; display: flex; align-items: center; justify-content: space-between; }
+.ctr .lab { font-size: 11px; color: var(--d-dim); font-weight: 600; }
+.ctr .num { font-size: 20px; font-weight: 600; }
+.light { display: inline-block; width: 8px; height: 8px; border-radius: 2px; border: 1.5px solid var(--d-faint); vertical-align: middle; }
+.light.rx { background: var(--d-green); border-color: var(--d-green); }
+.light.tx { background: var(--d-amber); border-color: var(--d-amber); }
+.app { height: 26px; display: flex; align-items: center; justify-content: space-between; font-size: 14px; }
+.app .meta { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--d-dim); }
+.list .it { height: 44px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--d-line); }
+.list .it .n { font-size: 16px; font-weight: 600; }
+.list .it .d { font-size: 11px; color: var(--d-dim); margin-top: 2px; }
+.list .it .s { font-size: 12px; color: var(--d-dim); display: flex; align-items: center; gap: 8px; }
+.list .it .s b { font-size: 18px; color: var(--d-faint); font-weight: 400; }
+.bar { height: 4px; border-radius: 2px; background: var(--d-line); overflow: hidden; }
+.bar > span { display: block; height: 100%; background: var(--d-blue); }
+.kv { display: grid; grid-template-columns: 82px 1fr; row-gap: 9px; align-items: baseline; font-size: 14px; margin-top: 4px; }
+.kv .k { font-size: 12px; color: var(--d-dim); }
+.center { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.digits { font-size: 36px; font-weight: 700; letter-spacing: .06em; }
+.banner { background: #3a1214; color: #ffb4b4; font-size: 12px; padding: 4px 8px; border-radius: 4px; margin-bottom: 6px; }
+
+/* round 3 */
+.decided { max-width: 880px; padding-left: 20px; margin: 6px 0; }
+.decided li { margin: 4px 0; }
+.app .meta .c { color: var(--d-fg); }
+.banner { display: flex; justify-content: space-between; align-items: center; }
+.banner b { font-weight: 400; font-size: 16px; color: #ff8a8a; }
+.errbox { background: #3a1214; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; }
+.errbox .h { font-size: 12px; font-weight: 700; color: #ff8a8a; }
+.errbox .m { font-size: 12px; color: #ffd0d0; line-height: 1.35; margin-top: 2px; }
+.kv.tight { row-gap: 6px; }
+.kv .go { display: flex; justify-content: space-between; }
+.kv .go b { font-weight: 400; color: var(--d-faint); font-size: 16px; line-height: 14px; }
+.fade { position: absolute; left: 0; right: 0; bottom: 0; height: 28px; background: linear-gradient(transparent, #000); }
+.opt { height: 33px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--d-line); }
+.opt .dot { flex: 0 0 16px; height: 16px; border-radius: 50%; border: 2px solid var(--d-faint); }
+.opt.on .dot { border-color: var(--d-blue); box-shadow: inset 0 0 0 3px #000; background: var(--d-blue); }
+.opt .t1 { font-size: 14px; font-weight: 600; }
+.opt .t2 { font-size: 11px; color: var(--d-dim); }
+.chips { display: flex; gap: 6px; margin-top: 4px; }
+.chips span { flex: 1; height: 30px; border-radius: 6px; border: 1.5px solid var(--d-faint); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--d-dim); }
+.chips span.on { border-color: var(--d-blue); color: #fff; background: #0d2a44; }
+.soft span.k.danger { background: var(--d-red); border-color: var(--d-red); color: #200; }
+.scr.dim > *:not(.touch) { filter: brightness(.3); }
+.scr.dark > *:not(.touch) { visibility: hidden; }
+.touch { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; border-radius: 50%; border: 2px dashed #8ab4f8; background: rgba(138,180,248,.18); }
+
+/* battery options */
+.bopt { margin: 14px 0 6px; }
+.bopt .bh { max-width: 860px; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
+.bopt .bh b { color: var(--ink); }
+.brow { display: flex; flex-wrap: wrap; gap: 10px 14px; }
+figcaption.bcap { width: auto; font-size: 12px; margin-top: 4px; }
+table.bopts { border-collapse: collapse; margin: 8px 0; }
+table.bopts th, table.bopts td { padding: 6px 12px 6px 0; text-align: left; vertical-align: middle; font-size: 14px; }
+table.bopts th { color: var(--muted); font-weight: 600; }
+table.bopts td.lab { max-width: 260px; color: var(--muted); }
+table.bopts td.lab b { color: var(--ink); }
+.bcell { zoom: 3; width: 72px; height: 32px; background: #000; border-radius: 3px; display: flex; align-items: center; justify-content: flex-end; padding-right: 6px;
+         font-family: Montserrat, sans-serif; font-size: 12px; color: var(--d-dim); }
+.bi { position: relative; display: inline-flex; align-items: center; margin-left: 4px; }
+.bi .o { position: relative; border: 1.5px solid var(--d-dim); border-radius: 2px; }
+.bi .o::after { content: ""; position: absolute; top: 50%; right: -4px; width: 2px; height: 4px; margin-top: -2px; background: var(--d-dim); border-radius: 0 1px 1px 0; }
+.bi .f { position: absolute; left: 1px; top: 1px; bottom: 1px; border-radius: 1px; }
+.bi .f.stripe { background: repeating-linear-gradient(-45deg, #3ddc84 0 2px, #1d6b40 2px 4px) !important; }
+.bi svg { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); overflow: visible; }
+.bi .num { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; }
+.spin { width: 30px; height: 30px; border-radius: 50%; border: 4px solid var(--d-line); border-top-color: var(--d-blue); animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation: none; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Core2 user interface mockups, firmware 1.2 (round 3)</h1>
+  <p class="lead">Each screen is the Core2's real 320×240 pixels in Montserrat, LVGL's built-in font, with the touch strip and its three circles underneath. The sample data is the TUI mockups' TH-D75 bridge.</p>
+  <div class="controls">Scale
+    <button data-z="1" aria-pressed="false">1× (pixels)</button>
+    <button data-z="1.5" aria-pressed="false">1.5×</button>
+    <button data-z="2" aria-pressed="true">2×</button>
+  </div>
+
+  <h2>Decided so far</h2>
+  <ul class="decided">
+    <li><b>Tabs along the top</b> move between pages: Bridge, TNC, System. A fourth tab fits later.</li>
+    <li><b>The circles are soft keys</b>, labelled on the screen's bottom edge when a screen has something for them. Left: back, cancel, no. Middle: the screen's main action. Right: yes, OK, confirm. Long presses on them are kept free for later.</li>
+    <li><b>Flows lock the tabs</b> (scanning, pairing, settings, power off), and the left key gets you out.</li>
+    <li><b>The TNC page's action</b> is the middle key.</li>
+    <li><b>The Bridge page always shows the device's name</b>, in the Apps heading ("Apps on KTB-EF26"), apps or not. It's how you tell bridges apart, in place of the ATOM's identify. System keeps it too.</li>
+    <li><b>App addresses are shown</b>, though phones change them; the docs explain why.</li>
+    <li><b>RX and TX count since that link connected</b>, for the radio and for each app. Times are durations ("2h 14m"), since the device has no clock set in 1.2. The same counts for the TUI: <a href="https://github.com/kotfu/kiss-tnc-bridge/issues/18">kotfu/kiss-tnc-bridge#18</a>.</li>
+    <li><b>No authorization mode in 1.2.</b></li>
+    <li><b>Errors show as a banner where they happen</b>; tapping it opens System with the whole message.</li>
+    <li><b>Screen modes:</b> <code>screen_normal</code> is <code>bright</code>, <code>dim</code> or <code>dark</code>, as the LED's are. Dim: the backlight drops after the timeout, and a touch brightens it and acts. Dark: the screen goes off, and the first touch only wakes it. To refine on the device.</li>
+    <li><b>The timeout is <code>screen_timeout_seconds</code>, 30 by default</b>, the same on battery and on USB, since USB power may be another battery.</li>
+    <li><b>The battery indicator is option D:</b> the number and the battery, the level grey on battery, striped green and moving while it charges, solid green when full on external power, red at 20% and under.</li>
+    <li><b>The power button toggles the screen</b> with a short press.</li>
+    <li><b>The screen wakes</b> for an error, and when the radio or an app connects or disconnects. Not for frames.</li>
+    <li><b>Brightness is fixed</b> in 1.2.</li>
+    <li><b>Power off</b> is the middle key on System, with a confirmation.</li>
+  </ul>
+
+  <div id="screens"></div>
+
+  <h2>Questions to settle</h2>
+  <ul class="q">
+    <li><b>The default mode:</b> dim, since the default is "30 s before dimming"? Drawn that way here.</li>
+    <li><b>Power off on USB:</b> whether the AXP192 stays off with USB plugged in, or starts again at once, needs checking on the Core2. If it starts again, the confirmation should say so.</li>
+  </ul>
+</main>
+<script>
+// ---- building blocks ----
+// The battery: option D. The level is the discharging colour on battery, red
+// when low, green on external power, striped (animated on the device) while
+// charging.
+let DISCHARGE = 'grey';
+const DCOLORS = {
+  white:  { t: 'White',  c: () => '#fff' },
+  grey:   { t: 'Grey',   c: () => '#9aa0a6' },
+  blue:   { t: 'Blue',   c: () => '#2196f3' },
+  cyan:   { t: 'Cyan',   c: () => '#4dd0e1' },
+  graded: { t: 'Graded', c: pct => pct <= 40 ? 'var(--d-amber)' : '#9aa0a6' },
+};
+const levelFill = st => st.ext ? 'var(--d-green)' : st.pct <= 20 ? 'var(--d-red)' : DCOLORS[DISCHARGE].c(st.pct);
+const icon = ({ w = 20, h = 10, pct, color, stripe = false }) => {
+  const fw = Math.max(1, Math.round((w - 2) * pct / 100));
+  return `<span class="bi"><span class="o" style="width:${w}px;height:${h}px">` +
+    `<span class="f${stripe ? ' stripe' : ''}" style="width:${fw}px;background:${color}"></span></span></span>`;
+};
+const battD = (st, iconOnly) => `<span class="batt">${iconOnly ? '' : st.pct + '%'}${icon({ pct: st.pct, color: levelFill(st), stripe: st.chg })}</span>`;
+// external power at less than 100% means charging
+const batt = (pct, ext, iconOnly) => battD({ pct, ext, chg: ext && pct < 100 }, iconOnly);
+const tabs = (active, opt = {}) => {
+  const names = opt.names || ['Bridge', 'TNC', 'System'];
+  const tw = opt.tw || 80;
+  return `<div class="tabs${opt.locked ? ' locked' : ''}" style="--tw:${tw}px">` +
+    names.map(n => `<span class="t${n === active ? ' on' : ''}">${n}</span>`).join('') +
+    `<span class="rest">${batt(opt.pct ?? 87, opt.charging ?? true, opt.iconOnly)}</span></div>`;
+};
+const soft = (l, m, r) => {
+  const k = v => !v ? '<span></span>' : `<span class="k ${v.c || ''}">${v.t}</span>`;
+  return `<div class="soft">${k(l)}${k(m)}${k(r)}</div>`;
+};
+const device = ({ top = '', body, keys = '', held = [], full = false, mode = '', touch = null }) =>
+  `<div class="dev"><div class="glass"><div class="scr ${mode}">${top}` +
+  `<div class="body${keys ? ' keys' : ''}${full ? ' full' : ''}">${body}</div>${keys}` +
+  (touch ? `<span class="touch" style="left:${touch[0]}px;top:${touch[1]}px"></span>` : '') + `</div>` +
+  `<div class="strip">${[0, 1, 2].map(i => `<i${held.includes(i) ? ' class="held"' : ''}></i>`).join('')}</div></div></div>`;
+const fig = (d, cap) => `<figure>${device(d)}<figcaption>${cap}</figcaption></figure>`;
+const section = (title, note, figs) => `<h2>${title}</h2>${note ? `<p class="note">${note}</p>` : ''}<div class="grid">${figs.join('')}</div>`;
+
+const counters = (rx, tx, lit = true) =>
+  `<div class="ctr">
+     <div><span class="lab">RX</span><span class="num">${rx}</span><span class="light${lit ? ' rx' : ''}"></span></div>
+     <div><span class="lab">TX</span><span class="num">${tx}</span><span class="light${lit ? ' tx' : ''}"></span></div>
+   </div>`;
+const radioBlock = ({ name = 'TH-D75', pill = '<span class="pill ok">Connected</span>', sub = 'Kenwood · 40:79:12:E4:95:9D', since = '<span style="font-size:14px">2h 14m</span>', ctr = counters(412, 37) } = {}) =>
+  `<div class="sec"><span>Radio</span></div>
+   <div class="row"><span class="big">${name}</span>${pill}</div>
+   <div class="row" style="margin-top:3px"><span class="small">${sub}</span>${since}</div>${ctr}`;
+const app = (addr, t, rx, tx, lrx, ltx) => `<div class="app"><span>${addr}</span><span class="meta">${t} · RX <span class="c">${rx}</span> TX <span class="c">${tx}</span> <span class="light${lrx ? ' rx' : ''}"></span><span class="light${ltx ? ' tx' : ''}"></span></span></div>`;
+const appsHead = count => `<div class="row" style="margin-bottom:2px"><span><span class="sec" style="display:inline">Apps on </span><span style="font-size:14px;font-weight:700">KTB-EF26</span></span><span class="small">${count}</span></div>`;
+const splash = msg => `<div class="center">
+   <div style="font-size:20px;font-weight:600">kiss-tnc-bridge</div>
+   <div style="font-size:14px;color:var(--d-dim);margin-top:6px">firmware 1.2.0</div>
+   <div class="spin" style="margin-top:22px"></div>
+   <div style="font-size:12px;color:var(--d-dim);margin-top:10px">${msg}</div>
+ </div>`;
+const bridgeOK = () => radioBlock() +
+  `<div class="hr"></div>
+   ${appsHead('2 of 2')}` +
+  app('40:33:E0:1B:DB:76', '21m', 5, 63, true, false) + app('6A:12:9C:44:0E:B1', '3m', 0, 9, false, false);
+const sysRows = (power = 'Charging from USB, 280 mA') =>
+  `<span class="k">Battery</span><span>87% · 4.05 V</span>
+   <span class="k">Power</span><span>${power}</span>
+   <span class="k">Uptime</span><span>2d 3h 12m</span>
+   <span class="k">Firmware</span><span>1.2.0</span>
+   <span class="k">Name</span><span>KTB-EF26</span>
+   <span class="k">Bluetooth</span><span>1C:8F:57:BC:EF:26</span>
+   <span class="k">Screen</span><span class="go"><span>Dim after 30 s</span><b>›</b></span>`;
+
+// ---- screens ----
+function render() {
+let html = '';
+
+html += section('1. Bridge page', 'Where the device starts. RX and TX are counted since each link connected: for the radio, frames from it (RX) and to it (TX); for an app, frames from the app (RX) and to it (TX), the same way round as the TUI\'s lights.', [
+  fig({ top: tabs('Bridge'), body: bridgeOK() },
+    '<b>Bridging.</b> The radio has been up 2h 14m and heard 412 frames; the first app joined 21 minutes ago and has sent 5 and been sent 63.'),
+  fig({ top: tabs('Bridge', { pct: 64, charging: false }), body:
+    radioBlock({ pill: '<span class="pill warn">Retrying in 8 s</span>', since: '<span class="small">down 3m</span>', ctr: '<div class="small" style="margin-top:8px">Counts start again when it reconnects.</div>' }) +
+    `<div class="hr"></div>
+     ${appsHead('0 of 2')}
+     <div class="small" style="margin-top:4px">None connected.</div>` },
+    '<b>Radio away, no apps</b>, on battery. With the link down there\'s nothing to count, so no counts show until it\'s back.'),
+  fig({ top: tabs('Bridge'), body:
+    `<div class="sec"><span>Radio</span></div>
+     <div class="row"><span class="big" style="color:var(--d-dim)">No radio</span><span class="pill off">Not paired</span></div>
+     <div class="small" style="margin-top:6px;line-height:1.35">Pair a Kenwood or select a TD-H9 on the TNC tab.</div>
+     <div class="hr" style="margin-top:12px"></div>
+     ${appsHead('1 of 2')}` + app('40:33:E0:1B:DB:76', '5m', 0, 0, false, false) },
+    '<b>No radio yet</b>, as after an install or a reset.'),
+  fig({ top: tabs('Bridge'), body:
+    radioBlock() +
+    `<div class="hr"></div>
+     ${appsHead('0 of 2')}
+     <div class="banner"><span>Phones can't find the device</span><b>›</b></div>` },
+    '<b>An error, where it happens.</b> Advertising didn\'t start, so the banner sits in the Apps section. Tapping it opens System with the whole message (below). A Bluetooth error would sit under Radio; a storage or key error only on System.'),
+]);
+
+html += section('2. TNC page and pairing', 'Unchanged from round 2. Through the flow the tabs are locked and the left key backs out.', [
+  fig({ top: tabs('TNC'), keys: soft(null, { t: 'Pair or select', c: 'main' }, null), body:
+    `<div class="sec"><span>Radio</span></div>
+     <div class="row"><span class="big">TH-D75</span><span class="pill ok">Connected</span></div>
+     <div class="small" style="margin-top:4px">Kenwood TH-D75 · paired</div>
+     <div class="small" style="margin-top:2px">40:79:12:E4:95:9D</div>
+     <div class="hr" style="margin-top:10px"></div>
+     <div class="tiny" style="line-height:1.4">To change it, put the new radio in pairing mode first.<br>Kenwood: Menu › Bluetooth › Pairing Mode.<br>TD-H9: Bluetooth on, BT Mode set to Receiver.</div>` },
+    '<b>The radio you have.</b> The middle key starts a scan.'),
+  fig({ top: tabs('TNC', { locked: true }), keys: soft({ t: 'Cancel' }, null, null), body:
+    `<div class="row"><span style="font-size:14px;font-weight:600">Looking for radios</span><span class="small">42 s</span></div>
+     <div class="bar" style="margin:6px 0 2px"><span style="width:30%"></span></div>
+     <div class="list">
+       <div class="it"><div><div class="n">TH-D75</div><div class="d">Kenwood · in pairing mode</div></div><div class="s">−52 dBm <b>›</b></div></div>
+       <div class="it"><div><div class="n">TD-H9</div><div class="d">TIDRADIO · Bluetooth LE</div></div><div class="s">−60 dBm <b>›</b></div></div>
+     </div>
+     <div class="tiny" style="margin-top:4px">Tap a radio. 3 other devices aren't radios.</div>` },
+    '<b>Scanning</b>, up to 60 s. Tap the radio you want.'),
+  fig({ top: tabs('TNC', { locked: true }), keys: soft({ t: 'No' }, null, { t: 'Yes', c: 'yes' }), body:
+    `<div style="font-size:14px;font-weight:600">Pairing with TH-D75</div>
+     <div class="small" style="margin-top:10px">The radio should show</div>
+     <div class="digits" style="margin:4px 0 6px">774 523</div>
+     <div style="font-size:16px;font-weight:600">Does it show this number?</div>` },
+    '<b>Comparing the number</b>: the question on the screen, the answers on the keys.'),
+  fig({ top: tabs('TNC', { locked: true }), keys: soft({ t: 'Cancel' }, null, null), body:
+    `<div style="font-size:14px;font-weight:600">Pairing with TH-D75</div>
+     <div style="font-size:20px;font-weight:700;margin-top:14px">Press OK on the radio</div>
+     <div class="bar" style="margin-top:14px"><span style="width:70%"></span></div>
+     <div class="row" style="margin-top:6px"><span class="small">It gives you about 30 s</span><span class="small">21 s</span></div>` },
+    '<b>Finishing on the radio.</b>'),
+  fig({ top: tabs('TNC', { locked: true }), keys: soft(null, null, { t: 'OK', c: 'yes' }), body:
+    `<div style="font-size:14px;font-weight:600">Selected TD-H9</div>
+     <div style="font-size:20px;font-weight:700;margin-top:14px;color:var(--d-green)">✓ Connecting</div>
+     <div class="small" style="margin-top:10px;line-height:1.35">A TD-H9 isn't paired. The bridge remembers its address and connects whenever it's on.</div>` },
+    '<b>A TD-H9 selected.</b>'),
+  fig({ top: tabs('TNC', { locked: true }), keys: soft({ t: 'Back' }, { t: 'Try again', c: 'main' }, null), body:
+    `<div style="font-size:14px;font-weight:600">Pairing with TH-D75</div>
+     <div style="font-size:20px;font-weight:700;margin-top:14px;color:var(--d-amber)">Didn't pair</div>
+     <div class="small" style="margin-top:10px;line-height:1.35">The radio didn't confirm in time. The bridge is back on the radio it had.</div>` },
+    '<b>It didn\'t work.</b>'),
+]);
+
+html += section('3. System page, errors and power off', 'System gains a Screen row, which opens the screen settings, and Power off on the middle key.', [
+  fig({ top: tabs('System'), keys: soft(null, { t: 'Power off', c: 'main' }, null), body:
+    `<div class="kv tight">${sysRows()}</div>` },
+    '<b>System.</b> Battery, power, uptime and firmware, the name and Bluetooth address to look for in an app, and the screen mode. On battery the Power row reads "On battery, 95 mA".'),
+  fig({ top: tabs('System'), keys: soft(null, { t: 'Power off', c: 'main' }, null), body:
+    `<div class="errbox"><div class="h">Phones can't find the device</div>
+       <div class="m">Advertising didn't start within 10 s. Unplug the device and plug it in.</div></div>
+     <div class="kv tight">${sysRows()}</div><div class="fade"></div>` },
+    '<b>Where the banner leads.</b> Each error at the top with its whole message, the same text <code>device.info</code> gives a management app. The rows below scroll.'),
+  fig({ top: tabs('System', { locked: true }), keys: soft({ t: 'Cancel' }, null, { t: 'Power off', c: 'danger' }), body:
+    `<div style="font-size:20px;font-weight:700;margin-top:4px">Power off?</div>
+     <div style="font-size:14px;margin-top:10px;line-height:1.35">The bridge stops, and apps lose the radio.</div>
+     <div class="small" style="margin-top:10px;line-height:1.35">Press the power button on the left side to turn it on again.</div>` },
+    '<b>Power off</b> asks first, with the confirm on the right and Cancel on the left. Then the AXP192 cuts the power.'),
+]);
+
+html += section('4. The screen: modes and timeout', 'Like the ATOM\'s LED: a mode for while nothing is happening, and a timeout, 30 s by default. Pairing and other flows keep the screen on until they end. An error, and the radio or an app connecting or disconnecting, wake it; frames don\'t. A short press on the power button turns it off or on.', [
+  fig({ top: tabs('System', { locked: true }), keys: soft({ t: 'Back' }, null, null), body:
+    `<div style="font-size:14px;font-weight:600;margin-bottom:2px">Screen</div>
+     <div class="opt"><span class="dot"></span><div><div class="t1">Bright</div><div class="t2">Always on</div></div></div>
+     <div class="opt on"><span class="dot"></span><div><div class="t1">Dim</div><div class="t2">Dims after the timeout; a touch brightens it</div></div></div>
+     <div class="opt"><span class="dot"></span><div><div class="t1">Dark</div><div class="t2">Off after the timeout; a touch wakes it</div></div></div>
+     <div class="tiny" style="margin-top:6px">Timeout</div>
+     <div class="chips"><span>15 s</span><span class="on">30 s</span><span>1 min</span><span>5 min</span></div>` },
+    '<b>Screen settings</b>, from the Screen row on System. A tap on a mode or a timeout takes effect at once; Back returns to System. The timeout is greyed out for Bright.'),
+  fig({ top: tabs('Bridge'), body: bridgeOK(), mode: 'dim', touch: [160, 120] },
+    '<b>Dim.</b> After the timeout the backlight drops low, and the screen is still readable up close. A touch brightens it and also does what it touched, since you can see it.'),
+  fig({ top: tabs('Bridge'), body: bridgeOK(), mode: 'dark', touch: [160, 120] },
+    '<b>Dark.</b> After the timeout the screen is off. The first touch, anywhere including the circles, only wakes it; the next one acts. That\'s the ATOM\'s wake rule, and it keeps a blind tap from pressing something you can\'t see.'),
+]);
+
+html += section('5. Boot and reset', null, [
+  fig({ full: true, body: splash('Starting…') },
+    '<b>Splash.</b> The name, the version, and LVGL\'s spinner with "Starting…", until the Bridge page is ready, about a second. The backlight comes on once it\'s drawn.'),
+  fig({ full: true, body: splash('Starting Bluetooth…') },
+    '<b>A slow step.</b> If one step takes longer than about 2 s, the line under the spinner says which, so a device that hangs says where.'),
+  fig({ full: true, held: [0, 2], keys: soft({ t: 'Hold', c: 'warn' }, null, { t: 'Hold', c: 'warn' }), body:
+    `<div style="padding:12px 6px 0">
+       <div style="font-size:20px;font-weight:700;color:var(--d-amber)">Reset</div>
+       <div style="font-size:14px;margin-top:10px;line-height:1.35">Keep holding to clear the settings, the radio and the authorized apps.</div>
+       <div class="bar" style="margin-top:14px"><span style="width:45%;background:var(--d-amber)"></span></div>
+       <div class="row" style="margin-top:6px"><span class="small">Let go to cancel</span><span class="small">2 s</span></div>
+       <div class="tiny" style="margin-top:12px">The firmware, the device key and the authorization code stay.</div>
+     </div>` },
+    '<b>Reset at power-on.</b> Hold the left and right circles while you press the power button (or the reset button on the bottom) and through the splash. Afterwards: "Settings cleared. Restarting…".'),
+]);
+
+html += section('6. Room for a fourth tab', null, [
+  fig({ top: tabs('Bridge', { names: ['Bridge', 'TNC', 'Log', 'System'], tw: 66, iconOnly: true }), body: bridgeOK() },
+    '<b>Four tabs</b> at 66 px still take a fingertip; the battery drops its percentage. Past four, a "More" tab would take the rest.'),
+]);
+
+
+// ---- section 0: the battery indicator ----
+const STATES = [
+  { t: '87%', pct: 87, ext: false, chg: false },
+  { t: '40%', pct: 40, ext: false, chg: false },
+  { t: 'Low, 15%', pct: 15, ext: false, chg: false },
+  { t: 'Charging, 64%', pct: 64, ext: true, chg: true },
+  { t: 'External power, full', pct: 100, ext: true, chg: false },
+];
+const keep = DISCHARGE;
+const rows = Object.entries(DCOLORS).map(([k, v]) => {
+  DISCHARGE = k;
+  const cells = STATES.map(st => `<figure><div class="bcell">${battD(st)}</div><figcaption class="bcap">${st.t}</figcaption></figure>`).join('');
+  return `<div class="bopt"><div class="bh"><b>${v.t}${k === keep ? ' (shown on the screens below)' : ''}.</b> ${NOTES[k]}</div><div class="brow">${cells}</div></div>`;
+}).join('');
+DISCHARGE = keep;
+html = `<h2>0. The battery indicator</h2>
+  <p class="note">Option D: the number, then the battery. Stripes run through the level while it charges (still here, animated on the device), it's solid green on external power when full, and red at 20% and under. On battery the level is grey, the outline's own colour (decided). The other colours considered are kept below for the record; the buttons still switch every screen to one.</p>
+  <div class="controls" id="dcolor">Discharging colour ${Object.entries(DCOLORS).map(([k, v]) => `<button data-c="${k}" aria-pressed="${k === DISCHARGE}">${v.t}</button>`).join('')}</div>
+  ${rows}` + html;
+document.getElementById('screens').innerHTML = html;
+document.querySelectorAll('#dcolor button').forEach(b => b.addEventListener('click', () => { DISCHARGE = b.dataset.c; render(); }));
+}
+const NOTES = {
+  white:  'The brightest thing in the tab bar, so the eye goes there first, which a battery that\'s fine doesn\'t need.',
+  grey:   'The outline\'s own grey: quiet while all is well, so green and red stand out when they come.',
+  blue:   'The UI\'s accent, the same as the selected tab\'s underline, so it reads as part of the theme. Blue can look like "selected".',
+  cyan:   'Distinct from every status colour on the page (green, amber, red, blue). A little loud.',
+  graded: 'Grey above 40%, amber from 40% down to 21%, red at 20% and under: a warning before it\'s urgent. Amber is also TX\'s colour, but in a different place.',
+};
+render();
+
+// ---- scale ----
+const root = document.documentElement;
+const buttons = document.querySelectorAll('.controls button');
+function setZ(z) {
+  root.style.setProperty('--z', z);
+  buttons.forEach(b => b.setAttribute('aria-pressed', String(b.dataset.z === z)));
+  try { localStorage.setItem('core2-mockup-z', z); } catch (e) {}
+}
+buttons.forEach(b => b.addEventListener('click', () => setZ(b.dataset.z)));
+let saved = null;
+try { saved = localStorage.getItem('core2-mockup-z'); } catch (e) {}
+setZ(saved || '2');
+</script>
+</body>
+</html>

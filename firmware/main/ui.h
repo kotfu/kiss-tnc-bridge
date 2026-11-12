@@ -30,6 +30,11 @@ void show_reset_done_blocking();
 // Starts the UI task, which shows the power-on colors first.
 void start();
 
+// Start-up, for a screen's splash (docs/core2-ui.md, Boot): the step
+// that's running, and that the device is ready. The LED ignores both.
+void starting(const char *step);
+void started();
+
 // Queues an event. Safe from any task, not from an interrupt.
 void post(Event e);
 
