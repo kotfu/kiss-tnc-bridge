@@ -10,6 +10,11 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## 1.1.0 (2026-11-12)
+
+The TIDRADIO TD-H9 as the radio, for the M5Stack ATOM Lite, beside the
+TH-D74 and TH-D75.
+
 ### Added
 
 - The TIDRADIO TD-H9 as the radio, over BLE: the ATOM connects to its
