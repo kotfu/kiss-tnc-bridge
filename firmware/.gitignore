@@ -4,3 +4,5 @@
 /managed_components/
 # Signing keys never go in the repository.
 *.pem
+# Whole-flash backups of boards (factory firmware is M5Stack's).
+/backups/

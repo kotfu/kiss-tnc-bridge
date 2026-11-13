@@ -43,6 +43,22 @@ enum Cmd {
         #[arg(long, default_value_t = 115_200)]
         baud: u32,
     },
+    /// Read flash to a file, checked against the chip's MD5 of it
+    Read {
+        port: String,
+        file: PathBuf,
+        #[arg(long, default_value_t = 0)]
+        offset: u32,
+        #[arg(long, default_value_t = 0x40_0000)]
+        size: u32,
+        #[arg(long, default_value_t = 1_500_000)]
+        baud: u32,
+        #[arg(long, default_value_t = 0x1000)]
+        block: u32,
+        /// Blocks the chip may send ahead of our acknowledgements
+        #[arg(long, default_value_t = 1)]
+        in_flight: u32,
+    },
     /// Write a release manifest's parts
     Flash {
         port: String,
@@ -71,6 +87,21 @@ fn main() -> Result<()> {
         }
         Cmd::OpenClose { port, count } => open_close(&port, count),
         Cmd::Chip { port, baud } => chip(&port, baud),
+        Cmd::Read { port, file, offset, size, baud, block, in_flight } => {
+            let t = Instant::now();
+            let mut f = connect(&port, baud, true)?;
+            println!("ROM and stub at {baud} baud in {:.2} s", t.elapsed().as_secs_f64());
+            let r = Instant::now();
+            let result = f.read_flash(offset, size, block, in_flight, file.clone());
+            let chip = f.chip();
+            let _ = f.connection().reset_after(true, chip);
+            result?;
+            println!(
+                "read {size} bytes in {:.2} s, MD5 checked; reset",
+                r.elapsed().as_secs_f64()
+            );
+            Ok(())
+        }
         Cmd::Flash { port, manifest, baud, clean, no_verify } => {
             flash(&port, &manifest, baud, clean, !no_verify)
         }
