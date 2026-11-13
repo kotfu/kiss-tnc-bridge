@@ -23,7 +23,7 @@ use crate::control::protocol::{
     BridgeStatus, BtDevice, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus,
     ProblemJson, SerialEntry, Status,
 };
-use crate::ctl::device::{DeviceInfo, Found, board_name, ports::DevicePort};
+use crate::ctl::device::{DeviceInfo, Found, board_name, flash::Flashed, ports::DevicePort};
 use crate::reconcile::{Action, Plan};
 
 /// `status`, for every bridge or just one (by id or name).
@@ -349,6 +349,38 @@ pub fn device_info(port: &DevicePort, i: &DeviceInfo) -> String {
     }
     for e in &i.errors {
         row("error", format!("{} ({})", e.message, e.code));
+    }
+    out
+}
+
+/// `device flash`'s result.
+pub fn flashed(f: &Flashed) -> String {
+    let mut out = format!(
+        "Firmware {} is running on the {} at {} ({} s at {} baud).\n",
+        f.version,
+        board_name(&f.board),
+        f.port,
+        f.seconds,
+        f.baud
+    );
+    if f.clean {
+        out.push_str(
+            "It was a clean install: the device has a new key and authorization code, \
+             and no radio paired.\n",
+        );
+    } else if let Some(p) = &f.previous {
+        let _ = writeln!(
+            out,
+            "Updated from {p}: its settings, radio pairing and authorization code are kept."
+        );
+    }
+    if let Some(code) = &f.authorization_code {
+        let _ = writeln!(
+            out,
+            "\nIts authorization code is {code}\n\nKeep it: management apps need it to \
+             manage the device over Bluetooth. It stays the same until someone changes it \
+             or installs clean."
+        );
     }
     out
 }
@@ -690,6 +722,7 @@ mod tests {
             usb_id: Some("0403:6001".into()),
             description: Some("Hades2001 M5stack".into()),
             looks_like: Some("ATOM Lite"),
+            ids: Some((0x0403, 0x6001)),
         }
     }
 

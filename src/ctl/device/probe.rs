@@ -18,10 +18,12 @@
 
 use std::time::Duration;
 
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::Instant;
-use tokio_serial::{DataBits, FlowControl, Parity, SerialPort, SerialPortBuilderExt, StopBits};
+use tokio_serial::{
+    ClearBuffer, DataBits, FlowControl, Parity, SerialPort, SerialPortBuilderExt, StopBits,
+};
 
 use super::DeviceInfo;
 use crate::control::protocol::{Response, VERSION};
@@ -59,7 +61,29 @@ pub fn open_quiet(path: &str) -> Result<NoDrain, CtlError> {
     port.write_request_to_send(false)
         .and_then(|()| port.write_data_terminal_ready(false))
         .map_err(|e| CtlError::Message(format!("can't set {path}'s control lines: {e}")))?;
+    // Answers to requests an earlier connection sent, still in the
+    // kernel's buffer, aren't for this one.
+    let _ = port.clear(ClearBuffer::Input);
     Ok(NoDrain(port))
+}
+
+/// A request id no other request has used: the device may still answer
+/// requests sent earlier, by this process or another, after they were
+/// given up on (a firmware starting answers each `device.info` it was
+/// sent while it started). They start from the clock, so another ktbctl's
+/// don't collide either.
+fn next_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let _ = NEXT.compare_exchange(
+        0,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(1, |d| d.as_millis() as u64 % 1_000_000_000 * 1000 + 1),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    );
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
 fn open_error(path: &str, e: &tokio_serial::Error) -> CtlError {
@@ -86,20 +110,36 @@ fn open_error(path: &str, e: &tokio_serial::Error) -> CtlError {
 
 /// Asks for `device.info` and waits up to `wait` for the answer, asking
 /// again each second. `None` if nothing answered: the device runs other
-/// firmware or none, or hasn't started yet. The port also carries the
-/// firmware's log, so lines that don't start with `{` are skipped, as are
-/// events and answers to other requests.
+/// firmware or none, or hasn't started yet.
 pub async fn device_info<S>(port: &mut S, wait: Duration) -> Result<Option<DeviceInfo>, CtlError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    const ID: u64 = 1;
-    let request = format!(
-        "{}\n",
-        json!({"v": VERSION, "id": ID, "cmd": "device.info"})
-    );
+    let Some(value) = request(port, "device.info", wait, true).await? else {
+        return Ok(None);
+    };
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(|e| CtlError::Protocol(format!("device.info: {e}")))
+}
+
+/// Sends a request with no parameters and waits up to `wait` for its
+/// result, sending it again each second if `again`. `None` if nothing
+/// answered. The port also carries the firmware's log, so lines that don't
+/// start with `{` are skipped, as are events and answers to other requests.
+pub async fn request<S>(
+    port: &mut S,
+    cmd: &str,
+    wait: Duration,
+    again: bool,
+) -> Result<Option<Value>, CtlError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let id = next_id();
+    let request = format!("{}\n", json!({"v": VERSION, "id": id, "cmd": cmd}));
     let deadline = Instant::now() + wait;
-    let mut next_ask = Instant::now();
+    let mut next_ask = Some(Instant::now());
     let mut line: Vec<u8> = Vec::new();
     let mut buf = [0u8; 512];
     loop {
@@ -107,11 +147,11 @@ where
         if now >= deadline {
             return Ok(None);
         }
-        if now >= next_ask {
+        if next_ask.is_some_and(|t| now >= t) {
             port.write_all(request.as_bytes()).await?;
-            next_ask = now + Duration::from_secs(1);
+            next_ask = again.then(|| now + Duration::from_secs(1));
         }
-        let until = next_ask.min(deadline);
+        let until = next_ask.map_or(deadline, |t| t.min(deadline));
         let n = match tokio::time::timeout_at(until, port.read(&mut buf)).await {
             Err(_) => continue,
             Ok(Ok(0)) => return Err(CtlError::Closed),
@@ -133,13 +173,10 @@ where
             let Ok(res) = serde_json::from_str::<Response>(&text) else {
                 continue; // an event, or not ours
             };
-            if res.id != Some(ID) {
+            if res.id != Some(id) {
                 continue;
             }
-            let value = result(res)?;
-            return serde_json::from_value(value)
-                .map(Some)
-                .map_err(|e| CtlError::Protocol(format!("device.info: {e}")));
+            return result(res).map(Some);
         }
     }
 }
@@ -147,27 +184,51 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tokio::io::{AsyncBufReadExt, BufReader};
+    use tokio::io::{AsyncBufReadExt, BufReader, DuplexStream, ReadHalf, WriteHalf};
 
-    const INFO: &str = r#"{"v":1,"id":1,"ok":true,"result":{"board":"atom-lite","firmware":{"version":"1.2.0-dev","partition":"ota_0","state":"valid"},"protocol":1,"capabilities":["spp-client"],"fingerprint":"GYB78TWSJVDCF5WG","bluetooth":{"address":"B8:7B:4D:18:F2:72"},"uptime":416,"heap":{"free":119856,"min":112572,"largest":106496},"last_reset":"power_on","max_message":4096,"errors":[]}}"#;
+    const INFO: &str = r#"{"v":1,"id":ID,"ok":true,"result":{"board":"atom-lite","firmware":{"version":"1.2.0-dev","partition":"ota_0","state":"valid"},"protocol":1,"capabilities":["spp-client"],"fingerprint":"GYB78TWSJVDCF5WG","bluetooth":{"address":"B8:7B:4D:18:F2:72"},"uptime":416,"heap":{"free":119856,"min":112572,"largest":106496},"last_reset":"power_on","max_message":4096,"errors":[]}}"#;
+
+    /// A fake device: reads one request, and returns its id and `cmd`.
+    async fn read_request(
+        lines: &mut tokio::io::Lines<BufReader<ReadHalf<DuplexStream>>>,
+    ) -> (u64, String) {
+        let req: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(req["v"], 1);
+        (
+            req["id"].as_u64().unwrap(),
+            req["cmd"].as_str().unwrap().into(),
+        )
+    }
+
+    fn fake(
+        device: DuplexStream,
+    ) -> (
+        tokio::io::Lines<BufReader<ReadHalf<DuplexStream>>>,
+        WriteHalf<DuplexStream>,
+    ) {
+        let (r, w) = tokio::io::split(device);
+        (BufReader::new(r).lines(), w)
+    }
 
     #[tokio::test(start_paused = true)]
-    async fn the_answer_is_found_among_log_lines_and_events() {
+    async fn the_answer_is_found_among_log_lines_events_and_stale_answers() {
         let (mut ours, device) = tokio::io::duplex(4096);
         let fake = tokio::spawn(async move {
-            let (r, mut w) = tokio::io::split(device);
-            let mut lines = BufReader::new(r).lines();
-            let req = lines.next_line().await.unwrap().unwrap();
-            assert_eq!(req, r#"{"cmd":"device.info","id":1,"v":1}"#);
+            let (mut lines, mut w) = fake(device);
+            let (id, cmd) = read_request(&mut lines).await;
+            assert_eq!(cmd, "device.info");
             w.write_all(b"I (1234) radio: connecting\n").await.unwrap();
             w.write_all(b"{\"v\":1,\"event\":\"state\",\"what\":\"tnc\"}\n")
                 .await
                 .unwrap();
-            w.write_all(b"{\"v\":1,\"id\":7,\"ok\":true,\"result\":{}}\n")
-                .await
-                .unwrap();
+            // An answer to a request sent before, by another connection.
+            let stale = INFO
+                .replace("ID", &(id - 1).to_string())
+                .replace("atom-lite", "core2");
+            w.write_all(format!("{stale}\n").as_bytes()).await.unwrap();
             // The answer in two pieces, as a serial port may deliver it.
-            let (a, b) = INFO.split_at(40);
+            let answer = INFO.replace("ID", &id.to_string());
+            let (a, b) = answer.split_at(40);
             w.write_all(a.as_bytes()).await.unwrap();
             w.write_all(format!("{b}\r\n").as_bytes()).await.unwrap();
         });
@@ -186,42 +247,65 @@ mod tests {
         let (mut ours, device) = tokio::io::duplex(4096);
         let counter = tokio::spawn(async move {
             let mut lines = BufReader::new(device).lines();
-            let mut asked = 0;
-            while let Ok(Some(_)) = lines.next_line().await {
-                asked += 1;
+            let mut ids = Vec::new();
+            while let Ok(Some(l)) = lines.next_line().await {
+                ids.push(
+                    serde_json::from_str::<Value>(&l).unwrap()["id"]
+                        .as_u64()
+                        .unwrap(),
+                );
             }
-            asked
+            ids
         });
         let start = Instant::now();
         assert_eq!(device_info(&mut ours, ANSWER_WAIT).await.unwrap(), None);
         assert_eq!(start.elapsed(), ANSWER_WAIT);
         drop(ours);
-        assert_eq!(counter.await.unwrap(), 3);
+        let ids = counter.await.unwrap();
+        assert_eq!(ids.len(), 3);
+        // Asking again is the same request.
+        assert!(ids.iter().all(|i| *i == ids[0]));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_request_has_its_own_id() {
+        assert_ne!(next_id(), next_id());
     }
 
     #[tokio::test(start_paused = true)]
     async fn junk_without_newlines_doesnt_grow_without_bound() {
-        let (mut ours, mut device) = tokio::io::duplex(1 << 20);
-        device.write_all(&vec![0xAAu8; 200_000]).await.unwrap();
-        device.write_all(b"\n").await.unwrap();
-        device.write_all(INFO.as_bytes()).await.unwrap();
-        device.write_all(b"\n").await.unwrap();
+        let (mut ours, device) = tokio::io::duplex(1 << 20);
+        let fake = tokio::spawn(async move {
+            let (mut lines, mut w) = fake(device);
+            let (id, _) = read_request(&mut lines).await;
+            w.write_all(&vec![0xAAu8; 200_000]).await.unwrap();
+            w.write_all(b"\n").await.unwrap();
+            let answer = INFO.replace("ID", &id.to_string());
+            w.write_all(format!("{answer}\n").as_bytes()).await.unwrap();
+            lines
+        });
         let info = device_info(&mut ours, ANSWER_WAIT).await.unwrap();
         assert!(info.is_some());
+        drop(fake.await.unwrap());
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_refusal_is_an_api_error() {
-        let (mut ours, mut device) = tokio::io::duplex(4096);
-        device
-            .write_all(
-                b"{\"v\":1,\"id\":1,\"ok\":false,\"error\":{\"code\":\"unknown_command\",\"message\":\"no command\"}}\n",
-            )
-            .await
-            .unwrap();
-        match device_info(&mut ours, ANSWER_WAIT).await {
+        let (mut ours, device) = tokio::io::duplex(4096);
+        let fake = tokio::spawn(async move {
+            let (mut lines, mut w) = fake(device);
+            let (id, cmd) = read_request(&mut lines).await;
+            assert_eq!(cmd, "auth.code");
+            let refusal = format!(
+                "{{\"v\":1,\"id\":{id},\"ok\":false,\"error\":{{\"code\":\"unknown_command\",\"message\":\"no command\"}}}}\n"
+            );
+            w.write_all(refusal.as_bytes()).await.unwrap();
+            lines
+        });
+        match request(&mut ours, "auth.code", ANSWER_WAIT, false).await {
             Err(CtlError::Api(e)) => assert_eq!(e.message, "no command"),
             other => panic!("{other:?}"),
         }
+        drop(fake.await.unwrap());
     }
 }

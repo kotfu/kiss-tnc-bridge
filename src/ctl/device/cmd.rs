@@ -35,6 +35,7 @@ impl Ctl {
                 let info = ask(&port).await?.ok_or_else(|| no_answer(&port))?;
                 self.print(&info, || render::device_info(&port, &info))
             }
+            DeviceCmd::Flash(a) => self.flash(a).await,
         }
     }
 

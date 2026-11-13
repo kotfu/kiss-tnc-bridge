@@ -49,6 +49,9 @@ pub struct DevicePort {
     /// The board whose USB serial chip this is, if it's one of them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub looks_like: Option<&'static str>,
+    /// The USB vendor and product ids, as numbers.
+    #[serde(skip)]
+    pub ids: Option<(u16, u16)>,
 }
 
 impl DevicePort {
@@ -65,6 +68,7 @@ impl DevicePort {
             usb_id: usb
                 .as_ref()
                 .map(|u| format!("{:04x}:{:04x}", u.vendor, u.product)),
+            ids: usb.as_ref().map(|u| (u.vendor, u.product)),
             description: usb.and_then(|u| u.description),
             looks_like,
         }

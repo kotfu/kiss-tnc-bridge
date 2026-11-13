@@ -14,13 +14,17 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 //! ESP32 devices (the ATOM Lite and Core2) on USB serial: finding them,
-//! opening their port without resetting them, and asking what they run
-//! (docs/plan-phase-d.md, D1 step 2). `ktbctl device` talks to them
-//! directly, with no daemon.
+//! opening their port without resetting them, asking what they run, and
+//! installing firmware on them (docs/plan-phase-d.md, D1). `ktbctl device`
+//! talks to them directly, with no daemon.
 
 mod cmd;
+pub mod flash;
+pub mod manifest;
 pub mod ports;
 pub mod probe;
+mod release;
+pub mod rom;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

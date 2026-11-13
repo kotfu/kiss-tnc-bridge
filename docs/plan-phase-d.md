@@ -123,8 +123,11 @@ the Core2. They're for D1's testing, not the decision.
 
 Decided 12 November 2026: `espflash` is a library compiled into
 `ktbctl`, with no cargo feature to leave it out. The packages still ship
-two binaries and need no new libraries; only `ktbctl` grows, by about
-650 KB, since the daemon doesn't call it.
+two binaries and need no new libraries; only `ktbctl` grows, since the
+daemon doesn't call it. The spike's 650 KB was low: with the flash
+command built, `espflash` and its code add 2.0 MB to `ktbctl` on aarch64
+(3.35 to 5.38 MB), and the GitHub download (`ureq`, rustls and ring)
+another 1.6 MB, to 6.95 MB. The armhf build goes from 3.54 to 6.71 MB.
 
 ### 2. Shared groundwork
 
@@ -156,9 +159,14 @@ Before anything is written, as in the web installer's step 4:
 - **Nothing answers:** the device has other firmware or none. `ktbctl`
   connects to the ROM and tells the board from the chip and flash size:
   PICO-D4 with 4 MB is an ATOM Lite, D0WDQ6-V3 with 16 MB a Core2. The
-  StickC Plus SE has the ATOM's chip and flash, so once it's released a
-  PICO-D4 is ambiguous and needs `--board`.
+  StickC Plus SE has the ATOM's chip and flash, so a PICO-D4 that
+  doesn't answer needs `--board` (already, since a StickC is on hand).
 - A chip that matches no board stops here, saying what was found.
+
+Done 12 November 2026. The ROM is asked only when the board is needed
+and the firmware doesn't say: to pick a GitHub release, or to check a
+manifest's board. The install checks the chip against the board again
+before writing.
 
 ### 4. Firmware from local files, or from a GitHub release
 
@@ -178,7 +186,11 @@ Both, as options:
 - **Cached** under `~/.cache/ktbctl/firmware/<version>/`, since released
   files never change.
 - **HTTP** needs a client that cross-builds without OpenSSL: `ureq` with
-  rustls is the likely choice.
+  rustls and ring, which builds for both Pis.
+
+Done 12 November 2026, in `src/ctl/device/manifest.rs` and `release.rs`.
+A manifest's parts have to be plain file names beside it. A version
+already in the cache installs without the network.
 
 Whichever way they come, before the device is touched: every part's
 SHA-256 and size against the manifest, `chipFamily` `ESP32`, and the
@@ -203,21 +215,45 @@ The web installer's choices:
 ### 6. Flash
 
 - [ ] Tell the firmware a flash is coming (see [7](#7-the-install-notice)).
-- [ ] Reset into the ROM, load the stub, and switch to 1500000 baud,
+- [x] Reset into the ROM, load the stub, and switch to 1500000 baud,
       falling back to 115200. If anything fails once in the ROM, reset the
       device so it doesn't stay in download mode.
-- [ ] Erase for a clean install, then write each part compressed and
+- [x] Erase for a clean install, then write each part compressed and
       check its MD5.
-- [ ] Progress on stderr: the step (erasing, writing, verifying) and the
+- [x] Progress on stderr: the step (erasing, writing, verifying) and the
       bytes written. With `--json`, progress as JSON lines and a final
       result.
-- [ ] Reset with RTS, so it boots the new firmware.
-- [ ] Reopen the port and wait up to 15 s for `device.info`. Check the
+- [x] Reset with RTS, so it boots the new firmware.
+- [x] Reopen the port and wait up to 15 s for `device.info`. Check the
       version is the one just written.
-- [ ] After a clean install, print the authorization code from
+- [x] After a clean install, print the authorization code from
       `auth.code`, grouped as the device gives it, and say what it's for.
       Naming the device and the rest of first setup are D2's
       `device settings set`.
+
+Done 12 November 2026, in `src/ctl/device/flash.rs` and `rom.rs`. Tried:
+
+- The Core2 on macOS: an update from a local manifest, 24 s. With no
+  `--manifest`, GitHub has no Core2 firmware until 1.2.0 is tagged, and
+  `ktbctl` says so.
+- The ATOM Lite on aprscc: an update from GitHub (1.1.0, with the warning
+  that it's older than the 1.2.0-dev it ran), 21 s with the download; a
+  clean install with `--yes`, with its new authorization code; an update
+  from a local manifest, keeping it; `--json`; a clean install refused
+  without `--yes` and without a terminal; and `--baud 921600`, which
+  fails, resets the device, and finishes at 115200 in 82 s.
+- The ATOM Lite left in its download mode: `ktbctl` asks the ROM, finds
+  the PICO-D4 and refuses without `--board`, and its reset brings the
+  firmware back.
+
+Found on the way: a firmware that's starting answers each `device.info`
+it was sent while it started, so late answers reach the next request.
+Each request now has its own id, and opening the port drops what's
+waiting in it.
+
+Not yet tried: a clean install over other firmware (the StickC Plus SE's
+factory firmware would do), the ROM telling a Core2 on its own, and the
+armhf build on wolfcub.
 
 Errors say what to try, from the web installer's table: a cable that
 carries data, another USB port, the port held by another program, the

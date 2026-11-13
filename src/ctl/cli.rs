@@ -244,6 +244,45 @@ pub enum DeviceCmd {
     List,
     /// The device's board, firmware, fingerprint and state
     Info,
+    /// Install kiss-tnc-bridge firmware over USB: an update, or a clean install
+    Flash(FlashArgs),
+}
+
+#[derive(Debug, Args)]
+#[command(
+    after_help = "An update keeps the device's settings, radio pairing, authorized \
+                        apps and authorization code. A clean install erases them all, and \
+                        is the only way over other firmware; it asks first, or goes ahead \
+                        with --yes.\n\n\
+                        Examples:\n  \
+                        ktbctl device flash\n  \
+                        ktbctl device flash --version 1.3.0\n  \
+                        ktbctl device flash --manifest ktb-core2-1.3.0-manifest.json\n  \
+                        ktbctl device flash --clean --board atom-lite"
+)]
+pub struct FlashArgs {
+    /// A release manifest (ktb-BOARD-VERSION-manifest.json) with its parts
+    /// beside it, instead of downloading the firmware from GitHub
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["version", "prerelease"])]
+    pub manifest: Option<PathBuf>,
+    /// The firmware version to download [default: the newest release]
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Include test versions (betas and release candidates) when choosing
+    /// the newest
+    #[arg(long)]
+    pub prerelease: bool,
+    /// Erase the whole device first: its settings, radio pairing,
+    /// authorized apps, device key and authorization code
+    #[arg(long)]
+    pub clean: bool,
+    /// The board, when the device can't say: atom-lite or core2. An ATOM
+    /// Lite and a StickC Plus SE have the same chip
+    #[arg(long, value_name = "BOARD")]
+    pub board: Option<String>,
+    /// The baud rate to write at [default: 1500000, then 115200 if that fails]
+    #[arg(long)]
+    pub baud: Option<u32>,
 }
 
 #[derive(Debug, Subcommand)]
