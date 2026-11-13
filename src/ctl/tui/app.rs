@@ -1896,7 +1896,7 @@ pub(crate) mod tests {
         );
         phones.sessions.push(SessionStatus {
             id: "ktbr1/phones/40:33:E0:1B:DB:76".into(),
-            since: "2026-10-27T14:01:33Z".into(),
+            since: Some("2026-10-27T14:01:33Z".into()),
         });
         let mut radio = port(
             "radio",

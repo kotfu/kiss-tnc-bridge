@@ -320,6 +320,53 @@ pub enum Command {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         adapter: Option<String>,
     },
+    // ── Devices only (docs/control-api.md, Devices); the daemon answers
+    // these with not_supported. ──
+    /// The device's board, firmware, protocol, capabilities and state.
+    #[serde(rename = "device.info")]
+    DeviceInfo,
+    /// The device's settings.
+    #[serde(rename = "device.settings.get")]
+    DeviceSettingsGet,
+    /// Changes the settings given, and answers with all of them and
+    /// `reboot_required`.
+    #[serde(rename = "device.settings.set")]
+    DeviceSettingsSet {
+        settings: serde_json::Map<String, Value>,
+    },
+    /// Answers `{}`, then restarts.
+    #[serde(rename = "device.reboot")]
+    DeviceReboot,
+    /// Answers `{}`, then clears the settings, the radio pairing and the
+    /// authorized apps (not the firmware, key or authorization code), and
+    /// restarts.
+    #[serde(rename = "device.reset")]
+    DeviceReset,
+    /// Shows a sequence the device shows for nothing else.
+    #[serde(rename = "device.identify")]
+    DeviceIdentify,
+    // ── Authorization (docs/control-api.md, auth commands): devices, and
+    // later ktb-gateway; the daemon's socket answers not_supported. ──
+    /// The fingerprint, public key, authorization mode and how many apps
+    /// are authorized.
+    #[serde(rename = "auth.info")]
+    AuthInfo,
+    /// The authorization code and its link.
+    #[serde(rename = "auth.code")]
+    AuthCode,
+    /// A new authorization code; authorized apps keep working.
+    #[serde(rename = "auth.rotate_code")]
+    AuthRotateCode,
+    /// Starts authorization mode for `seconds` (the device's default if
+    /// absent); 0 ends it.
+    #[serde(rename = "auth.mode")]
+    AuthMode {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seconds: Option<u32>,
+    },
+    /// The authorized apps.
+    #[serde(rename = "auth.apps")]
+    AuthApps,
 }
 
 impl Command {
@@ -361,7 +408,37 @@ impl Command {
         "bluetooth.pair",
         "bluetooth.pair_reply",
         "bluetooth.unpair",
+        "device.info",
+        "device.settings.get",
+        "device.settings.set",
+        "device.reboot",
+        "device.reset",
+        "device.identify",
+        "auth.info",
+        "auth.code",
+        "auth.rotate_code",
+        "auth.mode",
+        "auth.apps",
     ];
+
+    /// Whether this is a command only devices (or later ktb-gateway)
+    /// serve, which the daemon refuses.
+    pub fn is_device_only(&self) -> bool {
+        matches!(
+            self,
+            Command::DeviceInfo
+                | Command::DeviceSettingsGet
+                | Command::DeviceSettingsSet { .. }
+                | Command::DeviceReboot
+                | Command::DeviceReset
+                | Command::DeviceIdentify
+                | Command::AuthInfo
+                | Command::AuthCode
+                | Command::AuthRotateCode
+                | Command::AuthMode { .. }
+                | Command::AuthApps
+        )
+    }
 }
 
 /// The kinds of object config files define.
@@ -508,6 +585,14 @@ pub enum ErrorCode {
     /// when it's done.
     Busy,
     Internal,
+    /// On a device: a command that needs the daemon, since a device's
+    /// bridge is fixed. On the daemon: a command only devices serve.
+    NotSupported,
+    /// A code this version doesn't know. Management apps show its message:
+    /// new codes are an additive change within version 1.
+    #[serde(other)]
+    #[cfg_attr(feature = "schema", schemars(skip))]
+    Unknown,
 }
 
 // ── Results ─────────────────────────────────────────────────────────────
@@ -841,6 +926,8 @@ pub struct TncStatus {
     /// The enabled bridge using it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub in_use_by: Option<String>,
+    /// Where it's defined: `static: …` or `dynamic`. Devices leave it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     pub editable: bool,
 }
@@ -899,9 +986,12 @@ pub struct BridgeStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub enabled_override: Option<bool>,
     pub public_name: PublicName,
+    /// Where it's defined: `static: …` or `dynamic`. Devices leave it out.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub source: String,
     /// Dynamic bridges can be changed through the API; static ones can only
-    /// be enabled and disabled.
+    /// be enabled and disabled. A device's bridge is fixed, and leaves it out.
+    #[serde(default)]
     pub editable: bool,
     /// What it still needs before it can be enabled ("no TNC port", "no
     /// app port"); empty when it's complete. Only disabled bridges can be
@@ -951,7 +1041,8 @@ pub struct PortStatus {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub since: Option<String>,
     /// The port's settings, as in the config: `tnc`, `listen`, `adapter`,
-    /// `max_clients`, ….
+    /// `max_clients`, …. A device leaves out a port's that has none.
+    #[serde(default, skip_serializing_if = "Value::is_null")]
     pub settings: Value,
     pub sessions: Vec<SessionStatus>,
 }
@@ -962,7 +1053,9 @@ pub struct SessionStatus {
     /// `bridge/port/peer`: `ktbr0/phones/7C:2A:…`,
     /// `ktbr0/lan/192.168.4.20:51515`, as `session.kick` takes it.
     pub id: String,
-    pub since: String,
+    /// When it connected. Devices have no clock, and leave it out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
 }
 
 // ── Events ──────────────────────────────────────────────────────────────
@@ -1217,6 +1310,65 @@ mod tests {
                 assert!(e.to_string().contains("missing field"), "{name}: {e}");
             }
         }
+    }
+
+    #[test]
+    fn error_codes_this_version_doesnt_know_still_parse() {
+        let code = |s: &str| serde_json::from_value::<ErrorCode>(json!(s)).unwrap();
+        assert_eq!(code("not_supported"), ErrorCode::NotSupported);
+        assert_eq!(code("image_rejected"), ErrorCode::Unknown);
+        let res: Response = serde_json::from_value(json!({"v": 1, "id": 3, "ok": false,
+            "error": {"code": "brand_new", "message": "something new"}}))
+        .unwrap();
+        assert_eq!(res.error.unwrap().message, "something new");
+    }
+
+    #[test]
+    fn a_devices_status_parses() {
+        // Firmware 1.2.0-dev on a Core2: no source, no editable on the
+        // bridge, no settings on the radio port, no since on sessions.
+        let s: Status = serde_json::from_value(json!({
+            "version": "1.2.0-dev",
+            "adapters": [{"id": "builtin", "mac": "1C:8F:57:BC:EF:26", "present": true,
+                          "powered": true, "devices": []}],
+            "tncs": [{"id": "radio", "name": "radio", "model": "th-d75",
+                      "in_use_by": "ktbr0", "editable": true}],
+            "bridges": [{"id": "ktbr0", "name": "KTB-EF26", "enabled": true,
+                "public_name": {"configured": "KTB-EF26", "effective": "KTB-EF26"},
+                "ports": [
+                    {"id": "radio", "type": "spp-client", "role": "tnc", "state": "unpaired",
+                     "detail": "no radio", "sessions": []},
+                    {"id": "phones", "type": "ble-server", "role": "app", "state": "advertising",
+                     "settings": {"adapter": "builtin", "max_clients": 2},
+                     "sessions": [{"id": "ktbr0/phones/58:6B:6E:73:A9:53"}]}],
+                "counters": {"frames_up": 0, "frames_down": 0, "dropped": 0, "tnc_connects": 0}}]
+        }))
+        .unwrap();
+        let b = &s.bridges[0];
+        assert!(!b.editable);
+        assert_eq!(b.source, "");
+        assert_eq!(b.ports[0].settings, Value::Null);
+        assert_eq!(b.ports[1].sessions[0].since, None);
+    }
+
+    #[test]
+    fn device_commands_are_known_and_marked() {
+        for name in [
+            "device.info",
+            "device.settings.get",
+            "auth.code",
+            "auth.apps",
+        ] {
+            assert!(Command::NAMES.contains(&name), "{name}");
+            let c: Command = serde_json::from_value(json!({"cmd": name})).unwrap();
+            assert!(c.is_device_only(), "{name}");
+        }
+        let set: Command = serde_json::from_value(
+            json!({"cmd": "device.settings.set", "settings": {"cpu_mhz": 80}}),
+        )
+        .unwrap();
+        assert!(set.is_device_only());
+        assert!(!Command::Status.is_device_only());
     }
 
     #[test]

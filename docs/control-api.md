@@ -361,7 +361,7 @@ and `data` carries detail for some codes.
 | `changed_on_disk` | `dynamic.toml` was edited by hand since the daemon read it; `reload` first |
 | `failed` | A Bluetooth scan or pairing was tried and failed; the message says why (for a pairing, often what to do at the radio) |
 | `busy` | Another Bluetooth scan or pairing is running, or another firmware update; one runs at a time |
-| `not_supported` | A command this server doesn't do, such as `bridge.create` on a device, or `firmware.update.begin` over USB |
+| `not_supported` | A command this server doesn't do, such as `bridge.create` on a device, `device.info` or `auth.code` on the daemon, or `firmware.update.begin` over USB |
 | `image_rejected` | A firmware image failed a check: its SHA-256, board, size or signature. The message says which |
 | `internal` | Something went wrong in the daemon |
 
@@ -716,13 +716,13 @@ one fixed bridge, `ktbr0`, with a TNC port, `radio`, to the radio's TNC
 (`spp-client` for a TH-D74 or TH-D75, `ble-client` for a TIDRADIO TD-H9),
 and a `ble-server` app port, `phones`, serving the BLE KISS API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
 as on the daemon. A management app can tell a device from the daemon by
-`device.info`, which the daemon doesn't answer.
+`device.info`, which the daemon refuses with `not_supported`.
 
 ### What's the same, and what isn't
 
 | Commands | On a device |
 |---|---|
-| `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock |
+| `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock. No `source`, no `editable` on the bridge, and no `settings` on a port that has none |
 | `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
 | `tnc.update` | Changes the radio's `model`, and its `spp.address` (a Classic model) or `ble.address` (`td-h9`). Moving between the two needs the other's address. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
@@ -880,7 +880,12 @@ device asks for a 15 ms connection interval during an update; from Linux a
 
 ## Trying it by hand
 
-Until `ktbctl` exists, `socat` speaks to the socket:
+`ktbctl` speaks this API to the daemon, and to a device over USB serial
+with `--device PORT` (or `KTBCTL_DEVICE`): `ktbctl --device
+/dev/serial/by-id/… status`, `ktbctl device settings`, `ktbctl auth code`.
+`ktbctl --json` shows the results as the API returns them.
+
+To type requests yourself, `socat` speaks to the socket:
 
 ```bash
 sudo socat - UNIX-CONNECT:/run/kiss-tnc-bridge/control.sock

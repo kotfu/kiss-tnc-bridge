@@ -60,7 +60,7 @@ fn bridge_block(out: &mut String, b: &BridgeStatus, now: SystemTime) {
         (e, Some(_)) => format!("{} (override)", if e { "enabled" } else { "disabled" }),
     };
     let _ = write!(out, "{}  {:<32} {}", b.id, b.name, state);
-    if !b.editable {
+    if !b.editable && !b.source.is_empty() {
         let _ = write!(out, "  [{}]", b.source);
     }
     out.push('\n');
@@ -117,7 +117,10 @@ fn port_line(out: &mut String, p: &PortStatus, now: SystemTime) {
         what.join("  ")
     );
     for s in &p.sessions {
-        let since = parse_rfc3339(&s.since)
+        let since = s
+            .since
+            .as_deref()
+            .and_then(parse_rfc3339)
             .map(|t| ago(t, now))
             .unwrap_or_default();
         let _ = writeln!(out, "      └ {}  {since}", s.id);
@@ -349,6 +352,115 @@ pub fn device_info(port: &DevicePort, i: &DeviceInfo) -> String {
     }
     for e in &i.errors {
         row("error", format!("{} ({})", e.message, e.code));
+    }
+    out
+}
+
+/// `device settings`: one per line, then any that need a reboot.
+pub fn settings(v: &serde_json::Value) -> String {
+    let mut out = String::new();
+    if let Some(m) = v.get("settings").and_then(|s| s.as_object()) {
+        let width = m.keys().map(String::len).max().unwrap_or(0);
+        for (k, val) in m {
+            let shown = match val {
+                serde_json::Value::String(s) => s.clone(),
+                other => other.to_string(),
+            };
+            let _ = writeln!(out, "{k:<width$}  {shown}");
+        }
+    }
+    let later: Vec<String> = v
+        .get("reboot_required")
+        .and_then(|r| r.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|k| k.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    if !later.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} take{} effect after 'ktbctl device reboot'",
+            join_and(&later),
+            if later.len() == 1 { "s" } else { "" }
+        );
+    }
+    out
+}
+
+/// `auth info`.
+pub fn auth_info(v: &serde_json::Value) -> String {
+    let mut out = String::new();
+    if let Some(f) = v.get("fingerprint").and_then(|f| f.as_str()) {
+        let _ = writeln!(out, "fingerprint         {f}");
+    }
+    let _ = writeln!(out, "authorization mode  {}", mode_line(v.get("mode")));
+    if let Some(n) = v.get("apps").and_then(|n| n.as_u64()) {
+        let _ = writeln!(out, "authorized apps     {n}");
+    }
+    out
+}
+
+/// `auth code` and `auth rotate-code`.
+pub fn auth_code(v: &serde_json::Value) -> String {
+    let code = v.get("code").and_then(|c| c.as_str()).unwrap_or("?");
+    let mut out = format!("{code}\n");
+    if let Some(u) = v.get("uri").and_then(|u| u.as_str()) {
+        let _ = writeln!(out, "{u}");
+    }
+    out
+}
+
+/// `auth mode`.
+pub fn auth_mode(v: &serde_json::Value) -> String {
+    format!("authorization mode {}\n", mode_line(Some(v)))
+}
+
+fn mode_line(mode: Option<&serde_json::Value>) -> String {
+    let left = mode
+        .and_then(|m| m.get("seconds_left"))
+        .and_then(|s| s.as_u64())
+        .unwrap_or(0);
+    let open = mode
+        .and_then(|m| m.get("open"))
+        .and_then(|o| o.as_bool())
+        .unwrap_or(false);
+    if open && left > 0 {
+        format!("is open for {left} s: one management app can be authorized")
+    } else {
+        "is closed".into()
+    }
+}
+
+/// `auth apps`.
+pub fn auth_apps(v: &serde_json::Value) -> String {
+    let apps = v
+        .get("apps")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    if apps.is_empty() {
+        return "no management apps are authorized\n".into();
+    }
+    let mut out = String::new();
+    for a in &apps {
+        let s = |k: &str| a.get(k).and_then(|x| x.as_str()).unwrap_or("");
+        let _ = write!(out, "{}  {}", s("fingerprint"), s("name"));
+        if a.get("this").and_then(|t| t.as_bool()) == Some(true) {
+            out.push_str("  (this one)");
+        }
+        out.push('\n');
+        let mut when = Vec::new();
+        if !s("authorized").is_empty() {
+            when.push(format!("authorized {}", s("authorized")));
+        }
+        if !s("last_seen").is_empty() {
+            when.push(format!("last seen {}", s("last_seen")));
+        }
+        if !when.is_empty() {
+            let _ = writeln!(out, "    {}", when.join(", "));
+        }
     }
     out
 }

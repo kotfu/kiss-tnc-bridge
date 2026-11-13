@@ -73,6 +73,9 @@ pub enum Cmd {
     /// ATOM Lite and Core2 devices on USB, without the daemon
     #[command(subcommand)]
     Device(DeviceCmd),
+    /// A device's authorization code, authorization mode and authorized apps
+    #[command(subcommand)]
+    Auth(AuthCmd),
     /// Look for Bluetooth radios nearby (they must be in pairing mode)
     Scan {
         /// The adapter to scan on (id, MAC or hciN) [default: the default adapter]
@@ -171,6 +174,27 @@ pub enum TncCmd {
     Add(TncAdd),
     /// Remove a TNC no port uses
     Rm { tnc: String },
+    /// A device's radio: its model and address (on the daemon, 'ktbctl edit
+    /// tnc ID' changes a TNC)
+    Update(TncUpdate),
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  \
+    ktbctl --device PORT tnc update radio --model th-d75 --spp-address 40:79:12:E4:95:9D\n  \
+    ktbctl --device PORT tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E")]
+pub struct TncUpdate {
+    /// The TNC: radio, on a device
+    pub tnc: String,
+    /// See 'ktbctl tnc models'
+    #[arg(long)]
+    pub model: Option<String>,
+    /// The radio's Bluetooth Classic address (a TH-D74 or TH-D75)
+    #[arg(long, value_name = "ADDR", conflicts_with = "ble_address")]
+    pub spp_address: Option<String>,
+    /// The radio's Bluetooth LE address (a TD-H9)
+    #[arg(long, value_name = "ADDR")]
+    pub ble_address: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -246,6 +270,46 @@ pub enum DeviceCmd {
     Info,
     /// Install kiss-tnc-bridge firmware over USB: an update, or a clean install
     Flash(FlashArgs),
+    /// The device's settings, or 'set KEY=VALUE ...' to change some
+    Settings {
+        #[command(subcommand)]
+        cmd: Option<SettingsCmd>,
+    },
+    /// Restart the device
+    Reboot,
+    /// Clear the device's settings, radio pairing and authorized apps, then
+    /// restart it. Its firmware, key and authorization code stay
+    Reset,
+    /// Show the device's identify sequence, to tell which one you're managing
+    Identify,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SettingsCmd {
+    /// Change settings: KEY=VALUE ..., such as led_normal=dim
+    Set {
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        pairs: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCmd {
+    /// The device's fingerprint, authorization mode, and how many apps are
+    /// authorized
+    Info,
+    /// The device's authorization code, which authorizes management apps
+    /// over Bluetooth
+    Code,
+    /// Make a new authorization code. Apps already authorized keep working
+    RotateCode,
+    /// Start authorization mode, so one management app can be authorized
+    Mode {
+        /// How long, in seconds [default: the device's, 300]; 0 ends it
+        seconds: Option<u32>,
+    },
+    /// The authorized management apps
+    Apps,
 }
 
 #[derive(Debug, Args)]

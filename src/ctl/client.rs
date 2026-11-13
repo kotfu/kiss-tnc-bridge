@@ -13,17 +13,17 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! A client for the daemon's control socket: one request at a time, and
-//! events for the topics it subscribes to.
+//! A client for the control API: the daemon's socket, or a device's USB
+//! serial port. One request at a time, and events for the topics it
+//! subscribes to.
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::de::DeserializeOwned;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::control::protocol::{
     ApiError, Command, EventMessage, Request, Response, Topic, VERSION,
@@ -37,11 +37,11 @@ pub const DEFAULT_SOCKET: &str = "/run/kiss-tnc-bridge/control.sock";
 pub enum CtlError {
     #[error("{0}")]
     Connect(String),
-    #[error("the daemon closed the connection")]
+    #[error("the connection closed: the daemon stopped, or the device was unplugged")]
     Closed,
     #[error("talking to the daemon: {0}")]
     Io(#[from] io::Error),
-    #[error("the daemon sent something unexpected: {0}")]
+    #[error("got an answer ktbctl didn't expect: {0}")]
     Protocol(String),
     /// The daemon refused or failed the request.
     #[error("{}", .0.message)]
@@ -69,13 +69,21 @@ pub fn result(res: Response) -> Result<Value, CtlError> {
     }
 }
 
+type Reader = BufReader<Box<dyn AsyncRead + Send + Unpin>>;
+type Writer = Box<dyn AsyncWrite + Send + Unpin>;
+
 pub struct Client {
     path: PathBuf,
-    reader: BufReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
+    reader: Reader,
+    writer: Writer,
     next_id: u64,
     /// A line partly read when a read was cancelled.
     line: Vec<u8>,
+    /// A device's USB serial port: it also carries the firmware's log and
+    /// can deliver noise, so lines that aren't JSON are skipped, and ids
+    /// are unique across connections, since a device may still answer
+    /// requests an earlier connection gave up on.
+    serial: bool,
 }
 
 impl Client {
@@ -84,13 +92,38 @@ impl Client {
             .await
             .map_err(|e| CtlError::Connect(connect_hint(path, &e)))?;
         let (r, w) = stream.into_split();
-        Ok(Client {
-            path: path.to_path_buf(),
-            reader: BufReader::new(r),
-            writer: w,
+        Ok(Client::new(
+            path.to_path_buf(),
+            Box::new(r),
+            Box::new(w),
+            false,
+        ))
+    }
+
+    /// A client on a device's USB serial port, already opened without
+    /// resetting the device (`ctl::device::probe::open_quiet`).
+    pub fn over_serial<S>(path: &str, port: S) -> Client
+    where
+        S: AsyncRead + AsyncWrite + Send + 'static,
+    {
+        let (r, w) = tokio::io::split(port);
+        Client::new(PathBuf::from(path), Box::new(r), Box::new(w), true)
+    }
+
+    fn new(
+        path: PathBuf,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        writer: Writer,
+        serial: bool,
+    ) -> Client {
+        Client {
+            path,
+            reader: BufReader::new(reader),
+            writer,
             next_id: 1,
             line: Vec::new(),
-        })
+            serial,
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -112,8 +145,12 @@ impl Client {
     /// Send `command` without waiting for its response, and return its id.
     /// The daemon answers requests by id, so several can be in flight.
     pub async fn send(&mut self, command: Command) -> Result<u64, CtlError> {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = if self.serial {
+            crate::ctl::device::probe::next_id()
+        } else {
+            self.next_id += 1;
+            self.next_id - 1
+        };
         let mut line = serde_json::to_string(&Request {
             v: VERSION,
             id,
@@ -169,15 +206,26 @@ impl Client {
     }
 
     async fn read_line(&mut self) -> Result<Option<Value>, CtlError> {
-        // read_until keeps what it has read in `self.line` if it's
-        // cancelled (the setup wizard races it against the keyboard).
-        if self.reader.read_until(b'\n', &mut self.line).await? == 0 && self.line.is_empty() {
-            return Ok(None);
+        loop {
+            // read_until keeps what it has read in `self.line` if it's
+            // cancelled (the setup wizard races it against the keyboard).
+            if self.reader.read_until(b'\n', &mut self.line).await? == 0 && self.line.is_empty() {
+                return Ok(None);
+            }
+            let line = std::mem::take(&mut self.line);
+            if !self.serial {
+                return serde_json::from_slice(&line)
+                    .map(Some)
+                    .map_err(|e| CtlError::Protocol(e.to_string()));
+            }
+            // The firmware's log, or noise.
+            let text = String::from_utf8_lossy(&line);
+            if text.trim_start().starts_with('{')
+                && let Ok(v) = serde_json::from_str(text.trim())
+            {
+                return Ok(Some(v));
+            }
         }
-        let line = std::mem::take(&mut self.line);
-        serde_json::from_slice(&line)
-            .map(Some)
-            .map_err(|e| CtlError::Protocol(e.to_string()))
     }
 }
 
@@ -217,13 +265,7 @@ mod tests {
     async fn a_cancelled_read_loses_nothing() {
         let (ours, mut daemon) = UnixStream::pair().unwrap();
         let (r, w) = ours.into_split();
-        let mut c = Client {
-            path: PathBuf::new(),
-            reader: BufReader::new(r),
-            writer: w,
-            next_id: 1,
-            line: Vec::new(),
-        };
+        let mut c = Client::new(PathBuf::new(), Box::new(r), Box::new(w), false);
         let line = r#"{"v":1,"event":"lagged","missed":3}"#;
         let (head, tail) = line.split_at(12);
         daemon.write_all(head.as_bytes()).await.unwrap();
@@ -241,5 +283,27 @@ mod tests {
             ),
             _ => panic!("expected the lagged event"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_device_port_skips_its_log_and_noise() {
+        let (ours, device) = tokio::io::duplex(4096);
+        let mut c = Client::over_serial("/dev/ttyACM0", ours);
+        let fake = tokio::spawn(async move {
+            let (r, mut w) = tokio::io::split(device);
+            let mut lines = BufReader::new(r).lines();
+            let req: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            let id = req["id"].as_u64().unwrap();
+            w.write_all(b"I (1234) radio: connecting\n").await.unwrap();
+            w.write_all(b"{\"truncated\n").await.unwrap();
+            w.write_all(b"\xff\xfe\n").await.unwrap();
+            let res = format!("{{\"v\":1,\"id\":{id},\"ok\":true,\"result\":{{\"x\":1}}}}\r\n");
+            w.write_all(res.as_bytes()).await.unwrap();
+            lines
+        });
+        let v = c.call(Command::DeviceInfo).await.unwrap();
+        assert_eq!(v, serde_json::json!({"x": 1}));
+        drop(fake.await.unwrap());
     }
 }

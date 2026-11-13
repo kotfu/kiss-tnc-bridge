@@ -72,7 +72,7 @@ pub fn open_quiet(path: &str) -> Result<NoDrain, CtlError> {
 /// given up on (a firmware starting answers each `device.info` it was
 /// sent while it started). They start from the clock, so another ktbctl's
 /// don't collide either.
-fn next_id() -> u64 {
+pub fn next_id() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
     let _ = NEXT.compare_exchange(

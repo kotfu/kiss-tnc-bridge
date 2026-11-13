@@ -377,7 +377,10 @@ fn tree_line(
             let sess = &s.bridges[bi].ports[pi].sessions[si];
             // Lined up with the ports' STATE column.
             let peer_w = cols.id + cols.kind + cols.place - 2;
-            let since = parse_rfc3339(&sess.since)
+            let since = sess
+                .since
+                .as_deref()
+                .and_then(parse_rfc3339)
                 .map(|t| format!("since {}", local_hm(t)))
                 .unwrap_or_default();
             let text = format!(
@@ -609,7 +612,7 @@ fn session_details(
         p.id,
         peer(&sess.id)
     )];
-    if let Some(t) = parse_rfc3339(&sess.since) {
+    if let Some(t) = sess.since.as_deref().and_then(parse_rfc3339) {
         out.push(format!(
             "connected since {} ({})",
             local_hms(t),
