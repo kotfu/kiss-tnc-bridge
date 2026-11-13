@@ -56,6 +56,19 @@ The same messages travel over three transports:
   lost authorization code is recovered (`auth.code`).
 - Firmware updates don't use this transport: `ktbctl device flash` writes
   the flash directly, as the web installer does.
+- **Requests outlive connections.** A device can't tell when the port is
+  closed, so it answers requests that an earlier connection gave up on: a
+  firmware that's starting answers every `device.info` it was sent while
+  it started, after it's ready. A management app gives each request an id
+  no earlier one used, ignores answers to ids it didn't send, and drops
+  what's waiting in the port when it opens it (found 12 November 2026).
+- **So do subscriptions.** Closing the port doesn't end them, so a
+  management app sends `unsubscribe` when it's done with events.
+- **A device restarting doesn't close the port** either, so a management
+  app that subscribed doesn't know its subscriptions are gone.
+  `device.info`'s `uptime` shows a restart.
+- `ktbctl --device PORT` is a management app for this transport; see
+  [Trying it by hand](#trying-it-by-hand).
 
 ### BLE management
 

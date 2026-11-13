@@ -3,7 +3,8 @@
 Status: decided 7 November 2026; firmware toolchain, eFuses, USB flashing
 and web home 8 November 2026; the StickC Plus SE added, and Phase G moved
 ahead of Phase D, 11 November 2026; Phase D planned for USB only, with
-`ktbctl`'s BLE management moved to Phase E, 12 November 2026
+`ktbctl`'s BLE management moved to Phase E, and D1 and D2 built, with
+testing to wait for the StickC Plus SE, 12 November 2026
 
 ## Goal
 
@@ -364,14 +365,15 @@ fallback if the device commands make `ktbctl` confusing.
 
 Phase D is planned in [plan-phase-d.md](plan-phase-d.md).
 
-- [ ] USB serial on Linux and macOS (Phase D). Windows is out of scope for
-      now: `ktbctl` doesn't build there, because it talks to the daemon
-      over a Unix socket.
-- [ ] `ktbctl device flash`: write firmware over USB, including the first
+- [x] USB serial on Linux and macOS (Phase D): `--device PORT` for the
+      commands a device answers, and the `device` and `auth` commands.
+      Windows is out of scope for now: `ktbctl` doesn't build there,
+      because it talks to the daemon over a Unix socket.
+- [x] `ktbctl device flash`: write firmware over USB, including the first
       install, so a Linux machine is all it takes (decision 13), from local
-      files or a GitHub release (Phase D). The
-      [espflash](https://github.com/esp-rs/espflash) crate may do this
-      from Rust; a spike decides.
+      files or a GitHub release (Phase D), with the
+      [espflash](https://github.com/esp-rs/espflash) crate compiled into
+      `ktbctl`.
 - [ ] BLE management, on Linux first (Phase E). `bluer` is Linux-only, so
       macOS would need another Bluetooth library.
 - [ ] `ktbctl device update`: an over-the-air update over BLE, using the same
@@ -767,12 +769,19 @@ firmware 1.3.0. Planned in [plan-phase-d.md](plan-phase-d.md).
 
 - [ ] **D1: `ktbctl device flash`.** Installs and updates our firmware
       over USB, from local files or a GitHub release, as the web
-      installer does.
-- [ ] **D2: management over USB serial.** `--device PORT` for the
+      installer does. Built 12 November 2026, apart from sending the
+      install notice, which waits for Phase G to define it.
+- [x] **D2: management over USB serial.** `--device PORT` for the
       commands a device answers, and the `device` and `auth` commands.
+      Built 12 November 2026.
+- [ ] **StickC Plus SE support in `ktbctl`**, with its firmware: it
+      shares the ATOM Lite's chip and USB serial chip.
+- [ ] **Testing on all three boards** in one round, once the StickC Plus
+      SE has firmware (the list is in
+      [plan-phase-d.md](plan-phase-d.md#testing)), then software and
+      firmware 1.3.0 ship together.
 
-Not in Phase D: BLE management from `ktbctl` (Phase E), Windows, and the
-StickC Plus SE until it's released.
+Not in Phase D: BLE management from `ktbctl` (Phase E), and Windows.
 
 ### Phase E: iOS app and `ktb-gateway` BLE management
 

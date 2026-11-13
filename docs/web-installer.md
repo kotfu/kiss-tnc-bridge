@@ -7,6 +7,9 @@ The address is permanent. It installs the firmware on an ATOM Lite (later a
 Core2) from a browser over Web Serial, then sets the device up over the
 same cable. A ham with a new ATOM Lite and a computer can have it bridging
 their radio in a few minutes, with no development tools.
+`ktbctl device flash` does the same install from a terminal on Linux or
+macOS, with no browser (README, Devices); this page is the way in for
+everyone else.
 
 The page is built in the site's repository, in the site's own design
 language. This document is the contract between the two repositories: it

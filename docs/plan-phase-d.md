@@ -343,33 +343,47 @@ says a device does too. `ktbctl` takes either.
 ## Testing
 
 On macOS and Linux (a Pi 4, and a Pi 1 B+ for a slow USB host), with an
-ATOM Lite and a Core2:
+ATOM Lite, a Core2 and a StickC Plus SE. What's left waits for the StickC
+Plus SE's firmware, so all three boards are tested in one round before
+software and firmware 1.3.0 ship (decided 12 November 2026).
 
-- [ ] Opening and closing the port with `ktbctl` doesn't reboot either
-      board.
+- [x] Opening and closing the port with `ktbctl` doesn't reboot either
+      board: both on macOS, both on aprscc.
 - [ ] Clean install over M5Stack's factory firmware, over B.B. Link (ATOM
-      Lite), and over a blank flash.
+      Lite), and over a blank flash. So far only over our own firmware.
 - [ ] Update with the settings, the radio pairing and the authorization
-      code kept.
-- [ ] Going back to an older version.
+      code kept. The settings and the key (the same fingerprint) are kept
+      on both boards; not yet tried with a radio paired.
+- [x] Going back to an older version: the ATOM Lite from 1.2.0-dev to
+      1.1.0, with the warning.
 - [ ] Unplugging mid-install, then installing again.
-- [ ] From a local manifest, and from a GitHub release, cached and not.
-- [ ] A part whose hash doesn't match writes nothing.
+- [x] From a local manifest, and from a GitHub release, cached and not.
+- [ ] A part whose hash doesn't match writes nothing. Unit-tested, not
+      tried on a board.
 - [ ] A manifest for the other board is refused.
-- [ ] On Linux, ModemManager doesn't grab the port mid-install.
-- [ ] The Core2's CH9102 on macOS, with Apple's driver and with WCH's.
-- [ ] D2's commands against both boards, including pairing a TH-D75 and
-      selecting a TD-H9 with `tnc update`.
+- [ ] On Linux, ModemManager doesn't grab the port mid-install. It isn't
+      running on aprscc.
+- [ ] The Core2's CH9102 on macOS, with Apple's driver (works) and with
+      WCH's.
+- [ ] D2's commands against every board, including pairing a TH-D75 and
+      `kick`. Everything else has been tried on the Core2, and most of it
+      on the ATOM Lite, including selecting a TD-H9 with `tnc update`.
+- [ ] The armhf build on wolfcub.
+- [ ] `--baud` falling back to 115200 on every board (done on the ATOM
+      Lite), and the ROM telling a Core2 and a StickC Plus SE on their own.
 
 ## Docs and release
 
-- [ ] `ktbctl`'s help, the README, and a page on installing and managing a
-      device from the command line.
-- [ ] [control-api.md](control-api.md): "Trying it by hand" points to
-      `ktbctl --device`; the USB serial section names `ktbctl`.
-- [ ] [web-installer.md](web-installer.md): `ktbctl device flash` as the
+- [x] `ktbctl`'s help, and the README's
+      [Devices](../README.md#devices-the-atom-lite-and-core2) section on
+      installing and managing a device from the command line.
+- [x] [control-api.md](control-api.md): "Trying it by hand" points to
+      `ktbctl --device`; the USB serial section names `ktbctl`, and says
+      what a management app on USB has to allow for.
+- [x] [web-installer.md](web-installer.md): `ktbctl device flash` as the
       way in without Chrome.
-- [ ] The roadmap's Phase D items ticked.
+- [x] The roadmap's Phase D items ticked, as far as they're done.
+- [ ] The README's Devices section adds the StickC Plus SE.
 - [ ] Software 1.3.0 and firmware 1.3.0 released together; each changelog
       names the other.
 
