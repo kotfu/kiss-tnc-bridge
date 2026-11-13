@@ -1,0 +1,4 @@
+dependencies:
+  # As the firmware: only the LVGL build (sdkconfig.lvgl) calls them.
+  lvgl/lvgl: "^9.6"
+  espressif/esp_lvgl_port: "^2.9"

@@ -23,7 +23,12 @@ target/release/espflash-usb probe PORT                # device.info, without res
 target/release/espflash-usb open-close PORT           # does opening the port reset it?
 target/release/espflash-usb chip PORT [--baud N]      # the ROM: chip, package, flash, MAC
 target/release/espflash-usb flash PORT MANIFEST [--baud N] [--clean] [--no-verify]
+target/release/espflash-usb read PORT FILE [--offset N] [--size N] [--baud N] [--block N] [--in-flight N]
 ```
+
+`read` reads flash to a file, checked against the chip's own MD5 of it,
+and resets the device after. Use 115200 on the CH552 boards (see
+[Reading flash](#reading-flash)).
 
 `flash` checks every part against the manifest (size and SHA-256), asks
 the firmware for `device.info`, connects to the ROM and loads the stub,
@@ -95,6 +100,28 @@ The firmware README's "921600 didn't hold on the ATOM Lite" is the same
 thing. **1500000 works on both boards**, so it can be `ktbctl`'s rate,
 falling back to 115200. The web installer's spec says 921600, which
 fails on the ATOM Lite.
+
+### Reading flash
+
+Backing up the StickC Plus SE's factory firmware (12 November 2026),
+which has the ATOM Lite's CH552, on macOS. **Reading isn't writing:**
+the rates that write cleanly don't read.
+
+| Baud | Read |
+|---|---|
+| 1500000 | Bytes lost in every 4 KB block, with 1 block in flight or 64; smaller blocks (1 KB, 512, 256) lose bytes or time out |
+| 750000 | Bytes lost (esptool's `read-flash`) |
+| 500000 | 256 KB read cleanly once; all 4 MB lost bytes partway through |
+| 250000 | 256 KB read cleanly once; not tried on 4 MB |
+| 115200 | All 4 MB, twice, each MD5-checked, the two identical: 376 s each |
+
+A write is the computer sending a block and the chip acknowledging it,
+so the CH552 only ever carries a short answer back. A read is the chip
+streaming flash back at full rate, and somewhere on the way (the CH552's
+buffering, or macOS's driver for it) bytes are dropped. Nothing `ktbctl`
+does today reads flash; anything that does should read at 115200 on these
+boards, or in small pieces with retries. Not tried on Linux, or on the
+Core2's CH9102.
 
 ### Connecting takes 7 to 8 s
 

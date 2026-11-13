@@ -1,0 +1,5 @@
+menu "StickC Plus SE spike"
+config SPIKE_LVGL
+    bool "Draw a status screen with LVGL instead of the colour tests"
+    default n
+endmenu

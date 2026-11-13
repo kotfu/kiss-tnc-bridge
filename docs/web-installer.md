@@ -50,7 +50,7 @@ Decided:
 - **Linux:** the browser runs as the user, who needs permission to open the
   serial device: membership of `dialout` on Debian and Ubuntu (`uucp` on
   Arch). The page says so when opening the port fails on Linux.
-- **Windows:** the ATOM Lite's USB serial chip presents itself as FTDI
+- **Windows:** the ATOM Lite's and StickC Plus SE's USB serial chip presents itself as FTDI
   (below), which has a driver that Windows installs by itself. The Core2's (WCH CH9102) may need WCH's
   driver on older Windows; the page links to it.
 
@@ -83,7 +83,7 @@ attaches these files to the GitHub release:
 | `ktb-<board>-<version>-ota-data-initial.bin` | Blank OTA data, at `0xB000`. Writing it makes the device boot the first app partition |
 | `ktb-<board>-<version>-app.bin` | The signed firmware, at `0x10000`. The same file is the image for updates over BLE |
 
-`<board>` is `atom-lite`, `stickc-plus-se` or `core2`, as in `device.info`'s `board`.
+`<board>` is `atom-lite`, `stickc-plus-se` or `core2-v1.3`, as in `device.info`'s `board`.
 `<version>` is the firmware's version, without a `v`.
 
 Each board's layout is fixed from its first release (see the roadmap's
@@ -99,8 +99,8 @@ uses that board's layout, so any version can be installed over any other.
 Firmware releases are tagged `firmware-v<version>`, apart from the
 daemon's `v<version>` tags, and are published as not "latest", so
 GitHub's latest release stays the daemon's. One release carries every
-released board's files: from 1.2.0 the ATOM Lite and Core2. CI builds the
-StickC Plus SE too, but leaves it out of releases until it has a UI.
+released board's files: from 1.2.0 the ATOM Lite and Core2, and from
+1.3.0 the StickC Plus SE too.
 
 ### The manifest
 
@@ -183,7 +183,12 @@ likely devices:
 | Board | USB serial chip | `usbVendorId` | `usbProductId` | Notes |
 |---|---|---|---|---|
 | ATOM Lite | A CH552 presenting itself as FTDI: manufacturer "Hades2001", product "M5stack" | `0x0403` | `0x6001` | Read from the project's ATOM Lite. Other FTDI devices share these ids, so the filter narrows the list, it doesn't identify the board |
+| StickC Plus SE | The same CH552, with the same strings | `0x0403` | `0x6001` | Read from the project's StickC Plus SE (12 November 2026). Identical to the ATOM Lite's: only the USB serial number differs, and that's per unit |
 | Core2 v1.3 | WCH CH9102, product "USB Single Serial" | `0x1a86` | `0x55d4` | Read from the project's Core2 (12 November 2026) |
+
+So the filters are two, `{usbVendorId: 0x0403, usbProductId: 0x6001}` and
+`{usbVendorId: 0x1a86, usbProductId: 0x55d4}`. The ids tell a Core2 from
+the other two, but not an ATOM Lite from a StickC Plus SE (see step 4).
 
 A link under the button connects without filters, for a board whose chip
 isn't listed.
@@ -205,20 +210,46 @@ serial](control-api.md#usb-serial):
    [control-api.md](control-api.md#usb-serial)). Some platforms assert both
    when a port opens, which the ATOM's reset circuit ignores; if the device
    reboots anyway, it's back within a few seconds.
-3. Send `{"v":1,"id":1,"cmd":"device.info"}` and a newline, and read lines,
+3. Send `{"v":1,"id":N,"cmd":"device.info"}` and a newline, and read lines,
    skipping any that don't start with `{` (the firmware's log shares the
    port). Wait up to 3 seconds, sending the request again once a second.
+   `N` is an id this page hasn't used before (from the clock, say), and
+   answers to other ids are ignored: the device still answers requests an
+   earlier connection gave up on, and a firmware that's starting answers
+   every `device.info` it was sent while it started (see
+   [control-api.md](control-api.md#usb-serial)).
 
 If it answers, the page knows the board, the firmware version and the
 device's fingerprint, and shows them. If it doesn't, the device has other
 firmware (M5Stack's factory test, B.B. Link, or anything else) or none.
 
 The page then connects to the chip's ROM bootloader with `esptool-js`,
-which resets the chip into download mode. That gives the chip (`ESP32-PICO-D4` on the
-ATOM Lite) and the flash size (4 MB). The page checks them against the
-board: an ATOM Lite is an ESP32-PICO-D4 with 4 MB of flash. If the chip
-doesn't match any board the release has, the page stops and says what it
-found.
+which resets the chip into download mode. That gives the chip, with its
+package, and the flash size, which the page checks against the boards
+(read from the project's boards with espflash, 12 November 2026):
+
+| Board | Chip | Flash | USB ids |
+|---|---|---|---|
+| ATOM Lite | ESP32-PICO-D4 (revision 1.1) | 4 MB | `0403:6001` |
+| StickC Plus SE | ESP32-PICO-D4 (revision 1.1) | 4 MB | `0403:6001` |
+| Core2 v1.3 | ESP32-D0WDQ6-V3 (revision 3.1) | 16 MB | `1a86:55d4` |
+
+- **The firmware answered** `device.info`: its `board` says which, and the
+  chip only has to agree.
+- **A Core2** is told by its chip and flash (and its USB ids) alone.
+- **An ESP32-PICO-D4 with 4 MB that didn't answer** is an ATOM Lite or a
+  StickC Plus SE, and nothing the page can read tells them apart: they
+  have the same chip, flash and USB serial chip. The page asks which,
+  with a picture of each (the StickC has a screen; the ATOM is a 24 mm
+  square with one button and no screen), and offers only the boards the chosen release
+  has firmware for. `ktbctl device flash` asks for `--board` in the same
+  case.
+- **Anything else** doesn't match a board: the page stops and says what
+  it found.
+
+The package is in eFuse block 0, word 3, which esptool reads for its
+chip description; espflash doesn't report it, and `ktbctl` reads the
+eFuse itself.
 
 Step 4 can run before step 2, so the picker can show only versions with
 firmware for the board found.

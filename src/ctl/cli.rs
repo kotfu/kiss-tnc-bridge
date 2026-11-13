@@ -23,8 +23,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "ktbctl",
     version,
-    about = "Manage kiss-tnc-bridge through its control socket, and ATOM Lite and Core2 \
-             devices over USB",
+    about = "Manage kiss-tnc-bridge through its control socket, and ATOM Lite, StickC Plus SE \
+             and Core2 v1.3 devices over USB",
     after_help = "With no command, ktbctl opens the TUI in a terminal and shows status \
                   otherwise. Bridges and TNCs can be named by id or by name. Commands that \
                   would disconnect someone ask first in a terminal, and are refused without \
@@ -36,7 +36,7 @@ pub struct Cli {
     pub socket: Option<PathBuf>,
     /// A device's USB serial port, for the device commands: a
     /// /dev/serial/by-id path or a device name [env: KTBCTL_DEVICE]
-    /// [default: the only ATOM Lite or Core2 on USB]
+    /// [default: the only device on USB]
     #[arg(long, global = true, value_name = "PORT")]
     pub device: Option<String>,
     /// Print the results as JSON, for scripts
@@ -70,7 +70,8 @@ pub enum Cmd {
     /// Serial devices, by stable path
     #[command(subcommand)]
     Serial(SerialCmd),
-    /// ATOM Lite and Core2 devices on USB, without the daemon
+    /// ATOM Lite, StickC Plus SE and Core2 v1.3 devices on USB, without
+    /// the daemon
     #[command(subcommand)]
     Device(DeviceCmd),
     /// A device's authorization code, authorization mode and authorized apps
@@ -263,8 +264,8 @@ pub enum SerialCmd {
 
 #[derive(Debug, Subcommand)]
 pub enum DeviceCmd {
-    /// USB serial ports with an ATOM Lite's or Core2's USB serial chip, and
-    /// what each one runs
+    /// USB serial ports with an ATOM Lite's, StickC Plus SE's or Core2
+    /// v1.3's USB serial chip, and what each one runs
     List,
     /// The device's board, firmware, fingerprint and state
     Info,
@@ -321,7 +322,7 @@ pub enum AuthCmd {
                         Examples:\n  \
                         ktbctl device flash\n  \
                         ktbctl device flash --version 1.3.0\n  \
-                        ktbctl device flash --manifest ktb-core2-1.3.0-manifest.json\n  \
+                        ktbctl device flash --manifest ktb-core2-v1.3-1.3.0-manifest.json\n  \
                         ktbctl device flash --clean --board atom-lite"
 )]
 pub struct FlashArgs {
@@ -340,9 +341,9 @@ pub struct FlashArgs {
     /// authorized apps, device key and authorization code
     #[arg(long)]
     pub clean: bool,
-    /// The board, when the device can't say: atom-lite or core2. An ATOM
-    /// Lite and a StickC Plus SE have the same chip
-    #[arg(long, value_name = "BOARD")]
+    /// The board, when the device can't say. An ATOM Lite and a StickC
+    /// Plus SE have the same chip
+    #[arg(long, value_name = "BOARD", value_parser = ["atom-lite", "stickc-plus-se", "core2-v1.3"])]
     pub board: Option<String>,
     /// The baud rate to write at [default: 1500000, then 115200 if that fails]
     #[arg(long)]

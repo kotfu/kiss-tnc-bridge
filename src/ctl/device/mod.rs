@@ -13,7 +13,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-//! ESP32 devices (the ATOM Lite and Core2) on USB serial: finding them,
+//! ESP32 devices (the ATOM Lite, StickC Plus SE and Core2 v1.3) on USB serial: finding them,
 //! opening their port without resetting them, asking what they run, and
 //! installing firmware on them (docs/plan-phase-d.md, D1). `ktbctl device`
 //! talks to them directly, with no daemon.
@@ -34,7 +34,7 @@ use serde_json::{Map, Value};
 /// the device said.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeviceInfo {
-    /// `atom-lite`, `core2` or `stickc-plus-se`.
+    /// `atom-lite`, `stickc-plus-se` or `core2-v1.3`.
     pub board: String,
     pub firmware: Firmware,
     pub protocol: u32,
@@ -129,11 +129,14 @@ pub fn name_warning(name: &str) -> Option<String> {
     ))
 }
 
+/// The boards, by the ids `device.info`, manifests and release files use.
+pub const BOARDS: &[&str] = &["atom-lite", "stickc-plus-se", "core2-v1.3"];
+
 /// A board's name for people: `ATOM Lite` for `atom-lite`.
 pub fn board_name(board: &str) -> &str {
     match board {
         "atom-lite" => "ATOM Lite",
-        "core2" => "Core2",
+        "core2-v1.3" => "Core2 v1.3",
         "stickc-plus-se" => "StickC Plus SE",
         other => other,
     }

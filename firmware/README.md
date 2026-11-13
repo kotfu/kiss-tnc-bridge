@@ -48,6 +48,8 @@ authorized over BLE.
 | `main/settings.*` | `public_name`, `led_normal`, `led_wake_seconds`, `led_brightness` in NVS |
 | `main/auth.*` | The X25519 device key, the authorization code, authorization mode |
 | `main/ui.*`, `main/led.*` | Gestures, LED states and events, dark mode |
+| `main/stickc_screen.cpp` | The StickC Plus SE's screen as the ATOM's LED, filled with its color |
+| `main/axp192.*` | The AXP192 power chip on the Core2 and the StickC Plus SE: rails, backlight, battery, power button |
 | `main/radio.*` | The radio: one task for the SPP link, KISS init, reconnecting, scanning and pairing |
 | `main/kiss.*` | KISS framing, and AX.25 decoding for frame events |
 | `main/phones.*` | The BLE KISS service, advertising, and phones' sessions |
@@ -64,7 +66,7 @@ authorized over BLE.
 . ~/src/esp/esp-idf/export.sh
 cd firmware
 tools/dev-key.sh        # once: the development signing key, never committed
-BOARD=atom-lite          # or stickc-plus-se, core2
+BOARD=atom-lite          # or stickc-plus-se, core2-v1.3
 idf.py -B build-dev-$BOARD -DSDKCONFIG=build-dev-$BOARD/sdkconfig \
   -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.$BOARD;sdkconfig.dev" build
 idf.py -B build-dev-$BOARD -p /dev/cu.usbserial-XXXX -b 115200 flash
@@ -184,11 +186,15 @@ StickC Plus SE share the 4 MB flash layout; the Core2 has its own.
 | Board | `<board>` | Chip | Flash | PSRAM | State |
 |---|---|---|---|---|---|
 | M5Stack ATOM Lite | `atom-lite` | ESP32-PICO-D4 | 4 MB | — | The LED and button UI |
-| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | Builds; no UI yet. Button A works as the ATOM's button; the screen and red LED are dark |
-| M5Stack Core2 v1.3 | `core2` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | The touchscreen UI for 1.2 ([core2-ui.md](../docs/core2-ui.md)), in progress |
+| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | The ATOM's UI until it has its own: the whole screen is the LED, button A the button |
+| M5Stack Core2 v1.3 | `core2-v1.3` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | The touchscreen UI for 1.2 ([core2-ui.md](../docs/core2-ui.md)), in progress |
 
-The StickC Plus SE hasn't been tried on a device yet. The Core2 has been:
-its AXP192 power chip, screen and touch are set up as M5Stack's own code
+The StickC Plus SE runs the ATOM Lite's UI ([atom-lite-ui.md](../docs/atom-lite-ui.md))
+until its own is designed: the whole screen shows the LED's colors and
+patterns, `led_brightness` sets the backlight, and button A is the
+ATOM's button. On a device it installs with `ktbctl device flash`, is
+managed with `ktbctl` over USB, and bridges a TD-H9 to a BLE KISS app. The Core2 has been tried on a device: its
+AXP192 power chip, screen and touch are set up as M5Stack's own code
 does, and it bridges a TH-D75.
 
 ## Releases
@@ -201,7 +207,7 @@ builds with the release key, from the `FIRMWARE_SIGNING_KEY` repository
 secret, and publishes a GitHub release, never marked latest (that stays
 the daemon's), with the files the
 [web installer](../docs/web-installer.md#what-a-release-publishes) reads
-for every released board (not the StickC Plus SE yet).
+for every board.
 A version with a hyphen is a prerelease. Betas and release candidates
 are numbered with no dot: `1.1.0-beta1`, `1.1.0-rc1`. (`1.0.0-rc.1` came
 before this convention.)

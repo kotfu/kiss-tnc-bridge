@@ -1,10 +1,13 @@
-# The UI is the board's: the LED and the button on the ATOM Lite (and, for
-# now, the StickC Plus SE), the touch screen on the Core2 (board.h).
+# The UI is the board's: the LED and the button on the ATOM Lite, the touch
+# screen on the Core2 (board.h). The StickC Plus SE runs the ATOM's UI, with
+# its screen as the LED, until it has its own.
 set(srcs "main.cpp" "console.cpp" "control.cpp" "settings.cpp" "auth.cpp"
          "firmware.cpp" "radio.cpp" "storage.cpp" "control_radio.cpp" "kiss.cpp"
          "phones.cpp" "activity.cpp" "errors.cpp" "power.cpp")
 if(CONFIG_KTB_BOARD_CORE2)
     list(APPEND srcs "core2_ui.cpp" "core2_hw.cpp" "axp192.cpp")
+elseif(CONFIG_KTB_BOARD_STICKC_PLUS_SE)
+    list(APPEND srcs "ui.cpp" "stickc_screen.cpp" "axp192.cpp")
 else()
     list(APPEND srcs "ui.cpp" "led.cpp")
 endif()

@@ -229,7 +229,7 @@ pub fn serial(list: &[SerialEntry]) -> String {
 /// `device list`: each likely port, and what answered on it.
 pub fn devices(found: &[Found]) -> String {
     if found.is_empty() {
-        return "no ATOM Lite or Core2 found on USB. Check that it's plugged in with a cable \
+        return "no ATOM Lite, StickC Plus SE or Core2 v1.3 found on USB. Check that it's plugged in with a cable \
                 that carries data (some carry only power)\n"
             .into();
     }
@@ -262,7 +262,7 @@ pub fn devices(found: &[Found]) -> String {
                     "    no answer: not running kiss-tnc-bridge firmware, or not started yet"
                 );
                 if let Some(b) = f.port.looks_like {
-                    let _ = write!(out, " (the USB serial chip is the {b}'s)");
+                    let _ = write!(out, " (its USB serial chip is the one on the {b})");
                 }
                 out.push('\n');
             }
@@ -833,7 +833,7 @@ mod tests {
             device: "/dev/ttyUSB0".into(),
             usb_id: Some("0403:6001".into()),
             description: Some("Hades2001 M5stack".into()),
-            looks_like: Some("ATOM Lite"),
+            looks_like: Some("ATOM Lite or StickC Plus SE"),
             ids: Some((0x0403, 0x6001)),
         }
     }
@@ -898,8 +898,13 @@ mod tests {
         );
         assert_eq!(lines[3], "    error: advertising didn't start");
         assert!(lines[6].starts_with("    no answer:"), "{text}");
-        assert!(lines[6].ends_with("(the USB serial chip is the ATOM Lite's)"));
+        assert!(
+            lines[6]
+                .ends_with("(its USB serial chip is the one on the ATOM Lite or StickC Plus SE)")
+        );
         assert_eq!(lines[9], "    in use by another program");
-        assert!(devices(&[]).starts_with("no ATOM Lite or Core2 found on USB"));
+        assert!(
+            devices(&[]).starts_with("no ATOM Lite, StickC Plus SE or Core2 v1.3 found on USB")
+        );
     }
 }

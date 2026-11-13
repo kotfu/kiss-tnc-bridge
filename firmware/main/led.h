@@ -1,5 +1,6 @@
-// The ATOM Lite's one SK6812 RGB LED. On boards without one (board.h),
-// init() and show() do nothing.
+// The ATOM Lite's one SK6812 RGB LED (led.cpp). On the StickC Plus SE the
+// whole screen stands in for it (stickc_screen.cpp). On boards with
+// neither (board.h), init() and show() do nothing.
 #pragma once
 
 #include <cstdint>

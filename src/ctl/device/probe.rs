@@ -224,7 +224,7 @@ mod tests {
             // An answer to a request sent before, by another connection.
             let stale = INFO
                 .replace("ID", &(id - 1).to_string())
-                .replace("atom-lite", "core2");
+                .replace("atom-lite", "core2-v1.3");
             w.write_all(format!("{stale}\n").as_bytes()).await.unwrap();
             // The answer in two pieces, as a serial port may deliver it.
             let answer = INFO.replace("ID", &id.to_string());
