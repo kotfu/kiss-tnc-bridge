@@ -15,6 +15,12 @@ ESP-IDF project with its procedure and findings in its own README.
   client is [`ble-update`](ble-update), Rust with `bluer`, cross-built like
   the Phase 0 spikes (`spikes/ble-update/deploy.sh`).
 
+## Phase G (the StickC Plus SE)
+
+- [`stickc-plus-se`](stickc-plus-se/README.md): the StickC Plus SE's
+  hardware on a device (power chip, clock, screen, LED, buttons, buzzer),
+  and what LVGL costs in flash and RAM without PSRAM.
+
 ## Phase D (`ktbctl` device support)
 
 For [docs/plan-phase-d.md](../docs/plan-phase-d.md).

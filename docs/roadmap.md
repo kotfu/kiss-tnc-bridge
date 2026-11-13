@@ -486,9 +486,15 @@ what follows. Firmware 1.2's screens are designed in
 
 ### StickC Plus SE firmware
 
-**Provisional.** The StickC Plus SE is a supported board, but everything
-below is from M5Stack's specifications and stays open until it's been
-tried on a device.
+The StickC Plus SE's hardware has been tried on a device (see [Hardware
+notes](#m5stickc-plus-se)); its UI is still to design.
+
+**The UI is LVGL**, as on the Core2 (decided 12 November 2026, from
+[spikes/stickc-plus-se](../spikes/stickc-plus-se/README.md#lvgl)): about
+361 KB of flash and 37 KB of internal RAM for a status screen, with
+LVGL's memory in the ordinary heap since there's no PSRAM. That leaves
+the StickC with about the heap the Core2 has with a radio and a phone,
+and the UI shares the Core2's toolkit.
 
 The same firmware core again, on the ATOM Lite's chip and flash layout,
 with the Core2's UI made to fit a 135×240 screen and two buttons:
@@ -499,8 +505,8 @@ with the Core2's UI made to fit a 135×240 screen and two buttons:
 - [ ] Boot splash, and reset by holding button A at power-on, as the ATOM
       does with its button.
 - [ ] Battery and charging from the AXP192, as on the Core2.
-- [ ] The red LED and the passive buzzer: square-wave tones at any pitch,
-      in patterns, for the events the Core2 plays sounds for.
+- [ ] The red LED for events. No sound: the buzzer is too quiet to use
+      (see [Hardware notes](#m5stickc-plus-se)).
 
 ---
 
@@ -606,22 +612,43 @@ The Phase A update spike showed this works on the ATOM Lite:
 
 ### M5StickC Plus SE
 
-**Provisional:** not yet tested on a device; from M5Stack's specifications.
+Tried on a device from 12 November 2026
+([spikes/stickc-plus-se](../spikes/stickc-plus-se/README.md)); what isn't
+marked as tried is still from M5Stack's specifications.
 
-- ESP32-PICO-D4, the ATOM Lite's chip: Bluetooth Classic and BLE, 4 MB
-  flash, 520 KB SRAM and no PSRAM. M5Stack's page lists only Wi-Fi, but the
-  chip has both kinds of Bluetooth. The bridge, the flash layout and the
-  control API should carry over unchanged, and the ATOM Lite's heap
-  headroom (at least 134.6 KB free) leaves room for a screen.
-- An AXP192 power chip, set up over I2C before the screen has power. The
-  first Core2 revisions use the same chip.
-- A 1.14" 135×240 colour screen (ST7789v2) and one red LED in place of the
-  ATOM's RGB LED, so the LED design doesn't carry over: it needs a small
-  status screen, close to the Core2's.
-- Two buttons and a power button on the AXP192, against the ATOM's one.
+- ESP32-PICO-D4 revision 1.1, the ATOM Lite's chip: Bluetooth Classic and
+  BLE, 4 MB flash, 520 KB SRAM and no PSRAM (tried). M5Stack's page lists
+  only Wi-Fi, but the chip has both kinds of Bluetooth. The bridge, the
+  flash layout and the control API should carry over unchanged. Its USB
+  serial chip is the ATOM Lite's CH552, with the same USB ids, so the two
+  are told apart only by the USB serial number or by asking the firmware.
+- An AXP192 power chip at 0x34 on the internal I2C bus (SDA G21, SCL
+  G22), and a BM8563 real-time clock at 0x51 (tried), which M5Stack's page
+  doesn't list. USB power comes in on the AXP192's VBUS, not ACIN as on
+  the Core2. As the factory firmware leaves it: LDO2 at 2.8 V for the
+  backlight (its voltage sets the brightness), LDO3 at 3.0 V for the
+  screen's logic, and EXTEN on.
+- A 1.14" 135×240 colour screen, an ST7789v2 on SPI (MOSI G15, CLK G13,
+  DC G23, RST G18, CS G5) at 40 MHz, offset 52 by 40 in the controller's
+  memory, colours inverted, RGB order (tried: orientation, offsets and
+  colours right). Portrait with the USB port at the bottom.
+- One red LED on G10, active low (tried), in place of the ATOM's RGB LED,
+  so the LED design doesn't carry over: it needs a small status screen,
+  close to the Core2's.
+- Three buttons (tried), with the USB end towards you:
+
+  | Button | Where | Wired to |
+  |---|---|---|
+  | A | The large button on the face, near the USB end | G37, low when pressed |
+  | B | The right side, at the end away from USB | G39, low when pressed |
+  | Power | The left side, near the USB end | The AXP192: short and long presses as interrupts (long at about 1 s); held about 4 s, it cuts the power |
+
+- A passive buzzer on G2, **too quiet to use** (tried): driven as hard as
+  a GPIO can (a square wave at 50% duty), 2.0 and 2.7 kHz could only be
+  heard a few inches away, and 4 kHz not at all. The UI uses no sound.
 - A built-in 120 mAh battery behind the AXP192, so no low-current cut-off
   like the Tail Bat's, but only an hour or two of running, less with the
-  screen lit.
+  screen lit. It charges at about 86 mA from USB (tried).
 - The StickC Plus without the IMU, which the bridge doesn't use.
 
 ---
