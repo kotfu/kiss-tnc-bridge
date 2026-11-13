@@ -23,7 +23,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "ktbctl",
     version,
-    about = "Manage kiss-tnc-bridge through its control socket",
+    about = "Manage kiss-tnc-bridge through its control socket, and ATOM Lite and Core2 \
+             devices over USB",
     after_help = "With no command, ktbctl opens the TUI in a terminal and shows status \
                   otherwise. Bridges and TNCs can be named by id or by name. Commands that \
                   would disconnect someone ask first in a terminal, and are refused without \
@@ -31,9 +32,14 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     /// The daemon's control socket [env: KTBCTL_SOCKET] [default: /run/kiss-tnc-bridge/control.sock]
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH", conflicts_with = "device")]
     pub socket: Option<PathBuf>,
-    /// Print the daemon's results as JSON, for scripts
+    /// A device's USB serial port, for the device commands: a
+    /// /dev/serial/by-id path or a device name [env: KTBCTL_DEVICE]
+    /// [default: the only ATOM Lite or Core2 on USB]
+    #[arg(long, global = true, value_name = "PORT")]
+    pub device: Option<String>,
+    /// Print the results as JSON, for scripts
     #[arg(long, global = true)]
     pub json: bool,
     /// Go ahead with changes that would disconnect someone, without asking
@@ -64,6 +70,9 @@ pub enum Cmd {
     /// Serial devices, by stable path
     #[command(subcommand)]
     Serial(SerialCmd),
+    /// ATOM Lite and Core2 devices on USB, without the daemon
+    #[command(subcommand)]
+    Device(DeviceCmd),
     /// Look for Bluetooth radios nearby (they must be in pairing mode)
     Scan {
         /// The adapter to scan on (id, MAC or hciN) [default: the default adapter]
@@ -226,6 +235,15 @@ pub struct BtWho {
 pub enum SerialCmd {
     /// Serial devices present, with known TNCs flagged
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceCmd {
+    /// USB serial ports with an ATOM Lite's or Core2's USB serial chip, and
+    /// what each one runs
+    List,
+    /// The device's board, firmware, fingerprint and state
+    Info,
 }
 
 #[derive(Debug, Subcommand)]

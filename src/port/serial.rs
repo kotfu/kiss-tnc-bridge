@@ -56,8 +56,9 @@ pub fn connector(tnc_id: String, device: SerialDevice, model: TncModel) -> Seria
 /// for good, holding a runtime thread, with no timeout able to fire.
 /// Bytes written are already in the kernel's queue, which is all the bridge
 /// needs; a device that doesn't take them shows up as writes that don't
-/// complete, which async code can time out.
-struct NoDrain(SerialStream);
+/// complete, which async code can time out. `ktbctl` uses it for devices'
+/// USB serial ports too.
+pub struct NoDrain(pub SerialStream);
 
 /// Unsent output is discarded on close. Otherwise Linux holds `close()` for
 /// up to 30 s (the tty's closing wait) trying to deliver it to a device

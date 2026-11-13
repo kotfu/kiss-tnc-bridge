@@ -23,6 +23,7 @@ use crate::control::protocol::{
     BridgeStatus, BtDevice, CheckResult, Dir, Event, ModelEntry, PlanResult, PortStatus,
     ProblemJson, SerialEntry, Status,
 };
+use crate::ctl::device::{DeviceInfo, Found, board_name, ports::DevicePort};
 use crate::reconcile::{Action, Plan};
 
 /// `status`, for every bridge or just one (by id or name).
@@ -218,6 +219,136 @@ pub fn serial(list: &[SerialEntry]) -> String {
         for a in &e.also {
             let _ = writeln!(out, "    also {a}");
         }
+    }
+    out
+}
+
+/// `device list`: each likely port, and what answered on it.
+pub fn devices(found: &[Found]) -> String {
+    if found.is_empty() {
+        return "no ATOM Lite or Core2 found on USB. Check that it's plugged in with a cable \
+                that carries data (some carry only power)\n"
+            .into();
+    }
+    let mut out = String::new();
+    for f in found {
+        let _ = writeln!(out, "{}", f.port.path);
+        let _ = writeln!(out, "    {}", port_details(&f.port));
+        match (&f.info, &f.error) {
+            (Some(i), _) => {
+                let _ = write!(
+                    out,
+                    "    {}, firmware {}",
+                    board_name(&i.board),
+                    i.firmware.version
+                );
+                if let Some(fp) = &i.fingerprint {
+                    let _ = write!(out, ", fingerprint {fp}");
+                }
+                out.push('\n');
+                for e in &i.errors {
+                    let _ = writeln!(out, "    error: {}", e.message);
+                }
+            }
+            (None, Some(e)) => {
+                let _ = writeln!(out, "    {e}");
+            }
+            (None, None) => {
+                let _ = write!(
+                    out,
+                    "    no answer: not running kiss-tnc-bridge firmware, or not started yet"
+                );
+                if let Some(b) = f.port.looks_like {
+                    let _ = write!(out, " (the USB serial chip is the {b}'s)");
+                }
+                out.push('\n');
+            }
+        }
+    }
+    out
+}
+
+/// The device a port is, its USB product and its ids, on one line:
+/// `/dev/ttyUSB0  Hades2001 M5stack  (0403:6001)`.
+fn port_details(p: &DevicePort) -> String {
+    let mut parts = Vec::new();
+    let device = p.device.display().to_string();
+    if device != p.path {
+        parts.push(device);
+    }
+    if let Some(d) = &p.description {
+        parts.push(d.clone());
+    }
+    if let Some(u) = &p.usb_id {
+        parts.push(format!("({u})"));
+    }
+    if parts.is_empty() {
+        "not a USB serial port ktbctl can see".into()
+    } else {
+        parts.join("  ")
+    }
+}
+
+/// `device info`.
+pub fn device_info(port: &DevicePort, i: &DeviceInfo) -> String {
+    let mut out = format!("{} on {}\n", board_name(&i.board), port.path);
+    let mut row = |label: &str, value: String| {
+        let _ = writeln!(out, "    {label:<13}{value}");
+    };
+    let fw = &i.firmware;
+    let details: Vec<String> = [
+        fw.built.as_ref().map(|b| format!("built {b}")),
+        fw.partition.clone(),
+        fw.state.clone(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if details.is_empty() {
+        row("firmware", fw.version.clone());
+    } else {
+        row(
+            "firmware",
+            format!("{} ({})", fw.version, details.join(", ")),
+        );
+    }
+    if let Some(v) = &fw.rolled_back {
+        row(
+            "rolled back",
+            format!("from {v}: the update didn't start properly"),
+        );
+    }
+    if let Some(fp) = &i.fingerprint {
+        row("fingerprint", fp.clone());
+    }
+    if let Some(b) = &i.bluetooth {
+        row("bluetooth", b.address.clone());
+    }
+    row("protocol", i.protocol.to_string());
+    if !i.capabilities.is_empty() {
+        row("capabilities", i.capabilities.join(", "));
+    }
+    if let Some(up) = i.uptime {
+        let mut s = ago(UNIX_EPOCH, UNIX_EPOCH + Duration::from_secs(up));
+        if let Some(r) = &i.last_reset {
+            let _ = write!(s, ", started by {}", r.replace('_', " "));
+        }
+        row("up", s);
+    }
+    if let Some(h) = &i.heap {
+        row(
+            "heap",
+            format!(
+                "{} bytes free, never below {}, largest block {}",
+                h.free, h.min, h.largest
+            ),
+        );
+    }
+    if i.errors.is_empty() {
+        row("errors", "none".into());
+    }
+    for e in &i.errors {
+        row("error", format!("{} ({})", e.message, e.code));
     }
     out
 }
@@ -550,5 +681,80 @@ mod tests {
                 "ktbr1 started"
             ]
         );
+    }
+
+    fn atom_port() -> DevicePort {
+        DevicePort {
+            path: "/dev/serial/by-id/usb-Hades2001_M5stack_3152263B4F-if00-port0".into(),
+            device: "/dev/ttyUSB0".into(),
+            usb_id: Some("0403:6001".into()),
+            description: Some("Hades2001 M5stack".into()),
+            looks_like: Some("ATOM Lite"),
+        }
+    }
+
+    fn atom_info() -> DeviceInfo {
+        serde_json::from_value(serde_json::json!({
+            "board": "atom-lite",
+            "firmware": {"version": "1.2.0-dev", "built": "2026-11-12T21:59:51Z",
+                         "partition": "ota_0", "state": "valid"},
+            "protocol": 1,
+            "capabilities": ["spp-client", "ble-server"],
+            "fingerprint": "6CDRNJBJYEJMZPMG",
+            "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
+            "uptime": 1020,
+            "heap": {"free": 121820, "min": 116044, "largest": 106496},
+            "last_reset": "power_on",
+            "errors": [{"code": "phones", "message": "advertising didn't start"}]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn device_info_reads_as_a_table() {
+        let text = device_info(&atom_port(), &atom_info());
+        assert_eq!(
+            text,
+            "ATOM Lite on /dev/serial/by-id/usb-Hades2001_M5stack_3152263B4F-if00-port0\n\
+             \x20   firmware     1.2.0-dev (built 2026-11-12T21:59:51Z, ota_0, valid)\n\
+             \x20   fingerprint  6CDRNJBJYEJMZPMG\n\
+             \x20   bluetooth    B8:7B:4D:18:F2:72\n\
+             \x20   protocol     1\n\
+             \x20   capabilities spp-client, ble-server\n\
+             \x20   up           17m, started by power on\n\
+             \x20   heap         121820 bytes free, never below 116044, largest block 106496\n\
+             \x20   error        advertising didn't start (phones)\n"
+        );
+    }
+
+    #[test]
+    fn device_list_says_what_answered() {
+        let answered = Found {
+            port: atom_port(),
+            info: Some(atom_info()),
+            error: None,
+        };
+        let silent = Found {
+            port: atom_port(),
+            info: None,
+            error: None,
+        };
+        let busy = Found {
+            port: atom_port(),
+            info: None,
+            error: Some("in use by another program".into()),
+        };
+        let text = devices(&[answered, silent, busy]);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[1], "    /dev/ttyUSB0  Hades2001 M5stack  (0403:6001)");
+        assert_eq!(
+            lines[2],
+            "    ATOM Lite, firmware 1.2.0-dev, fingerprint 6CDRNJBJYEJMZPMG"
+        );
+        assert_eq!(lines[3], "    error: advertising didn't start");
+        assert!(lines[6].starts_with("    no answer:"), "{text}");
+        assert!(lines[6].ends_with("(the USB serial chip is the ATOM Lite's)"));
+        assert_eq!(lines[9], "    in use by another program");
+        assert!(devices(&[]).starts_with("no ATOM Lite or Core2 found on USB"));
     }
 }

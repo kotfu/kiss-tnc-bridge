@@ -49,6 +49,10 @@ pub enum Outcome {
 
 pub struct Ctl {
     pub(super) socket: PathBuf,
+    /// The device's port, from `--device` or `KTBCTL_DEVICE`.
+    pub(super) device: Option<String>,
+    /// `--device` was given, which only the device commands take so far.
+    device_flag: bool,
     pub(super) json: bool,
     pub(super) yes: bool,
     pub(super) non_disruptive: bool,
@@ -61,8 +65,15 @@ impl Ctl {
             .clone()
             .or_else(|| std::env::var_os("KTBCTL_SOCKET").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET));
+        let device = cli
+            .device
+            .clone()
+            .or_else(|| std::env::var("KTBCTL_DEVICE").ok())
+            .filter(|d| !d.is_empty());
         Ctl {
             socket,
+            device,
+            device_flag: cli.device.is_some(),
             json: cli.json,
             yes: cli.yes,
             non_disruptive: cli.non_disruptive,
@@ -71,6 +82,10 @@ impl Ctl {
 
     pub async fn run(&self, cmd: Option<Cmd>) -> Outcome {
         let res = match cmd {
+            Some(Cmd::Device(cmd)) => self.device(cmd).await,
+            _ if self.device_flag => Err(CtlError::Message(
+                "--device works only with the 'ktbctl device' commands so far".into(),
+            )),
             None if !self.json && interactive() && std::io::stdout().is_terminal() => {
                 super::tui::run(&self.socket).await
             }
@@ -98,6 +113,8 @@ impl Ctl {
 
     async fn dispatch(&self, c: &mut Client, cmd: Cmd) -> Result<(), CtlError> {
         match cmd {
+            // run() sends these to the device, never to the daemon.
+            Cmd::Device(cmd) => self.device(cmd).await,
             Cmd::Status { bridge } => self.status_with(c, bridge).await,
             Cmd::Adapter(AdapterCmd::List) => {
                 let s: Status = c.call_as(Command::Status).await?;
@@ -791,7 +808,7 @@ impl Ctl {
     }
 
     /// Print `value` as JSON with `--json`, else `human()`.
-    fn print<T: serde::Serialize>(
+    pub(super) fn print<T: serde::Serialize>(
         &self,
         value: &T,
         human: impl FnOnce() -> String,

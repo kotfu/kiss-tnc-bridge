@@ -130,17 +130,22 @@ two binaries and need no new libraries; only `ktbctl` grows, by about
 
 Needed by both D1 and D2, so built first:
 
-- [ ] Opening a device's port without resetting it: assert DTR, drop RTS,
-      then drop DTR, as `ktbdev.py` does. Check on both boards and both
-      platforms that opening and closing the port doesn't reboot them.
-- [ ] `device.info` over the port: send it, read lines, skip any that
+- [x] Opening a device's port without resetting it: opening asserts both
+      lines, then drop RTS, then DTR, as `ktbdev.py` does. Opening and
+      closing the port doesn't reboot either board on macOS or Linux.
+- [x] `device.info` over the port: send it, read lines, skip any that
       don't start with `{`, and wait up to 3 s, sending it again once a
       second.
-- [ ] Finding devices: `serial_list.rs` on Linux, `serialport`'s list on
+- [x] Finding devices: `serial_list.rs` on Linux, `serialport`'s list on
       macOS. `ktbctl device list` shows each likely port, and what answers
       on it. `--device` takes a `/dev/serial/by-id` path or a device name;
       resolve both before matching one against the other, since
       `serialport` lists only device names (found in the spike).
+      `--device` works only with the `device` commands until D2.
+
+Done 12 November 2026, in `src/ctl/device/`, with `ktbctl device info`
+from D2 to try the probe on its own. Tried on macOS, and on aprscc with
+the ATOM Lite.
 
 ### 3. Find the device and what's on it
 
@@ -244,7 +249,7 @@ and built on the firmware side first, in firmware 1.3.0.
       `kick` and `monitor`. `status` shows a device's one bridge without
       `since` times. A command the device refuses with `not_supported`
       says it isn't available on a device, not that something failed.
-- [ ] **Device-only commands:** `device info`, `device settings`, `device
+- [ ] **Device-only commands:** `device info` (done with D1's step 2), `device settings`, `device
       settings set` (and which settings need `device reboot`), `device
       reboot`, `device reset` (asks first, or `--yes`: it clears the
       settings, the radio and the authorized apps), and `device identify`.

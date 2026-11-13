@@ -30,7 +30,26 @@ pub fn list(cfg: &Config) -> Vec<SerialEntry> {
     list_under(Path::new("/dev/serial"), Path::new("/sys/class/tty"), cfg)
 }
 
-fn list_under(root: &Path, sys_tty: &Path, cfg: &Config) -> Vec<SerialEntry> {
+/// A serial device by its stable names, with its USB details if it's on
+/// USB. Linux only: the names come from udev's `/dev/serial` links.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Port {
+    /// The by-id name, or by-path for a device with no by-id name.
+    pub path: String,
+    /// What it points to now: `/dev/ttyACM0`.
+    pub device: PathBuf,
+    /// Its other stable names.
+    pub also: Vec<String>,
+    pub usb: Option<Usb>,
+}
+
+/// The serial devices present, one per device, with the config-free part
+/// of `list`. `ktbctl` uses it to find ESP32 devices without the daemon.
+pub fn ports() -> Vec<Port> {
+    ports_under(Path::new("/dev/serial"), Path::new("/sys/class/tty"))
+}
+
+fn ports_under(root: &Path, sys_tty: &Path) -> Vec<Port> {
     let mut by_device: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
     for sub in ["by-id", "by-path"] {
         let Ok(dir) = std::fs::read_dir(root.join(sub)) else {
@@ -47,42 +66,67 @@ fn list_under(root: &Path, sys_tty: &Path, cfg: &Config) -> Vec<SerialEntry> {
             }
         }
     }
-    let mut out = Vec::new();
-    for (device, mut paths) in by_device {
-        let path = paths.remove(0);
-        let usb = device.file_name().and_then(|n| usb_info(&sys_tty.join(n)));
-        let known = usb
-            .as_ref()
-            .and_then(|u| crate::config::radio_by_usb_id(u.vendor, u.product));
-        let tnc = cfg
-            .tncs
-            .iter()
-            .find(|t| {
-                t.serial
-                    .as_ref()
-                    .is_some_and(|s| s.path == path || paths.contains(&s.path))
-            })
-            .map(|t| t.id.clone());
-        out.push(SerialEntry {
-            path,
-            device: device.display().to_string(),
-            also: paths,
-            usb_id: usb
-                .as_ref()
-                .map(|u| format!("{:04x}:{:04x}", u.vendor, u.product)),
-            description: usb.and_then(|u| u.description),
-            known_tnc: known.map(|r| r.name.to_string()),
-            model: known.map(|r| r.model.to_string()),
-            tnc,
-        });
-    }
-    out
+    by_device
+        .into_iter()
+        .map(|(device, mut paths)| {
+            let path = paths.remove(0);
+            let usb = device.file_name().and_then(|n| usb_info(&sys_tty.join(n)));
+            Port {
+                path,
+                device,
+                also: paths,
+                usb,
+            }
+        })
+        .collect()
 }
 
-struct Usb {
-    vendor: u16,
-    product: u16,
-    description: Option<String>,
+fn list_under(root: &Path, sys_tty: &Path, cfg: &Config) -> Vec<SerialEntry> {
+    ports_under(root, sys_tty)
+        .into_iter()
+        .map(
+            |Port {
+                 path,
+                 device,
+                 also,
+                 usb,
+             }| {
+                let known = usb
+                    .as_ref()
+                    .and_then(|u| crate::config::radio_by_usb_id(u.vendor, u.product));
+                let tnc = cfg
+                    .tncs
+                    .iter()
+                    .find(|t| {
+                        t.serial
+                            .as_ref()
+                            .is_some_and(|s| s.path == path || also.contains(&s.path))
+                    })
+                    .map(|t| t.id.clone());
+                SerialEntry {
+                    path,
+                    device: device.display().to_string(),
+                    also,
+                    usb_id: usb
+                        .as_ref()
+                        .map(|u| format!("{:04x}:{:04x}", u.vendor, u.product)),
+                    description: usb.and_then(|u| u.description),
+                    known_tnc: known.map(|r| r.name.to_string()),
+                    model: known.map(|r| r.model.to_string()),
+                    tnc,
+                }
+            },
+        )
+        .collect()
+}
+
+/// A USB device's ids and its manufacturer and product strings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Usb {
+    pub vendor: u16,
+    pub product: u16,
+    /// Manufacturer and product, as the device gives them.
+    pub description: Option<String>,
 }
 
 /// The USB device behind a tty, found by walking up from its sysfs
