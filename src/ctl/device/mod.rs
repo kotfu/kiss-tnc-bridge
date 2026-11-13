@@ -107,6 +107,28 @@ pub struct Found {
     pub error: Option<String>,
 }
 
+/// How much of `public_name` fits in a device's advertisement (its scan
+/// response): apps scanning see this many bytes, apps that connect see the
+/// whole name (docs/control-api.md, BLE management).
+pub const ADVERTISED_NAME_BYTES: usize = 11;
+
+/// A warning for a public name too long for the advertisement, with what
+/// scanning apps will see.
+pub fn name_warning(name: &str) -> Option<String> {
+    if name.len() <= ADVERTISED_NAME_BYTES {
+        return None;
+    }
+    let mut end = ADVERTISED_NAME_BYTES;
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    Some(format!(
+        "only the first {ADVERTISED_NAME_BYTES} bytes of a name fit in the device's \
+         advertisement, so apps scanning for it see \"{}\"; apps that connect see all of it",
+        &name[..end]
+    ))
+}
+
 /// A board's name for people: `ATOM Lite` for `atom-lite`.
 pub fn board_name(board: &str) -> &str {
     match board {
@@ -114,5 +136,21 @@ pub fn board_name(board: &str) -> &str {
         "core2" => "Core2",
         "stickc-plus-se" => "StickC Plus SE",
         other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn long_names_are_warned_about_with_what_scanners_see() {
+        assert_eq!(name_warning("KTB-EF26"), None);
+        assert_eq!(name_warning("12345678901"), None);
+        let w = name_warning("Core2 on the bench").unwrap();
+        assert!(w.contains("\"Core2 on th\""), "{w}");
+        // Not cut inside a character.
+        let w = name_warning("Funkgerät-Brücke").unwrap();
+        assert!(w.contains("\"Funkgerät-\""), "{w}");
     }
 }

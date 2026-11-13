@@ -49,7 +49,14 @@ impl Ctl {
             } => {
                 let settings = key_values(&pairs).map_err(CtlError::Message)?;
                 let (_, _, mut c) = self.device_client().await?;
+                let warning = settings
+                    .get("public_name")
+                    .and_then(Value::as_str)
+                    .and_then(super::name_warning);
                 let v = c.call(Command::DeviceSettingsSet { settings }).await?;
+                if let Some(w) = warning {
+                    eprintln!("ktbctl: {w}");
+                }
                 self.print(&v, || render::settings(&v))
             }
             DeviceCmd::Reboot => {

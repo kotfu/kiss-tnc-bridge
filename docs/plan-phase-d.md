@@ -311,6 +311,15 @@ Done 12 November 2026. How it works:
   `rm`, `adapter add` and `rm`, `enable`, `disable`, `switch`, `edit`,
   `check`, `reload`, `serial list`, the TUI) are refused before anything
   is sent.
+- **`bridge public-name`** works on a device too: it shows or sets the
+  `public_name` setting, as `device settings set public_name=...` does,
+  and both warn when a name is longer than the advertisement's 11 bytes.
+  `--retry` is refused (no DNS-SD on a device), and so is `--default`
+  until the firmware can go back to its default name
+  ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)). The other
+  `bridge` commands, `enable`, `disable` and `switch` are refused with the
+  reason: a device has exactly one bridge, `ktbr0`, always enabled, whose
+  name is its public name.
 - **`tnc update`** is new, and for devices only: on the daemon
   `tnc.update` replaces the whole definition, which a few flags would cut
   down, so there it's still `ktbctl edit tnc`.

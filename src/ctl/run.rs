@@ -306,6 +306,11 @@ impl Ctl {
                 default,
                 retry,
             } => {
+                if self.device.is_some() && (retry || default || name.is_some()) {
+                    return self
+                        .device_public_name(c, &bridge, name, default, retry)
+                        .await;
+                }
                 if retry {
                     return self.act(c, Command::BridgeRetryPublicName { bridge }).await;
                 }
@@ -577,10 +582,10 @@ impl Ctl {
     /// answers, over its USB serial port.
     async fn on_device(&self, cmd: Option<Cmd>) -> Result<(), CtlError> {
         let cmd = cmd.unwrap_or(Cmd::Status { bridge: None });
-        if let Some(name) = daemon_only(&cmd) {
+        if let Some((name, why)) = daemon_only(&cmd) {
             return Err(CtlError::Message(format!(
-                "'ktbctl {name}' isn't available on a device: its bridge is fixed. A device \
-                 takes status, scan, pair, unpair, tnc list, tnc models, tnc update, \
+                "'ktbctl {name}' isn't available on a device: {why}. A device takes status, \
+                 bridge public-name, scan, pair, unpair, tnc list, tnc models, tnc update, \
                  connect, disconnect, release, kick and monitor, and the device and auth \
                  commands"
             )));
@@ -592,6 +597,49 @@ impl Ctl {
                 self.dispatch(&mut c, cmd).await
             }
         }
+    }
+
+    /// `bridge public-name` on a device, whose public name is its
+    /// `public_name` setting. Showing it works as on the daemon.
+    async fn device_public_name(
+        &self,
+        c: &mut Client,
+        bridge: &str,
+        name: Option<String>,
+        default: bool,
+        retry: bool,
+    ) -> Result<(), CtlError> {
+        if retry {
+            return Err(CtlError::Message(
+                "a device doesn't announce itself with DNS-SD, so its public name never \
+                 collides; --retry is for the daemon"
+                    .into(),
+            ));
+        }
+        if default {
+            return Err(CtlError::Message(
+                "this firmware can't go back to its default name. 'ktbctl device reset' \
+                 does, but it also clears the settings, the radio pairing and the \
+                 authorized apps"
+                    .into(),
+            ));
+        }
+        let s: Status = c.call_as(Command::Status).await?;
+        let b = s
+            .bridges
+            .iter()
+            .find(|b| b.id == bridge || b.name == bridge)
+            .ok_or_else(|| {
+                CtlError::Message(format!("there's no bridge {bridge:?}; a device's is ktbr0"))
+            })?;
+        let name = name.unwrap_or_default();
+        let mut settings = Map::new();
+        settings.insert("public_name".into(), json!(name));
+        let v = c.call(Command::DeviceSettingsSet { settings }).await?;
+        if let Some(w) = crate::ctl::device::name_warning(&name) {
+            eprintln!("ktbctl: {w}");
+        }
+        self.print(&v, || format!("{}'s public name is {name}\n", b.id))
     }
 
     /// The daemon's socket, or the device `--device` names.
@@ -929,23 +977,38 @@ impl Ctl {
 
 /// The name of a command only the daemon serves: a device's bridge is
 /// fixed, so it can't be rebuilt or reconfigured.
-fn daemon_only(cmd: &Cmd) -> Option<&'static str> {
+/// A command only the daemon serves, and why a device can't: it has
+/// exactly one bridge, `ktbr0`, always enabled, with a fixed TNC port and
+/// app port.
+fn daemon_only(cmd: &Cmd) -> Option<(&'static str, &'static str)> {
+    const ONE_BRIDGE: &str = "a device has exactly one bridge, ktbr0, which can't be added, \
+                              cloned or removed";
+    const ALWAYS_ON: &str = "a device's one bridge, ktbr0, is always enabled";
+    const FIXED: &str = "a device's bridge and its ports are fixed";
     Some(match cmd {
-        Cmd::Setup(_) => "setup",
-        Cmd::Tui => "tui",
-        Cmd::Adapter(AdapterCmd::Add { .. }) => "adapter add",
-        Cmd::Adapter(AdapterCmd::Rm { .. }) => "adapter rm",
-        Cmd::Tnc(TncCmd::Add(_)) => "tnc add",
-        Cmd::Tnc(TncCmd::Rm { .. }) => "tnc rm",
-        Cmd::Serial(_) => "serial list",
-        Cmd::Bridge(_) => "bridge",
-        Cmd::Enable { .. } => "enable",
-        Cmd::Disable { .. } => "disable",
-        Cmd::Switch { .. } => "switch",
-        Cmd::Port(_) => "port",
-        Cmd::Edit { .. } => "edit",
-        Cmd::Check => "check",
-        Cmd::Reload => "reload",
+        Cmd::Setup(_) => ("setup", FIXED),
+        Cmd::Tui => ("tui", "the TUI works with the daemon so far"),
+        Cmd::Adapter(AdapterCmd::Add { .. }) => ("adapter add", "a device has one adapter"),
+        Cmd::Adapter(AdapterCmd::Rm { .. }) => ("adapter rm", "a device has one adapter"),
+        Cmd::Tnc(TncCmd::Add(_)) => ("tnc add", "a device has one TNC, radio"),
+        Cmd::Tnc(TncCmd::Rm { .. }) => ("tnc rm", "a device has one TNC, radio"),
+        Cmd::Serial(_) => ("serial list", FIXED),
+        Cmd::Bridge(BridgeCmd::Add { .. }) => ("bridge add", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Clone { .. }) => ("bridge clone", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Rm { .. }) => ("bridge rm", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Name { .. }) => (
+            "bridge name",
+            "on a device the bridge's name is its public name: 'ktbctl bridge public-name \
+             ktbr0 NAME'",
+        ),
+        Cmd::Bridge(BridgeCmd::PublicName { .. }) => return None,
+        Cmd::Enable { .. } => ("enable", ALWAYS_ON),
+        Cmd::Disable { .. } => ("disable", ALWAYS_ON),
+        Cmd::Switch { .. } => ("switch", ALWAYS_ON),
+        Cmd::Port(_) => ("port", FIXED),
+        Cmd::Edit { .. } => ("edit", FIXED),
+        Cmd::Check => ("check", "a device has no config files"),
+        Cmd::Reload => ("reload", "a device has no config files"),
         _ => return None,
     })
 }
@@ -1149,12 +1212,15 @@ mod tests {
             all.extend_from_slice(args);
             Cli::try_parse_from(all).unwrap().command.unwrap()
         };
-        assert_eq!(
-            daemon_only(&cmd(&["bridge", "rm", "ktbr1"])),
-            Some("bridge")
-        );
-        assert_eq!(daemon_only(&cmd(&["tnc", "add", "d75"])), Some("tnc add"));
-        assert_eq!(daemon_only(&cmd(&["reload"])), Some("reload"));
+        let name = |args: &[&str]| daemon_only(&cmd(args)).map(|(n, _)| n);
+        assert_eq!(name(&["bridge", "rm", "ktbr1"]), Some("bridge rm"));
+        assert_eq!(name(&["bridge", "add", "--name", "x"]), Some("bridge add"));
+        assert_eq!(name(&["bridge", "name", "ktbr0", "x"]), Some("bridge name"));
+        assert_eq!(name(&["bridge", "public-name", "ktbr0", "x"]), None);
+        assert_eq!(name(&["bridge", "public-name", "ktbr0"]), None);
+        assert_eq!(name(&["disable", "ktbr0"]), Some("disable"));
+        assert_eq!(name(&["tnc", "add", "d75"]), Some("tnc add"));
+        assert_eq!(name(&["reload"]), Some("reload"));
         assert_eq!(daemon_only(&cmd(&["status"])), None);
         assert_eq!(daemon_only(&cmd(&["tnc", "list"])), None);
         assert_eq!(
