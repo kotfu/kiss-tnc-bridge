@@ -76,6 +76,9 @@ and offers more capability.
   first bridge, including scanning and pairing Bluetooth TNCs. It
   monitors frames passing through the bridge, and let's you add and
   change bridges without restarting the daemon.
+- From 1.3.0, `ktbctl` also installs the project's firmware on an M5Stack
+  ATOM Lite or Core2 over USB, and manages it there, with no daemon and no
+  browser. See [Devices](#devices-the-atom-lite-and-core2).
 - Reconnects to the TNC with backoff without disturbing connected apps. If
   your TNC needs a battery swap or someone turns on the microwave and
   your bluetooth connection drops, everything will reconnect automatically
@@ -733,6 +736,61 @@ work on the selected row are shown at the bottom. Type '?' for help.
 The protocol `ktbctl` speaks is described in
 [docs/control-api.md](docs/control-api.md), for anyone writing another
 client.
+
+### Devices: the ATOM Lite and Core2
+
+The project also has firmware for two M5Stack boards, the ATOM Lite and
+the Core2, that bridge a radio's TNC to phones on their own (see
+[firmware/README.md](firmware/README.md)). From 1.3.0, `ktbctl` installs
+that firmware over USB and manages a device running it, on Linux and
+macOS. It talks to the device directly over its USB serial port: the
+daemon doesn't need to be running, or even installed. On Linux your user
+needs to be in the `dialout` group (`uucp` on Arch) to open the port.
+
+```
+$ ktbctl device list                    # devices on USB, and what each runs
+$ ktbctl device flash                   # install or update the newest firmware
+$ ktbctl device info                    # board, firmware, fingerprint, errors
+$ ktbctl auth code                      # its authorization code
+```
+
+`ktbctl device flash` downloads the newest firmware release from GitHub
+(`--version` for another, `--prerelease` to include test versions), or
+installs a release's files you already have with `--manifest`. It finds
+out what the device runs first:
+
+- **An update**, over this firmware, keeps the settings, the radio
+  pairing, the authorized apps and the authorization code.
+- **A clean install** erases everything first, and is the only way over
+  other firmware or with `--clean`. The device makes a new key and
+  authorization code, which `ktbctl` shows when it's done. It asks first,
+  or goes ahead with `--yes`.
+
+A device's USB serial port can always be written, whatever is on the
+device, so a failed or interrupted install is fixed by installing again.
+An ATOM Lite that isn't running this firmware can't say which board it
+is (a StickC Plus SE has the same chip), so `ktbctl` asks for
+`--board atom-lite`.
+
+With `--device PORT`, or `KTBCTL_DEVICE` set, `ktbctl`'s other commands
+manage the device instead of the daemon. A device has one bridge,
+`ktbr0`, whose TNC is `radio` and whose app port is `phones`, so the
+commands that add or change bridges and ports don't apply.
+
+```
+$ export KTBCTL_DEVICE=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C8D017949-if00
+$ ktbctl status
+$ ktbctl bridge public-name ktbr0 "D75 bridge"    # the name phones see
+$ ktbctl scan --le                                # look for a TD-H9
+$ ktbctl tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E
+$ ktbctl monitor
+$ ktbctl device settings set led_normal=dim
+```
+
+Without `--device`, the `device` and `auth` commands use the one device
+on USB. Only about the first 11 characters of a name fit in the device's
+advertisement, so phones scanning for it see that much; apps that
+connect see the whole name.
 
 ### Running as a systemd service
 

@@ -552,6 +552,26 @@ impl Daemon {
                 ErrorCode::BadRequest,
                 "subscribe and unsubscribe are handled by the connection",
             )),
+            // A management app tells a device from the daemon this way.
+            Command::DeviceInfo
+            | Command::DeviceSettingsGet
+            | Command::DeviceSettingsSet { .. }
+            | Command::DeviceReboot
+            | Command::DeviceReset
+            | Command::DeviceIdentify => Err(ApiError::new(
+                ErrorCode::NotSupported,
+                "this is the kiss-tnc-bridge daemon, not a device; the device commands are \
+                 for an ATOM Lite or Core2",
+            )),
+            Command::AuthInfo
+            | Command::AuthCode
+            | Command::AuthRotateCode
+            | Command::AuthMode { .. }
+            | Command::AuthApps => Err(ApiError::new(
+                ErrorCode::NotSupported,
+                "the daemon's socket doesn't serve the auth commands; they're for devices, \
+                 and later ktb-gateway",
+            )),
             Command::ConfigGet { kind, object } => self.config_get(kind.map(Into::into), object),
             Command::ConfigPut {
                 kind,
@@ -1466,7 +1486,7 @@ impl Daemon {
                     .filter(|s| s.id.port == p.id)
                     .map(|s| SessionStatus {
                         id: format!("{}/{}", b.id, s.id),
-                        since: rfc3339(s.since),
+                        since: Some(rfc3339(s.since)),
                     })
                     .collect();
                 let (state, since) = match (rb.and_then(|rb| rb.ports.get(&p.id)), &snap) {

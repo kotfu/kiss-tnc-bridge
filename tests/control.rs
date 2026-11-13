@@ -406,6 +406,18 @@ async fn bad_requests_get_error_codes() {
     r.shutdown.cancel();
 }
 
+#[tokio::test]
+async fn device_commands_are_refused_by_the_daemon() {
+    // How a management app tells the daemon from a device.
+    let r = rig().await;
+    let mut c = Client::connect(&r.socket).await;
+    for cmd in ["device.info", "device.reboot", "auth.code"] {
+        let res = c.call(json!({"cmd": cmd})).await;
+        assert_eq!(res["error"]["code"], "not_supported", "{cmd}");
+    }
+    r.shutdown.cancel();
+}
+
 impl Rig {
     fn state_file(&self, name: &str) -> PathBuf {
         self.dir.path().join("state").join(name)

@@ -1275,6 +1275,162 @@
             "cmd"
           ],
           "type": "object"
+        },
+        {
+          "description": "The device's board, firmware, protocol, capabilities and state.",
+          "properties": {
+            "cmd": {
+              "const": "device.info",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The device's settings.",
+          "properties": {
+            "cmd": {
+              "const": "device.settings.get",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Changes the settings given, and answers with all of them and\n`reboot_required`.",
+          "properties": {
+            "cmd": {
+              "const": "device.settings.set",
+              "type": "string"
+            },
+            "settings": {
+              "additionalProperties": true,
+              "type": "object"
+            }
+          },
+          "required": [
+            "cmd",
+            "settings"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Answers `{}`, then restarts.",
+          "properties": {
+            "cmd": {
+              "const": "device.reboot",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Answers `{}`, then clears the settings, the radio pairing and the\nauthorized apps (not the firmware, key or authorization code), and\nrestarts.",
+          "properties": {
+            "cmd": {
+              "const": "device.reset",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Shows a sequence the device shows for nothing else.",
+          "properties": {
+            "cmd": {
+              "const": "device.identify",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The fingerprint, public key, authorization mode and how many apps\nare authorized.",
+          "properties": {
+            "cmd": {
+              "const": "auth.info",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The authorization code and its link.",
+          "properties": {
+            "cmd": {
+              "const": "auth.code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A new authorization code; authorized apps keep working.",
+          "properties": {
+            "cmd": {
+              "const": "auth.rotate_code",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Starts authorization mode for `seconds` (the device's default if\nabsent); 0 ends it.",
+          "properties": {
+            "cmd": {
+              "const": "auth.mode",
+              "type": "string"
+            },
+            "seconds": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The authorized apps.",
+          "properties": {
+            "cmd": {
+              "const": "auth.apps",
+              "type": "string"
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
         }
       ],
       "properties": {
@@ -1392,6 +1548,11 @@
             {
               "const": "busy",
               "description": "Another Bluetooth operation (scan, pairing) is running; try again\nwhen it's done.",
+              "type": "string"
+            },
+            {
+              "const": "not_supported",
+              "description": "On a device: a command that needs the daemon, since a device's\nbridge is fixed. On the daemon: a command only devices serve.",
               "type": "string"
             }
           ]
@@ -2158,7 +2319,8 @@
               "description": "While running."
             },
             "editable": {
-              "description": "Dynamic bridges can be changed through the API; static ones can only\nbe enabled and disabled.",
+              "default": false,
+              "description": "Dynamic bridges can be changed through the API; static ones can only\nbe enabled and disabled. A device's bridge is fixed, and leaves it out.",
               "type": "boolean"
             },
             "enabled": {
@@ -2194,6 +2356,7 @@
               "$ref": "#/$defs/PublicName"
             },
             "source": {
+              "description": "Where it's defined: `static: …` or `dynamic`. Devices leave it out.",
               "type": "string"
             }
           },
@@ -2202,8 +2365,6 @@
             "name",
             "enabled",
             "public_name",
-            "source",
-            "editable",
             "ports"
           ],
           "type": "object"
@@ -2324,7 +2485,7 @@
               "type": "array"
             },
             "settings": {
-              "description": "The port's settings, as in the config: `tnc`, `listen`, `adapter`,\n`max_clients`, …."
+              "description": "The port's settings, as in the config: `tnc`, `listen`, `adapter`,\n`max_clients`, …. A device leaves out a port's that has none."
             },
             "since": {
               "description": "When the TNC port entered its state.",
@@ -2346,7 +2507,6 @@
             "type",
             "role",
             "state",
-            "settings",
             "sessions"
           ],
           "type": "object"
@@ -2395,12 +2555,15 @@
               "type": "string"
             },
             "since": {
-              "type": "string"
+              "description": "When it connected. Devices have no clock, and leave it out.",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           },
           "required": [
-            "id",
-            "since"
+            "id"
           ],
           "type": "object"
         },
@@ -2469,6 +2632,7 @@
               ]
             },
             "source": {
+              "description": "Where it's defined: `static: …` or `dynamic`. Devices leave it out.",
               "type": "string"
             },
             "spp": {
@@ -2486,7 +2650,6 @@
             "id",
             "name",
             "model",
-            "source",
             "editable"
           ],
           "type": "object"

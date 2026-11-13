@@ -2,7 +2,9 @@
 
 Status: decided 7 November 2026; firmware toolchain, eFuses, USB flashing
 and web home 8 November 2026; the StickC Plus SE added, and Phase G moved
-ahead of Phase D, 11 November 2026
+ahead of Phase D, 11 November 2026; Phase D planned for USB only, with
+`ktbctl`'s BLE management moved to Phase E, and D1 and D2 built, with
+testing to wait for the StickC Plus SE, 12 November 2026
 
 ## Goal
 
@@ -361,15 +363,21 @@ rather than add a program: a transport option such as `--device
 device info`, `settings`, `flash`, `update`). A separate binary is the
 fallback if the device commands make `ktbctl` confusing.
 
-- [ ] USB serial on Linux, macOS and Windows.
-- [ ] BLE management, on Linux first. `bluer` is Linux-only, so macOS would
-      need another Bluetooth library.
-- [ ] `ktbctl device flash`: write firmware over USB, including the first
-      install, so a Linux machine is all it takes (decision 13). The
-      [espflash](https://github.com/esp-rs/espflash) crate does this from
-      Rust.
+Phase D is planned in [plan-phase-d.md](plan-phase-d.md).
+
+- [x] USB serial on Linux and macOS (Phase D): `--device PORT` for the
+      commands a device answers, and the `device` and `auth` commands.
+      Windows is out of scope for now: `ktbctl` doesn't build there,
+      because it talks to the daemon over a Unix socket.
+- [x] `ktbctl device flash`: write firmware over USB, including the first
+      install, so a Linux machine is all it takes (decision 13), from local
+      files or a GitHub release (Phase D), with the
+      [espflash](https://github.com/esp-rs/espflash) crate compiled into
+      `ktbctl`.
+- [ ] BLE management, on Linux first (Phase E). `bluer` is Linux-only, so
+      macOS would need another Bluetooth library.
 - [ ] `ktbctl device update`: an over-the-air update over BLE, using the same
-      `firmware.update.*` commands as the iOS app.
+      `firmware.update.*` commands as the iOS app (Phase F).
 
 ### Web installer (decisions 5, 9)
 
@@ -743,22 +751,64 @@ from a browser, with no app.
       done." (the ATOM a color), which stays up through the flash. The
       web installer and `ktbctl device flash` send it first and show the
       progress themselves. Over firmware that isn't ours (a new device)
-      the screen shows whatever that firmware left.
+      the screen shows whatever that firmware left. Defined and built here,
+      on the firmware side, for firmware 1.3.0; `ktbctl` sends it in Phase
+      D. The ATOM Lite's color is
+      [#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22).
 
 The rest of the Core2 and StickC Plus SE workstreams (the power page,
 sound, the SD card log and so on) follow as they're ready and don't hold
-up Phase D. App and `ktbctl` support for the new boards comes with Phases D
-and E, which cover every board.
+up Phase D. `ktbctl` and app support for the new boards comes with Phases D
+and E: USB in D, BLE in E.
 
 ### Phase D: `ktbctl` device support
 
-Device management over USB serial, `ktbctl device flash`, then BLE
-management on Linux, for every board.
+`ktbctl device flash` and device management over USB serial, on Linux and
+macOS, for the ATOM Lite and the Core2. Ships in software 1.3.0, with
+firmware 1.3.0. Planned in [plan-phase-d.md](plan-phase-d.md).
+
+- [ ] **D1: `ktbctl device flash`.** Installs and updates our firmware
+      over USB, from local files or a GitHub release, as the web
+      installer does. Built 12 November 2026, apart from sending the
+      install notice, which waits for Phase G to define it.
+- [x] **D2: management over USB serial.** `--device PORT` for the
+      commands a device answers, and the `device` and `auth` commands.
+      Built 12 November 2026.
+- [ ] **StickC Plus SE support in `ktbctl`**, with its firmware: it
+      shares the ATOM Lite's chip and USB serial chip.
+- [ ] **Testing on all three boards** in one round, once the StickC Plus
+      SE has firmware (the list is in
+      [plan-phase-d.md](plan-phase-d.md#testing)), then software and
+      firmware 1.3.0 ship together.
+
+Not in Phase D: BLE management from `ktbctl` (Phase E), and Windows.
 
 ### Phase E: iOS app and `ktb-gateway` BLE management
 
 BLE management in the firmware for every board and in `ktb-gateway`, and
 the iOS app's first release, managing them all.
+
+- [ ] **`ktbctl` BLE management, on Linux.** Moved here from Phase D
+      (12 November 2026), because it needs the firmware's BLE management
+      service: `--device ble:<name>`, a `bluer` GATT client with the
+      record framing and the Noise handshakes from
+      [control-api.md](control-api.md#ble-management), and authorization
+      with the device's code. The same commands as over USB.
+- [ ] **The `auth` commands on a Pi.** A Pi is managed over BLE through
+      `ktb-gateway`, so it needs what a device has: a key, an
+      authorization code, authorization mode and a list of authorized
+      apps, with `auth.info`, `auth.code`, `auth.rotate_code`,
+      `auth.mode`, `auth.apps` and `auth.revoke` (see
+      [`auth` commands](control-api.md#auth-commands)). `ktbctl` on the
+      Pi uses them locally: `ktbctl auth ...` as for a device over USB,
+      and the planned `ktbctl gateway code` and `ktbctl gateway open`.
+      To decide: the spec has `ktb-gateway` keep that state and serve
+      the commands on its own local interface, with the daemon's socket
+      not serving them. The other way is for the daemon to keep it and
+      serve `auth.*` on its socket, with the gateway asking the daemon
+      to check a management app's key. Either way, a remote app reaches
+      these only after authorizing, and local access stays with the
+      socket's group.
 
 ### Phase F: firmware updates over BLE
 

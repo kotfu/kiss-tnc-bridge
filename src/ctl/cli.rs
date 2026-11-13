@@ -23,7 +23,8 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "ktbctl",
     version,
-    about = "Manage kiss-tnc-bridge through its control socket",
+    about = "Manage kiss-tnc-bridge through its control socket, and ATOM Lite and Core2 \
+             devices over USB",
     after_help = "With no command, ktbctl opens the TUI in a terminal and shows status \
                   otherwise. Bridges and TNCs can be named by id or by name. Commands that \
                   would disconnect someone ask first in a terminal, and are refused without \
@@ -31,9 +32,14 @@ use clap::{Args, Parser, Subcommand};
 )]
 pub struct Cli {
     /// The daemon's control socket [env: KTBCTL_SOCKET] [default: /run/kiss-tnc-bridge/control.sock]
-    #[arg(long, global = true, value_name = "PATH")]
+    #[arg(long, global = true, value_name = "PATH", conflicts_with = "device")]
     pub socket: Option<PathBuf>,
-    /// Print the daemon's results as JSON, for scripts
+    /// A device's USB serial port, for the device commands: a
+    /// /dev/serial/by-id path or a device name [env: KTBCTL_DEVICE]
+    /// [default: the only ATOM Lite or Core2 on USB]
+    #[arg(long, global = true, value_name = "PORT")]
+    pub device: Option<String>,
+    /// Print the results as JSON, for scripts
     #[arg(long, global = true)]
     pub json: bool,
     /// Go ahead with changes that would disconnect someone, without asking
@@ -64,6 +70,12 @@ pub enum Cmd {
     /// Serial devices, by stable path
     #[command(subcommand)]
     Serial(SerialCmd),
+    /// ATOM Lite and Core2 devices on USB, without the daemon
+    #[command(subcommand)]
+    Device(DeviceCmd),
+    /// A device's authorization code, authorization mode and authorized apps
+    #[command(subcommand)]
+    Auth(AuthCmd),
     /// Look for Bluetooth radios nearby (they must be in pairing mode)
     Scan {
         /// The adapter to scan on (id, MAC or hciN) [default: the default adapter]
@@ -162,6 +174,27 @@ pub enum TncCmd {
     Add(TncAdd),
     /// Remove a TNC no port uses
     Rm { tnc: String },
+    /// A device's radio: its model and address (on the daemon, 'ktbctl edit
+    /// tnc ID' changes a TNC)
+    Update(TncUpdate),
+}
+
+#[derive(Debug, Args)]
+#[command(after_help = "Examples:\n  \
+    ktbctl --device PORT tnc update radio --model th-d75 --spp-address 40:79:12:E4:95:9D\n  \
+    ktbctl --device PORT tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E")]
+pub struct TncUpdate {
+    /// The TNC: radio, on a device
+    pub tnc: String,
+    /// See 'ktbctl tnc models'
+    #[arg(long)]
+    pub model: Option<String>,
+    /// The radio's Bluetooth Classic address (a TH-D74 or TH-D75)
+    #[arg(long, value_name = "ADDR", conflicts_with = "ble_address")]
+    pub spp_address: Option<String>,
+    /// The radio's Bluetooth LE address (a TD-H9)
+    #[arg(long, value_name = "ADDR")]
+    pub ble_address: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -226,6 +259,94 @@ pub struct BtWho {
 pub enum SerialCmd {
     /// Serial devices present, with known TNCs flagged
     List,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum DeviceCmd {
+    /// USB serial ports with an ATOM Lite's or Core2's USB serial chip, and
+    /// what each one runs
+    List,
+    /// The device's board, firmware, fingerprint and state
+    Info,
+    /// Install kiss-tnc-bridge firmware over USB: an update, or a clean install
+    Flash(FlashArgs),
+    /// The device's settings, or 'set KEY=VALUE ...' to change some
+    Settings {
+        #[command(subcommand)]
+        cmd: Option<SettingsCmd>,
+    },
+    /// Restart the device
+    Reboot,
+    /// Clear the device's settings, radio pairing and authorized apps, then
+    /// restart it. Its firmware, key and authorization code stay
+    Reset,
+    /// Show the device's identify sequence, to tell which one you're managing
+    Identify,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SettingsCmd {
+    /// Change settings: KEY=VALUE ..., such as led_normal=dim
+    Set {
+        #[arg(required = true, value_name = "KEY=VALUE")]
+        pairs: Vec<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AuthCmd {
+    /// The device's fingerprint, authorization mode, and how many apps are
+    /// authorized
+    Info,
+    /// The device's authorization code, which authorizes management apps
+    /// over Bluetooth
+    Code,
+    /// Make a new authorization code. Apps already authorized keep working
+    RotateCode,
+    /// Start authorization mode, so one management app can be authorized
+    Mode {
+        /// How long, in seconds [default: the device's, 300]; 0 ends it
+        seconds: Option<u32>,
+    },
+    /// The authorized management apps
+    Apps,
+}
+
+#[derive(Debug, Args)]
+#[command(
+    after_help = "An update keeps the device's settings, radio pairing, authorized \
+                        apps and authorization code. A clean install erases them all, and \
+                        is the only way over other firmware; it asks first, or goes ahead \
+                        with --yes.\n\n\
+                        Examples:\n  \
+                        ktbctl device flash\n  \
+                        ktbctl device flash --version 1.3.0\n  \
+                        ktbctl device flash --manifest ktb-core2-1.3.0-manifest.json\n  \
+                        ktbctl device flash --clean --board atom-lite"
+)]
+pub struct FlashArgs {
+    /// A release manifest (ktb-BOARD-VERSION-manifest.json) with its parts
+    /// beside it, instead of downloading the firmware from GitHub
+    #[arg(long, value_name = "FILE", conflicts_with_all = ["version", "prerelease"])]
+    pub manifest: Option<PathBuf>,
+    /// The firmware version to download [default: the newest release]
+    #[arg(long)]
+    pub version: Option<String>,
+    /// Include test versions (betas and release candidates) when choosing
+    /// the newest
+    #[arg(long)]
+    pub prerelease: bool,
+    /// Erase the whole device first: its settings, radio pairing,
+    /// authorized apps, device key and authorization code
+    #[arg(long)]
+    pub clean: bool,
+    /// The board, when the device can't say: atom-lite or core2. An ATOM
+    /// Lite and a StickC Plus SE have the same chip
+    #[arg(long, value_name = "BOARD")]
+    pub board: Option<String>,
+    /// The baud rate to write at [default: 1500000, then 115200 if that fails]
+    #[arg(long)]
+    pub baud: Option<u32>,
 }
 
 #[derive(Debug, Subcommand)]

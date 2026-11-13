@@ -30,7 +30,7 @@ use std::time::{Duration, SystemTime};
 use serde_json::{Map, Value, json};
 
 use super::cli::{
-    AdapterCmd, BridgeCmd, BtWho, Cli, Cmd, PortAdd, PortCmd, SerialCmd, TncAdd, TncCmd,
+    AdapterCmd, BridgeCmd, BtWho, Cli, Cmd, PortAdd, PortCmd, SerialCmd, TncAdd, TncCmd, TncUpdate,
 };
 use super::client::{Client, CtlError, DEFAULT_SOCKET, Message, result};
 use super::render;
@@ -49,6 +49,9 @@ pub enum Outcome {
 
 pub struct Ctl {
     pub(super) socket: PathBuf,
+    /// The device's port, from `--device` or `KTBCTL_DEVICE`: commands go
+    /// to the device over USB serial instead of to the daemon.
+    pub(super) device: Option<String>,
     pub(super) json: bool,
     pub(super) yes: bool,
     pub(super) non_disruptive: bool,
@@ -61,8 +64,14 @@ impl Ctl {
             .clone()
             .or_else(|| std::env::var_os("KTBCTL_SOCKET").map(PathBuf::from))
             .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET));
+        let device = cli
+            .device
+            .clone()
+            .or_else(|| std::env::var("KTBCTL_DEVICE").ok())
+            .filter(|d| !d.is_empty());
         Ctl {
             socket,
+            device,
             json: cli.json,
             yes: cli.yes,
             non_disruptive: cli.non_disruptive,
@@ -71,6 +80,9 @@ impl Ctl {
 
     pub async fn run(&self, cmd: Option<Cmd>) -> Outcome {
         let res = match cmd {
+            Some(Cmd::Device(cmd)) => self.device(cmd).await,
+            Some(Cmd::Auth(cmd)) => self.auth(cmd).await,
+            cmd if self.device.is_some() => self.on_device(cmd).await,
             None if !self.json && interactive() && std::io::stdout().is_terminal() => {
                 super::tui::run(&self.socket).await
             }
@@ -98,6 +110,10 @@ impl Ctl {
 
     async fn dispatch(&self, c: &mut Client, cmd: Cmd) -> Result<(), CtlError> {
         match cmd {
+            // run() sends these to the device, never to the daemon.
+            Cmd::Device(cmd) => self.device(cmd).await,
+            Cmd::Auth(cmd) => self.auth(cmd).await,
+            Cmd::Tnc(TncCmd::Update(u)) => self.tnc_update(c, u).await,
             Cmd::Status { bridge } => self.status_with(c, bridge).await,
             Cmd::Adapter(AdapterCmd::List) => {
                 let s: Status = c.call_as(Command::Status).await?;
@@ -290,6 +306,11 @@ impl Ctl {
                 default,
                 retry,
             } => {
+                if self.device.is_some() && (retry || default || name.is_some()) {
+                    return self
+                        .device_public_name(c, &bridge, name, default, retry)
+                        .await;
+                }
                 if retry {
                     return self.act(c, Command::BridgeRetryPublicName { bridge }).await;
                 }
@@ -541,6 +562,7 @@ impl Ctl {
                 }
             }
         }
+        let asked = who.address.clone().or(who.tnc.clone()).unwrap_or_default();
         let v = c
             .call(Command::BluetoothUnpair {
                 tnc: who.tnc,
@@ -548,13 +570,125 @@ impl Ctl {
                 adapter: who.adapter,
             })
             .await?;
-        let r: PairResult =
-            serde_json::from_value(v.clone()).map_err(|e| CtlError::Protocol(e.to_string()))?;
-        self.print(&v, || format!("unpaired {} on {}\n", r.address, r.adapter))
+        // Firmware 1.2 answers {}, not the address and adapter.
+        let r: Option<PairResult> = serde_json::from_value(v.clone()).ok();
+        self.print(&v, || match r {
+            Some(r) => format!("unpaired {} on {}\n", r.address, r.adapter),
+            None => format!("unpaired {asked}\n"),
+        })
+    }
+
+    /// A command for the device `--device` names: the ones a device
+    /// answers, over its USB serial port.
+    async fn on_device(&self, cmd: Option<Cmd>) -> Result<(), CtlError> {
+        let cmd = cmd.unwrap_or(Cmd::Status { bridge: None });
+        if let Some((name, why)) = daemon_only(&cmd) {
+            return Err(CtlError::Message(format!(
+                "'ktbctl {name}' isn't available on a device: {why}. A device takes status, \
+                 bridge public-name, scan, pair, unpair, tnc list, tnc models, tnc update, \
+                 connect, disconnect, release, kick and monitor, and the device and auth \
+                 commands"
+            )));
+        }
+        match cmd {
+            Cmd::Monitor { bridge } => self.monitor(bridge).await,
+            cmd => {
+                let mut c = self.connect().await?;
+                self.dispatch(&mut c, cmd).await
+            }
+        }
+    }
+
+    /// `bridge public-name` on a device, whose public name is its
+    /// `public_name` setting. Showing it works as on the daemon.
+    async fn device_public_name(
+        &self,
+        c: &mut Client,
+        bridge: &str,
+        name: Option<String>,
+        default: bool,
+        retry: bool,
+    ) -> Result<(), CtlError> {
+        if retry {
+            return Err(CtlError::Message(
+                "a device doesn't announce itself with DNS-SD, so its public name never \
+                 collides; --retry is for the daemon"
+                    .into(),
+            ));
+        }
+        if default {
+            return Err(CtlError::Message(
+                "this firmware can't go back to its default name. 'ktbctl device reset' \
+                 does, but it also clears the settings, the radio pairing and the \
+                 authorized apps"
+                    .into(),
+            ));
+        }
+        let s: Status = c.call_as(Command::Status).await?;
+        let b = s
+            .bridges
+            .iter()
+            .find(|b| b.id == bridge || b.name == bridge)
+            .ok_or_else(|| {
+                CtlError::Message(format!("there's no bridge {bridge:?}; a device's is ktbr0"))
+            })?;
+        let name = name.unwrap_or_default();
+        let mut settings = Map::new();
+        settings.insert("public_name".into(), json!(name));
+        let v = c.call(Command::DeviceSettingsSet { settings }).await?;
+        if let Some(w) = crate::ctl::device::name_warning(&name) {
+            eprintln!("ktbctl: {w}");
+        }
+        self.print(&v, || format!("{}'s public name is {name}\n", b.id))
+    }
+
+    /// The daemon's socket, or the device `--device` names.
+    pub(super) async fn connect(&self) -> Result<Client, CtlError> {
+        if self.device.is_some() {
+            return self.device_client().await.map(|(_, _, c)| c);
+        }
+        Client::connect(&self.socket).await
+    }
+
+    /// `tnc update`: a device's radio. On the daemon `tnc.update` replaces
+    /// the whole definition, which a few flags would silently cut down, so
+    /// there it's 'ktbctl edit tnc'.
+    async fn tnc_update(&self, c: &mut Client, u: TncUpdate) -> Result<(), CtlError> {
+        if self.device.is_none() {
+            return Err(CtlError::Message(
+                "'ktbctl tnc update' is for a device's radio, with --device; on the daemon, \
+                 'ktbctl edit tnc ID' changes a TNC"
+                    .into(),
+            ));
+        }
+        let mut def = Map::new();
+        if let Some(m) = &u.model {
+            def.insert("model".into(), json!(m));
+        }
+        if let Some(a) = &u.spp_address {
+            def.insert("spp".into(), json!({"address": a}));
+        }
+        if let Some(a) = &u.ble_address {
+            def.insert("ble".into(), json!({"address": a}));
+        }
+        if def.is_empty() {
+            return Err(CtlError::Message(
+                "give --model, --spp-address or --ble-address".into(),
+            ));
+        }
+        let definition = Value::Object(def);
+        let v = self
+            .change_value(c, |nd| Command::TncUpdate {
+                tnc: u.tnc.clone(),
+                definition: definition.clone(),
+                non_disruptive: nd,
+            })
+            .await?;
+        self.print(&v, || format!("updated tnc {}\n", u.tnc))
     }
 
     async fn status(&self, bridge: Option<String>) -> Result<(), CtlError> {
-        let mut c = Client::connect(&self.socket).await?;
+        let mut c = self.connect().await?;
         self.status_with(&mut c, bridge).await
     }
 
@@ -748,7 +882,7 @@ impl Ctl {
         let mut waiting = false;
         loop {
             let session = async {
-                let mut c = Client::connect(&self.socket).await?;
+                let mut c = self.connect().await?;
                 c.subscribe(vec![Topic::Frames]).await?;
                 if waiting {
                     eprintln!("-- connected again");
@@ -771,7 +905,7 @@ impl Ctl {
             };
             let res = tokio::select! {
                 r = session => r,
-                _ = tokio::signal::ctrl_c() => return Ok(()),
+                _ = tokio::signal::ctrl_c() => return self.monitor_done().await,
             };
             match res {
                 // The daemon went away, or isn't there yet.
@@ -785,13 +919,24 @@ impl Ctl {
             }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(2)) => {}
-                _ = tokio::signal::ctrl_c() => return Ok(()),
+                _ = tokio::signal::ctrl_c() => return self.monitor_done().await,
             }
         }
     }
 
+    /// A device's subscriptions outlive the port being closed (it can't
+    /// tell), so `monitor` on a device unsubscribes when it's done.
+    async fn monitor_done(&self) -> Result<(), CtlError> {
+        if self.device.is_some()
+            && let Ok(mut c) = self.connect().await
+        {
+            let _ = c.call(Command::Unsubscribe { topics: Vec::new() }).await;
+        }
+        Ok(())
+    }
+
     /// Print `value` as JSON with `--json`, else `human()`.
-    fn print<T: serde::Serialize>(
+    pub(super) fn print<T: serde::Serialize>(
         &self,
         value: &T,
         human: impl FnOnce() -> String,
@@ -828,6 +973,44 @@ impl Ctl {
             other => eprintln!("ktbctl: {other}"),
         }
     }
+}
+
+/// The name of a command only the daemon serves: a device's bridge is
+/// fixed, so it can't be rebuilt or reconfigured.
+/// A command only the daemon serves, and why a device can't: it has
+/// exactly one bridge, `ktbr0`, always enabled, with a fixed TNC port and
+/// app port.
+fn daemon_only(cmd: &Cmd) -> Option<(&'static str, &'static str)> {
+    const ONE_BRIDGE: &str = "a device has exactly one bridge, ktbr0, which can't be added, \
+                              cloned or removed";
+    const ALWAYS_ON: &str = "a device's one bridge, ktbr0, is always enabled";
+    const FIXED: &str = "a device's bridge and its ports are fixed";
+    Some(match cmd {
+        Cmd::Setup(_) => ("setup", FIXED),
+        Cmd::Tui => ("tui", "the TUI works with the daemon so far"),
+        Cmd::Adapter(AdapterCmd::Add { .. }) => ("adapter add", "a device has one adapter"),
+        Cmd::Adapter(AdapterCmd::Rm { .. }) => ("adapter rm", "a device has one adapter"),
+        Cmd::Tnc(TncCmd::Add(_)) => ("tnc add", "a device has one TNC, radio"),
+        Cmd::Tnc(TncCmd::Rm { .. }) => ("tnc rm", "a device has one TNC, radio"),
+        Cmd::Serial(_) => ("serial list", FIXED),
+        Cmd::Bridge(BridgeCmd::Add { .. }) => ("bridge add", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Clone { .. }) => ("bridge clone", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Rm { .. }) => ("bridge rm", ONE_BRIDGE),
+        Cmd::Bridge(BridgeCmd::Name { .. }) => (
+            "bridge name",
+            "on a device the bridge's name is its public name: 'ktbctl bridge public-name \
+             ktbr0 NAME'",
+        ),
+        Cmd::Bridge(BridgeCmd::PublicName { .. }) => return None,
+        Cmd::Enable { .. } => ("enable", ALWAYS_ON),
+        Cmd::Disable { .. } => ("disable", ALWAYS_ON),
+        Cmd::Switch { .. } => ("switch", ALWAYS_ON),
+        Cmd::Port(_) => ("port", FIXED),
+        Cmd::Edit { .. } => ("edit", FIXED),
+        Cmd::Check => ("check", "a device has no config files"),
+        Cmd::Reload => ("reload", "a device has no config files"),
+        _ => return None,
+    })
 }
 
 pub(super) fn interactive() -> bool {
@@ -1021,6 +1204,32 @@ fn set_key(toml: &str, key: &str, value: Option<&str>) -> Result<String, CtlErro
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn daemon_only_commands_are_refused_on_a_device() {
+        use clap::Parser;
+        let cmd = |args: &[&str]| {
+            let mut all = vec!["ktbctl"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all).unwrap().command.unwrap()
+        };
+        let name = |args: &[&str]| daemon_only(&cmd(args)).map(|(n, _)| n);
+        assert_eq!(name(&["bridge", "rm", "ktbr1"]), Some("bridge rm"));
+        assert_eq!(name(&["bridge", "add", "--name", "x"]), Some("bridge add"));
+        assert_eq!(name(&["bridge", "name", "ktbr0", "x"]), Some("bridge name"));
+        assert_eq!(name(&["bridge", "public-name", "ktbr0", "x"]), None);
+        assert_eq!(name(&["bridge", "public-name", "ktbr0"]), None);
+        assert_eq!(name(&["disable", "ktbr0"]), Some("disable"));
+        assert_eq!(name(&["tnc", "add", "d75"]), Some("tnc add"));
+        assert_eq!(name(&["reload"]), Some("reload"));
+        assert_eq!(daemon_only(&cmd(&["status"])), None);
+        assert_eq!(daemon_only(&cmd(&["tnc", "list"])), None);
+        assert_eq!(
+            daemon_only(&cmd(&["tnc", "update", "radio", "--model", "td-h9"])),
+            None
+        );
+        assert_eq!(daemon_only(&cmd(&["disconnect", "ktbr0/radio"])), None);
+    }
+
     use super::*;
     use clap::Parser;
 
