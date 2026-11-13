@@ -55,7 +55,7 @@ authorized over BLE.
 | `main/storage.*` | NVS, and what reset clears |
 | `main/errors.*` | The errors the LED shows red and `device.info` lists |
 | `main/firmware.*` | The running image, rollback and the self-test deadline |
-| `tools/ktbdev.py` | A development management app for the control API over USB |
+| `tools/ktbdev.py` | Development-only commands over USB: `debug.*`, the LED demo and the raw log. Everything else is `ktbctl` |
 | `tools/package.py` | Names a build's images for a release and writes the web installer's manifest |
 
 ## Build and flash
@@ -86,30 +86,37 @@ development key and the release key only needs a flash.
 
 ## Trying it
 
-`tools/ktbdev.py` speaks the control API over the port:
+`ktbctl` manages the device over its USB serial port, as anyone would:
+`--device PORT` (or `KTBCTL_DEVICE`) sends its usual commands to the
+device, and the `device` and `auth` commands find the one device on USB
+by themselves.
 
 ```
-tools/ktbdev.py info                 # device.info
-tools/ktbdev.py code                 # the authorization code and its link
-tools/ktbdev.py set led_normal=dark led_wake_seconds=10
-tools/ktbdev.py mode 120             # start authorization mode
-tools/ktbdev.py demo                 # every LED state and event in turn
+ktbctl device list                   # the devices on USB, and what they run
+ktbctl device info                   # device.info
+ktbctl device flash --manifest dist/ktb-atom-lite-1.3.0-dev-manifest.json
+ktbctl device settings set led_normal=dark led_wake_seconds=10
+ktbctl auth code                     # the authorization code and its link
+ktbctl auth mode 120                 # start authorization mode
+ktbctl --device PORT status
+ktbctl --device PORT monitor         # frames, decoded
+ktbctl --device PORT scan --le       # over BLE, for a TD-H9
+ktbctl --device PORT pair --address 40:79:12:E4:95:9D
+ktbctl --device PORT disconnect ktbr0/radio    # and connect, release
+ktbctl --device PORT tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E
+```
+
+`tools/ktbdev.py` has only what `ktbctl` doesn't: the `debug` commands
+and the LED `demo`, which need the development build, and the raw log.
+`debug radio=...` changes what the LED shows, not the real link, until
+`debug radio=real`.
+
+```
 tools/ktbdev.py debug radio=connected phones=1
-tools/ktbdev.py status
-tools/ktbdev.py watch                # state and frame events, decoded
-tools/ktbdev.py watch activity       # bytes per port and session
-tools/ktbdev.py scan 10              # bluetooth.scan
-tools/ktbdev.py scan --le 10         # over BLE, for a TD-H9
-tools/ktbdev.py pair                 # bluetooth.pair, asking you to compare the number
-tools/ktbdev.py port disconnect      # and connect, release
-tools/ktbdev.py tnc model=th-d74     # tnc.update
-tools/ktbdev.py tnc model=td-h9 ble=FB:5D:C0:5E:D5:7E
-tools/ktbdev.py monitor              # the log
+tools/ktbdev.py frames to_radio 5    # debug.frame
+tools/ktbdev.py demo                 # every LED state and event in turn
+tools/ktbdev.py log                  # everything the port carries, the log included
 ```
-
-`-v` prints the log alongside. The `debug` commands and `demo` need the
-development build; `debug radio=...` changes what the LED shows, not the
-real link, until `debug radio=real`.
 
 ## Pairing a radio
 
@@ -121,8 +128,8 @@ shows six digits; press OK on it within 30 seconds. The ATOM confirms its
 side at once. A single press cancels, and the ATOM goes back to the radio
 it had.
 
-Over USB, `ktbdev.py pair` does the same for an address, and asks you to
-compare the number first.
+Over USB, `ktbctl --device PORT pair --address ADDRESS` does the same
+for an address, and asks you to compare the number first.
 
 The same double press selects a TIDRADIO TD-H9: the scan looks for one
 over BLE too, and the first device whose advertised name starts with
@@ -161,7 +168,7 @@ is cleared.
 The LED blinks red fast for anything the ATOM can't fix by retrying:
 NVS that can't be used, Bluetooth or the BLE KISS service not starting,
 or a missing device key. The control API keeps working over USB whatever
-fails, and `tools/ktbdev.py info` shows each error's code and what to do;
+fails, and `ktbctl device info` shows each error's code and what to do;
 [atom-lite-ui.md](../docs/atom-lite-ui.md#errors) has the list. With the
 development build, `ktbdev.py debug error=true` turns on a `debug` error.
 

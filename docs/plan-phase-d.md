@@ -275,27 +275,61 @@ and built on the firmware side first, in firmware 1.3.0.
 
 ## D2: management over USB serial
 
-- [ ] **A serial transport for `Client`.** The reader and writer become
+- [x] **A serial transport for `Client`.** The reader and writer become
       the Unix socket's or the serial port's; the protocol is the same
       newline-delimited JSON, with log lines skipped on serial.
-- [ ] **`--device PORT` for the existing commands** a device answers:
+- [x] **`--device PORT` for the existing commands** a device answers:
       `status`, `scan` (Classic, and `--le`), `pair` with the TH-D75's
       confirm step, `unpair`, `tnc update` (model, `spp.address`,
       `ble.address`), `tnc models`, `connect`, `disconnect`, `release`,
       `kick` and `monitor`. `status` shows a device's one bridge without
       `since` times. A command the device refuses with `not_supported`
       says it isn't available on a device, not that something failed.
-- [ ] **Device-only commands:** `device info` (done with D1's step 2), `device settings`, `device
+- [x] **Device-only commands:** `device info`, `device settings`, `device
       settings set` (and which settings need `device reboot`), `device
       reboot`, `device reset` (asks first, or `--yes`: it clears the
       settings, the radio and the authorized apps), and `device identify`.
-- [ ] **`auth` commands:** `auth code`, `auth rotate-code` (asks first),
-      `auth mode SECONDS` and `auth apps`. Phase E reuses them over BLE
-      and for `ktb-gateway`.
-- [ ] **`--json`** for every command, as for the daemon's.
-- [ ] **`ktbdev.py`** keeps only what `ktbctl` doesn't do: the `debug.*`
-      commands and the LED demo.
+- [x] **`auth` commands:** `auth info`, `auth code`, `auth rotate-code`
+      (asks first), `auth mode SECONDS` and `auth apps`. Phase E reuses
+      them over BLE and for `ktb-gateway`.
+- [x] **`--json`** for every command, as for the daemon's.
+- [x] **`ktbdev.py`** keeps only what `ktbctl` doesn't do: the `debug.*`
+      commands, the LED demo and the raw log. Gone with the rest: `watch`
+      (`ktbctl monitor` shows frames, not `state` or `activity` events)
+      and `raw` (any command, by name).
 - [ ] The TUI against a device is not in this phase.
+
+Done 12 November 2026. How it works:
+
+- **Where commands go.** `--device PORT` or `KTBCTL_DEVICE` sends every
+  command to the device; without either they go to the daemon. The
+  `device` and `auth` commands always go to a device, the only likely one
+  on USB if none is named. Connecting asks `device.info` first, so a
+  board running other firmware fails at once rather than leaving a
+  request waiting.
+- **Daemon-only commands** (`setup`, `bridge`, `port`, `tnc add` and
+  `rm`, `adapter add` and `rm`, `enable`, `disable`, `switch`, `edit`,
+  `check`, `reload`, `serial list`, the TUI) are refused before anything
+  is sent.
+- **`tnc update`** is new, and for devices only: on the daemon
+  `tnc.update` replaces the whole definition, which a few flags would cut
+  down, so there it's still `ktbctl edit tnc`.
+- **`monitor` on a device** unsubscribes when it's stopped: a device's
+  subscriptions outlive the port being closed.
+- **The protocol types** gained the `device.*` and `auth.*` commands, so
+  they're in the published schema, and the daemon refuses them with
+  `not_supported`. `ErrorCode` gained `not_supported`, and reads a code it
+  doesn't know as `unknown` instead of failing. `status` fields a device
+  leaves out became optional: `source`, a bridge's `editable`, a port's
+  `settings` and a session's `since`.
+
+Tried on the Core2 on macOS (every command but `pair`, which needs a
+radio in pairing mode, and `kick`, with a phone connected) and the ATOM
+Lite on aprscc.
+
+Found in the firmware: `bluetooth.unpair` answers `{}`, where the daemon
+answers with the address, the adapter and `paired`, which control-api.md
+says a device does too. `ktbctl` takes either.
 
 ## Testing
 
