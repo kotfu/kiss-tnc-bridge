@@ -213,19 +213,19 @@ mod tests {
     use super::*;
 
     fn write_release(dir: &Path, app: &[u8], app_sha: Option<&str>) -> PathBuf {
-        std::fs::write(dir.join("ktb-core2-1.3.0-bootloader.bin"), b"boot").unwrap();
-        std::fs::write(dir.join("ktb-core2-1.3.0-app.bin"), app).unwrap();
+        std::fs::write(dir.join("ktb-core2-v1.3-1.3.0-bootloader.bin"), b"boot").unwrap();
+        std::fs::write(dir.join("ktb-core2-v1.3-1.3.0-app.bin"), app).unwrap();
         let manifest = serde_json::json!({
-        "name": "kiss-tnc-bridge", "version": "1.3.0", "board": "core2",
+        "name": "kiss-tnc-bridge", "version": "1.3.0", "board": "core2-v1.3",
         "built": "2026-11-20T02:00:00Z",
         "builds": [{"chipFamily": "ESP32", "parts": [
-            {"path": "ktb-core2-1.3.0-bootloader.bin", "offset": 4096,
+            {"path": "ktb-core2-v1.3-1.3.0-bootloader.bin", "offset": 4096,
              "sha256": sha256_hex(b"boot"), "size": 4},
-            {"path": "ktb-core2-1.3.0-app.bin", "offset": 65536,
+            {"path": "ktb-core2-v1.3-1.3.0-app.bin", "offset": 65536,
              "sha256": app_sha.map_or_else(|| sha256_hex(app), str::to_string),
              "size": app.len()},
         ]}]});
-        let path = dir.join("ktb-core2-1.3.0-manifest.json");
+        let path = dir.join("ktb-core2-v1.3-1.3.0-manifest.json");
         std::fs::write(&path, manifest.to_string()).unwrap();
         path
     }
@@ -234,7 +234,7 @@ mod tests {
     fn a_release_loads_with_its_parts_checked() {
         let t = tempfile::tempdir().unwrap();
         let fw = Firmware::load(&write_release(t.path(), b"app image", None)).unwrap();
-        assert_eq!(fw.board, "core2");
+        assert_eq!(fw.board, "core2-v1.3");
         assert_eq!(fw.version, "1.3.0");
         assert_eq!(fw.parts.len(), 2);
         assert_eq!(fw.parts[1].offset, 65536);
@@ -251,7 +251,7 @@ mod tests {
 
         let t = tempfile::tempdir().unwrap();
         let m = write_release(t.path(), b"app image", None);
-        std::fs::write(t.path().join("ktb-core2-1.3.0-app.bin"), b"app ima").unwrap();
+        std::fs::write(t.path().join("ktb-core2-v1.3-1.3.0-app.bin"), b"app ima").unwrap();
         let e = Firmware::load(&m).unwrap_err();
         assert!(e.contains("is 7 bytes; the manifest says 9"), "{e}");
     }

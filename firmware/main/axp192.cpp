@@ -17,8 +17,11 @@ constexpr uint8_t REG_POWER_STATUS = 0x00; // bit 7 ACIN, bit 5 VBUS, bit 2 char
 constexpr uint8_t REG_CHARGE_STATUS = 0x01; // bit 6 charging, bit 5 battery present
 constexpr uint8_t REG_OUTPUTS = 0x12;      // bit 0 DCDC1, 1 DCDC3, 2 LDO2, 3 LDO3
 constexpr uint8_t REG_DCDC1_V = 0x26;      // the ESP32's 3.3 V
-constexpr uint8_t REG_DCDC3_V = 0x27;      // the backlight
-constexpr uint8_t REG_LDO23_V = 0x28;      // LDO2 (high nibble): the screen's logic and the SD card
+constexpr uint8_t REG_DCDC3_V = 0x27;      // the Core2's backlight
+// LDO2 in the high nibble, LDO3 in the low, each 1.8 V + 100 mV a step.
+// The Core2: LDO2 the screen's logic and the SD card. The StickC: LDO2
+// the backlight, LDO3 the screen's logic.
+constexpr uint8_t REG_LDO23_V = 0x28;
 constexpr uint8_t REG_VBUS_IPSOUT = 0x30;
 constexpr uint8_t REG_SHUTDOWN = 0x32;     // bit 7 powers off
 constexpr uint8_t REG_CHARGE_1 = 0x33;     // the charge current, low nibble
@@ -36,10 +39,19 @@ constexpr uint8_t REG_GPIO012_DATA = 0x94;
 constexpr uint8_t REG_GPIO34_CTRL = 0x95;  // GPIO4: the screen's reset
 constexpr uint8_t REG_GPIO34_DATA = 0x96;
 
+#if CONFIG_KTB_BOARD_CORE2
 // DCDC3 in 25 mV steps from 700 mV. Full is 3.3 V, as M5Stack sets it;
 // dim is provisional: 2.7 V looked too bright on a device.
 constexpr uint8_t backlight_full = (3300 - 700) / 25;
 constexpr uint8_t backlight_dim = (2500 - 700) / 25; // M5GFX's lowest
+#else
+// LDO2's steps for the StickC's backlight: 2.5 V (M5Stack's lowest) to
+// 3.3 V, provisional until judged on a device. The factory firmware runs
+// it at 2.8 V.
+constexpr uint8_t backlight_lowest = (2500 - 1800) / 100;
+constexpr uint8_t backlight_highest = (3300 - 1800) / 100;
+int backlight_step = -1; // what LDO2 was last set to; 0 is off, -1 unknown
+#endif
 
 i2c_master_dev_handle_t dev = nullptr;
 
@@ -96,6 +108,8 @@ int percent_from(float v)
 }
 
 } // namespace
+
+#if CONFIG_KTB_BOARD_CORE2
 
 bool init(i2c_master_bus_handle_t bus)
 {
@@ -180,14 +194,80 @@ void backlight(Backlight b)
     update(REG_OUTPUTS, 0xff, 0x02);
 }
 
+#else
+
+bool init(i2c_master_bus_handle_t bus)
+{
+    i2c_device_config_t cfg = {};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address = address;
+    cfg.scl_speed_hz = 400000;
+    if (i2c_master_bus_add_device(bus, &cfg, &dev) != ESP_OK) {
+        ESP_LOGE(TAG, "couldn't add the device");
+        return false;
+    }
+    uint8_t outputs;
+    if (!read(REG_OUTPUTS, &outputs)) {
+        ESP_LOGE(TAG, "no answer at 0x%02x", address);
+        return false;
+    }
+    // The chip keeps its settings while the battery holds, so this sets
+    // only what the firmware relies on, and leaves the rest as M5Stack's
+    // factory firmware sets it: charging to 4.2 V at 100 mA (the battery
+    // is 120 mAh), every ADC on, and DCDC1 (the ESP32) at 3.3 V.
+    //
+    // The power button: on after 512 ms, a long press at 1 s, and off
+    // after 6 s held, in the chip, as on the Core2 (the factory sets 4 s).
+    write8(REG_PEK, 0x4d);
+    update(REG_ADC_EN_1, 0xff, 0xc0);      // battery voltage and current
+    update(REG_LDO23_V, 0xf0, 0x0c);       // LDO3 (the screen's logic) at 3.0 V
+    // LDO3 on, LDO2 (the backlight) off until something is drawn.
+    write8(REG_OUTPUTS, static_cast<uint8_t>((outputs | 0x09) & ~0x04));
+    backlight_step = 0;
+    vTaskDelay(pdMS_TO_TICKS(20));
+    ESP_LOGI(TAG, "rails set: power 0x%02x, charge 0x%02x, outputs 0x%02x", read8(REG_POWER_STATUS),
+             read8(REG_CHARGE_STATUS), read8(REG_OUTPUTS));
+    return true;
+}
+
+void backlight(uint8_t brightness)
+{
+    int step = 0;
+    if (brightness > 0) {
+        int b = brightness > 100 ? 100 : brightness;
+        step = backlight_lowest + ((backlight_highest - backlight_lowest) * b + 50) / 100;
+    }
+    if (step == backlight_step) {
+        return;
+    }
+    if (step == 0) {
+        if (update(REG_OUTPUTS, static_cast<uint8_t>(~0x04), 0x00)) {
+            backlight_step = 0;
+        }
+        return;
+    }
+    if (update(REG_LDO23_V, 0x0f, static_cast<uint8_t>(step << 4)) && update(REG_OUTPUTS, 0xff, 0x04)) {
+        backlight_step = step;
+    } else {
+        backlight_step = -1;
+    }
+}
+
+#endif
+
 Power read()
 {
     Power p;
     uint8_t status = read8(REG_POWER_STATUS);
     uint8_t charge = read8(REG_CHARGE_STATUS);
+#if CONFIG_KTB_BOARD_CORE2
     // USB comes in on ACIN. VBUS is the 5 V bus, which EXTEN powers from
     // the battery (init), so it's always there: it isn't external power.
     p.external = status & 0x80;
+#else
+    // The StickC's USB comes in on VBUS.
+    p.external = status & 0x20;
+#endif
     p.battery = charge & 0x20;
     p.charging = (charge & 0x40) && p.external;
     uint8_t b[2];

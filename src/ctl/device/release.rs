@@ -249,8 +249,12 @@ mod tests {
         releases(vec![
             gh("v1.3.0", false, &[]), // the daemon's
             gh("firmware-v1.1.0", false, &["atom-lite"]),
-            gh("firmware-v1.3.0-rc1", true, &["atom-lite", "core2"]),
-            gh("firmware-v1.2.0", false, &["atom-lite", "core2"]),
+            gh(
+                "firmware-v1.3.0-rc1",
+                true,
+                &["atom-lite", "stickc-plus-se", "core2-v1.3"],
+            ),
+            gh("firmware-v1.2.0", false, &["atom-lite", "core2-v1.3"]),
             gh("firmware-v1.10.0-beta1", false, &["atom-lite"]),
         ])
     }
@@ -276,12 +280,18 @@ mod tests {
     fn the_newest_release_for_the_board_is_picked() {
         let l = list();
         assert_eq!(pick(&l, None, false, "atom-lite").unwrap().version, "1.2.0");
-        assert_eq!(pick(&l, None, false, "core2").unwrap().version, "1.2.0");
+        assert_eq!(
+            pick(&l, None, false, "core2-v1.3").unwrap().version,
+            "1.2.0"
+        );
         assert_eq!(
             pick(&l, None, true, "atom-lite").unwrap().version,
             "1.10.0-beta1"
         );
-        assert_eq!(pick(&l, None, true, "core2").unwrap().version, "1.3.0-rc1");
+        assert_eq!(
+            pick(&l, None, true, "core2-v1.3").unwrap().version,
+            "1.3.0-rc1"
+        );
         assert!(
             pick(&l, None, false, "stickc-plus-se")
                 .unwrap_err()
@@ -293,7 +303,9 @@ mod tests {
     fn a_version_can_be_asked_for() {
         let l = list();
         assert_eq!(
-            pick(&l, Some("1.3.0-rc1"), false, "core2").unwrap().version,
+            pick(&l, Some("1.3.0-rc1"), false, "core2-v1.3")
+                .unwrap()
+                .version,
             "1.3.0-rc1"
         );
         assert_eq!(
@@ -303,10 +315,10 @@ mod tests {
             "1.1.0"
         );
         assert!(
-            pick(&l, Some("1.1.0"), false, "core2")
+            pick(&l, Some("1.1.0"), false, "core2-v1.3")
                 .unwrap_err()
-                .contains("no build for the Core2")
+                .contains("no build for the Core2 v1.3")
         );
-        assert!(pick(&l, Some("9.9.9"), false, "core2").is_err());
+        assert!(pick(&l, Some("9.9.9"), false, "core2-v1.3").is_err());
     }
 }

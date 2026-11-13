@@ -26,20 +26,22 @@ constexpr bool screen = false;
 
 constexpr const char *name = "stickc-plus-se";
 
-// Until its own UI is designed: button A (the M5 button on the front)
-// works as the ATOM's button. Active low with a pull-up on the board;
-// GPIO37 is input only and isn't a strapping pin. Not tried on a device.
+// Until its own UI is designed it runs the ATOM's:
+// button A (the large button on the face) is the ATOM's button, and the
+// whole screen is its LED (stickc_screen.cpp). A is active low with a
+// pull-up on the board; GPIO37 is input only and isn't a strapping pin.
 constexpr gpio_num_t button = GPIO_NUM_37;
 
-// No RGB LED: one red LED (GPIO10) and a screen, both still to design.
+// No RGB LED: the screen stands in for it, and the red LED (GPIO10) is
+// kept off.
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
-// Its screen has no UI yet: it runs the ATOM's, with button A.
+// No screen UI yet: the ATOM's settings (led_*) apply, not the Core2's.
 constexpr bool screen = false;
 
 #elif CONFIG_KTB_BOARD_CORE2
 
-constexpr const char *name = "core2";
+constexpr const char *name = "core2-v1.3";
 
 // No button: the touch screen and the circles below it.
 constexpr gpio_num_t button = GPIO_NUM_NC;

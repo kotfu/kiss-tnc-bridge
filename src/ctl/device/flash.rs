@@ -36,18 +36,15 @@ use espflash::target::ProgressCallbacks;
 use serde::Serialize;
 use serde_json::json;
 
-use super::board_name;
 use super::manifest::{Firmware, Part, compare_versions};
 use super::ports::DevicePort;
 use super::probe::{self, ANSWER_WAIT};
 use super::rom::{self, ChipInfo, FAST_BAUD, Rom, SLOW_BAUD};
+use super::{BOARDS, board_name};
 use crate::ctl::cli::FlashArgs;
 use crate::ctl::client::CtlError;
 use crate::ctl::render;
 use crate::ctl::run::{Ctl, confirm, interactive};
-
-/// The boards `--board` takes.
-pub const BOARDS: &[&str] = &["atom-lite", "core2", "stickc-plus-se"];
 
 /// How long the new firmware has to answer after the reset, as the web
 /// installer waits.
@@ -576,5 +573,25 @@ mod tests {
         assert_eq!(p.shown, Some(50));
         p.update(9);
         assert_eq!(p.shown, Some(100));
+    }
+
+    #[test]
+    fn board_takes_every_board() {
+        use clap::CommandFactory;
+        let cmd = crate::ctl::cli::Cli::command();
+        let flash = cmd
+            .find_subcommand("device")
+            .and_then(|d| d.find_subcommand("flash"))
+            .unwrap();
+        let board = flash
+            .get_arguments()
+            .find(|a| a.get_id() == "board")
+            .unwrap();
+        let values: Vec<String> = board
+            .get_possible_values()
+            .iter()
+            .map(|v| v.get_name().to_string())
+            .collect();
+        assert_eq!(values, BOARDS);
     }
 }

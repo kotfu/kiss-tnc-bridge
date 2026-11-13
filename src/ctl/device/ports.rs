@@ -25,12 +25,14 @@ use serde::Serialize;
 
 use crate::port::serial_list::Usb;
 
-/// The USB serial chips of the boards `ktbctl` manages. The ATOM Lite's is
-/// a CH552 that presents itself with FTDI's ids, which other FTDI devices
-/// share, so a match is only a likely device until it answers
-/// `device.info`.
-pub const BOARD_CHIPS: &[(u16, u16, &str)] =
-    &[(0x0403, 0x6001, "ATOM Lite"), (0x1a86, 0x55d4, "Core2")];
+/// The USB serial chips of the boards `ktbctl` manages. The ATOM Lite's
+/// and the StickC Plus SE's is the same CH552, which presents itself with
+/// FTDI's ids, which other FTDI devices share, so a match is only a likely
+/// device until it answers `device.info`.
+pub const BOARD_CHIPS: &[(u16, u16, &str)] = &[
+    (0x0403, 0x6001, "ATOM Lite or StickC Plus SE"),
+    (0x1a86, 0x55d4, "Core2 v1.3"),
+];
 
 /// A serial port a device might be on.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -128,7 +130,7 @@ pub fn choose(ports: &[DevicePort], given: Option<&str>) -> Result<DevicePort, S
     let likely: Vec<&DevicePort> = ports.iter().filter(|p| p.looks_like.is_some()).collect();
     match likely.as_slice() {
         [] => Err(
-            "no ATOM Lite or Core2 found on USB. Check that it's plugged in with a \
+            "no ATOM Lite, StickC Plus SE or Core2 v1.3 found on USB. Check that it's plugged in with a \
                    cable that carries data (some carry only power), or name its port with \
                    --device"
                 .into(),
@@ -188,8 +190,11 @@ mod tests {
     #[test]
     fn boards_are_recognised_by_their_usb_serial_chip() {
         let d = Path::new("/dev/ttyUSB0");
-        assert_eq!(port("a", d, 0x0403, 0x6001).looks_like, Some("ATOM Lite"));
-        assert_eq!(port("a", d, 0x1a86, 0x55d4).looks_like, Some("Core2"));
+        assert_eq!(
+            port("a", d, 0x0403, 0x6001).looks_like,
+            Some("ATOM Lite or StickC Plus SE")
+        );
+        assert_eq!(port("a", d, 0x1a86, 0x55d4).looks_like, Some("Core2 v1.3"));
         assert_eq!(port("a", d, 0x2166, 0x9023).looks_like, None);
         assert_eq!(
             port("a", d, 0x0403, 0x6001).usb_id.as_deref(),
@@ -229,7 +234,7 @@ mod tests {
         let by_link = choose(&ports, Some(link.to_str().unwrap())).unwrap();
         assert_eq!(by_link.path, link.to_str().unwrap());
         assert_eq!(by_link.device, tty);
-        assert_eq!(by_link.looks_like, Some("Core2"));
+        assert_eq!(by_link.looks_like, Some("Core2 v1.3"));
 
         let by_device = choose(&ports, Some(tty.to_str().unwrap())).unwrap();
         assert_eq!(by_device.usb_id.as_deref(), Some("1a86:55d4"));

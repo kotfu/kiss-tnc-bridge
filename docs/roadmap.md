@@ -764,8 +764,10 @@ from a browser, with no app.
 - [ ] A basic UI on each: the boot splash, the status screen, pairing a
       radio, the authorization code and authorization mode, and reset at
       power-on. The Core2's for firmware 1.2 is designed in
-      [core2-ui.md](core2-ui.md), without authorization mode. The StickC Plus SE's is provisional until it's been tried
-      on a device (see [StickC Plus SE firmware](#stickc-plus-se-firmware)).
+      [core2-ui.md](core2-ui.md), without authorization mode. The StickC
+      Plus SE runs the ATOM Lite's UI in firmware 1.3, with its whole
+      screen as the LED and button A as the button; its own UI is still to
+      design.
 - [ ] Bridging tested on each with a TH-D75 and a TD-H9.
 - [ ] The web installer: a choice of the three boards, installing and
       updating each.

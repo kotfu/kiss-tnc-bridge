@@ -1,4 +1,6 @@
 /build*/
+# tools/package.py's output.
+/dist/
 /sdkconfig
 /sdkconfig.old
 /managed_components/

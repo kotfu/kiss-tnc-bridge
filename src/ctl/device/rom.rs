@@ -69,7 +69,7 @@ impl ChipInfo {
 fn boards_for(package: &str, flash: &str) -> &'static [&'static str] {
     match (package, flash) {
         ("ESP32-PICO-D4", "4MB") => &["atom-lite", "stickc-plus-se"],
-        ("ESP32-D0WDQ6-V3", "16MB") => &["core2"],
+        ("ESP32-D0WDQ6-V3", "16MB") => &["core2-v1.3"],
         _ => &[],
     }
 }
@@ -99,6 +99,7 @@ const EFUSE_BLK0_WORD3: u32 = 0x3FF5_A00C;
 /// A connection to the ROM bootloader, with espflash's stub loaded.
 pub struct Rom {
     flasher: Flasher,
+    path: String,
     pub chip: ChipInfo,
     pub baud: u32,
 }
@@ -152,6 +153,7 @@ impl Rom {
         };
         Ok(Rom {
             flasher,
+            path: port.path.clone(),
             chip,
             baud,
         })
@@ -180,13 +182,15 @@ impl Rom {
             .map_err(|e| format!("writing: {}", chain(&e)))
     }
 
-    /// Resets the device out of its bootloader, into the firmware.
-    pub fn reset(mut self) -> Result<(), String> {
-        let chip = self.flasher.chip();
-        self.flasher
-            .connection()
-            .reset_after(true, chip)
-            .map_err(|e| format!("restarting it: {}", chain(&e)))
+    /// Resets the device out of its bootloader, into the firmware: the
+    /// port is closed and opened afresh, and `hard_reset` pulses RTS with
+    /// DTR low. espflash's own reset, on the connection it flashed
+    /// through, left the StickC Plus SE held in reset (its serial line
+    /// low) until RTS was pulsed again on a fresh open.
+    pub fn reset(self) -> Result<(), String> {
+        let Rom { flasher, path, .. } = self;
+        drop(flasher);
+        hard_reset(&path)
     }
 }
 
@@ -245,7 +249,7 @@ mod tests {
             boards_for("ESP32-PICO-D4", "4MB"),
             ["atom-lite", "stickc-plus-se"]
         );
-        assert_eq!(boards_for("ESP32-D0WDQ6-V3", "16MB"), ["core2"]);
+        assert_eq!(boards_for("ESP32-D0WDQ6-V3", "16MB"), ["core2-v1.3"]);
         assert!(boards_for("ESP32-D0WDQ6-V3", "4MB").is_empty());
         assert!(boards_for("ESP32-D0WD", "4MB").is_empty());
     }

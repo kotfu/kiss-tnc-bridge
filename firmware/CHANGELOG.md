@@ -10,6 +10,13 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Changed
+
+- The Core2's board id is `core2-v1.3`, in `device.info` and in a
+  release's file names (1.2.0 used `core2`).
+- The StickC Plus SE runs the ATOM Lite's UI, with its whole screen as
+  the LED and button A as the button, until it has its own.
+
 ## 1.2.0 (2026-11-12)
 
 The M5Stack Core2 v1.3, with a touchscreen, beside the ATOM Lite.
