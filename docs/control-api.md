@@ -320,8 +320,9 @@ authorization mode when the app is authorized.
 ### `auth` commands
 
 The firmware serves these over USB serial and BLE sessions. `ktb-gateway`
-serves them on its own local interface (Phase 6); the daemon's socket
-doesn't. Public keys are base64, fingerprints and codes as above.
+serves them on its own local interface (roadmap Phase E, where that's
+still to decide); the daemon's socket doesn't. Public keys are base64,
+fingerprints and codes as above.
 
 | Command | Parameters | Result |
 |---|---|---|

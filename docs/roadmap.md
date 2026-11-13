@@ -785,6 +785,21 @@ the iOS app's first release, managing them all.
       record framing and the Noise handshakes from
       [control-api.md](control-api.md#ble-management), and authorization
       with the device's code. The same commands as over USB.
+- [ ] **The `auth` commands on a Pi.** A Pi is managed over BLE through
+      `ktb-gateway`, so it needs what a device has: a key, an
+      authorization code, authorization mode and a list of authorized
+      apps, with `auth.info`, `auth.code`, `auth.rotate_code`,
+      `auth.mode`, `auth.apps` and `auth.revoke` (see
+      [`auth` commands](control-api.md#auth-commands)). `ktbctl` on the
+      Pi uses them locally: `ktbctl auth ...` as for a device over USB,
+      and the planned `ktbctl gateway code` and `ktbctl gateway open`.
+      To decide: the spec has `ktb-gateway` keep that state and serve
+      the commands on its own local interface, with the daemon's socket
+      not serving them. The other way is for the daemon to keep it and
+      serve `auth.*` on its socket, with the gateway asking the daemon
+      to check a management app's key. Either way, a remote app reaches
+      these only after authorizing, and local access stays with the
+      socket's group.
 
 ### Phase F: firmware updates over BLE
 
