@@ -96,7 +96,7 @@ MD5 check. Before depending on it, find out:
 - [x] How long a full install takes on each board, and how much
       `espflash` adds to `ktbctl`'s release binary.
 
-Done 12 November 2026 on macOS, and on a Pi 4 with the Core2: see
+Done 12 November 2026 on macOS, and on a Pi 4 with each board: see
 [spikes/espflash-usb](../spikes/espflash-usb/README.md). `espflash` 4.7.0
 works on both boards:
 
@@ -105,9 +105,10 @@ works on both boards:
   (`ktbctl` for armhf is 3.3 MB now).
 - **1500000 baud works on both boards; 921600 doesn't on the ATOM Lite.**
   Its USB serial chip is a CH552 presenting itself as FTDI, and it only
-  does some rates. An update takes 17 s on the ATOM Lite and 17 to 20 s
-  on the Core2 at 1500000; at 115200, 82 s on the ATOM Lite and 96 s on
-  the Core2. A clean install of the Core2 takes 20 s, and gives it a new
+  does some rates, on macOS and Linux alike. At 1500000 an update takes
+  16 to 17 s on the ATOM Lite and 17 to 20 s on the Core2, and a clean
+  install 17 s and 20 s; at 115200 an update takes 71 to 82 s on the
+  ATOM Lite and 96 s on the Core2. A clean install gives the device a new
   key and authorization code.
 - On Linux, `serialport` lists ports by device name (`/dev/ttyACM0`), so
   a `/dev/serial/by-id` path has to be resolved before matching.
@@ -117,9 +118,8 @@ works on both boards:
 - Write every part in one call, and reset the device after a failure:
   a failed flash leaves it in download mode.
 
-Not yet tried: the ATOM Lite on Linux, the armhf build on a board, and
-WCH's macOS driver for the Core2. They're for D1's testing, not the
-decision.
+Not yet tried: the armhf build on a board, and WCH's macOS driver for
+the Core2. They're for D1's testing, not the decision.
 
 Decided 12 November 2026: `espflash` is a library compiled into
 `ktbctl`, with no cargo feature to leave it out. The packages still ship

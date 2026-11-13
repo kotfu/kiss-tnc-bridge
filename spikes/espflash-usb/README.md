@@ -4,7 +4,7 @@ Phase D, step 1 of D1 ([plan-phase-d.md](../../docs/plan-phase-d.md#1-spike-espf
 Can `ktbctl` write our firmware over USB with the
 [espflash](https://github.com/esp-rs/espflash) crate, and what does it
 cost? Run 12 November 2026 on macOS, with an ATOM Lite and a Core2 v1.3
-on USB, and on a Pi 4 with the Core2.
+on USB, and on a Pi 4 with each board.
 
 ## Answer
 
@@ -127,41 +127,55 @@ value) is enough to skip it.
 
 ### Linux
 
-On aprscc (Pi 4, Debian 13), aarch64 build, with the Core2:
+On aprscc (Pi 4, Debian 13), aarch64 build, one board at a time:
 
-- The Core2 is `/dev/ttyACM0`, on the kernel's `cdc_acm` driver, and
-  `/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C8D017949-if00`.
-  ModemManager isn't running there.
-- `serialport` lists it from sysfs, with its USB ids, without libudev.
+| | ATOM Lite | Core2 |
+|---|---|---|
+| Driver | `ftdi_sio` | `cdc_acm` |
+| Device | `/dev/ttyUSB0` | `/dev/ttyACM0` |
+| By id | `usb-Hades2001_M5stack_3152263B4F-if00-port0` | `usb-1a86_USB_Single_Serial_5C8D017949-if00` |
+
+- `serialport` lists both from sysfs, with their USB ids, without
+  libudev. ModemManager isn't running on aprscc.
 - **`serialport` lists ports by device name, not by the by-id symlink**,
   so looking a port's USB ids up by the name the user gave failed for a
   by-id path ("isn't a USB serial port"). Both sides have to be resolved
   with `canonicalize` before comparing. `ktbctl` should accept and show
   the by-id names, as `ktbctl serial` already does.
-- `chip` at 1500000 baud works, by either name: 7.1 to 7.3 s to connect.
+- Opening and closing the port doesn't reset the ATOM Lite (not run on
+  the Core2 on Linux).
+- `chip` at 1500000 baud works on both: 7.1 to 7.3 s to connect.
+- **The ATOM Lite fails at 921600 on Linux too**, through `ftdi_sio`: the
+  next command after the rate change times out, and the chip stays in
+  download mode until the next flash resets it. So it's the CH552, not
+  macOS's driver.
 
-| Install | Baud | Connect | Erase | Write | In all | Firmware answers |
-|---|---|---|---|---|---|---|
-| Update | 1500000 | 7.3 s | | 9.4 s | 16.9 s | 3.1 s later |
-| Update | 115200 | 7.0 s | | 88.6 s | 95.8 s | 3.1 s later |
-| Clean | 1500000 | 8.2 s | 2.6 s | 8.7 s | 19.8 s | 3.1 s later |
+| Board | Install | Baud | Connect | Erase | Write | In all | Firmware answers |
+|---|---|---|---|---|---|---|---|
+| ATOM Lite | Update | 1500000 | 7.2 s | | 8.8 s | 16.2 s | 1.9 s later |
+| ATOM Lite | Update | 115200 | 7.4 s | | 63.1 s | 70.7 s | 1.9 s later |
+| ATOM Lite | Clean | 1500000 | 7.2 s | 1.6 s | 8.4 s | 17.4 s | 1.9 s later |
+| Core2 | Update | 1500000 | 7.3 s | | 9.4 s | 16.9 s | 3.1 s later |
+| Core2 | Update | 115200 | 7.0 s | | 88.6 s | 95.8 s | 3.1 s later |
+| Core2 | Clean | 1500000 | 8.2 s | 2.6 s | 8.7 s | 19.8 s | 3.1 s later |
 
-At 1500000 the Pi writes faster than the Mac did (9.4 s against 12.5 s).
-The update kept NVS. The clean install erased it: the Core2 came back
-with a new fingerprint (`EDKDSH1GJF3B93S4` before, `J7C8Z7C5STDZD2NH`
-after), so a new device key and authorization code, and no radio pairing.
-Erasing all 16 MB took only 2.6 s, so the fingerprint is the check that
-it happened.
+The Pi writes a little faster than the Mac: the Core2 in 9.4 s against
+12.5 s at 1500000, the ATOM Lite in 63 s against 74 s at 115200.
+
+Updates kept NVS. Clean installs erased it: each board came back with a
+new fingerprint, so a new device key and authorization code, and no
+radio pairing (ATOM Lite `GYB78TWSJVDCF5WG` to `6CDRNJBJYEJMZPMG`, Core2
+`EDKDSH1GJF3B93S4` to `J7C8Z7C5STDZD2NH`). The erases took only 1.6 s
+(4 MB) and 2.6 s (16 MB), so the fingerprint is the check that they
+happened.
 
 ### Not tried
 
-- **The ATOM Lite on Linux**, and a clean install on it. The Core2 has
-  done both ([Linux](#linux)).
 - **The armhf build on a board** (wolfcub). It builds; it hasn't run.
 - **WCH's own driver** for the Core2 on macOS; Apple's worked.
 
 ## The boards now
 
-Both run firmware 1.2.0-dev built from `main` (12 November 2026). The
-ATOM Lite (was 1.0.0-dev) kept its settings. The Core2 was installed
-clean from aprscc: a new key and authorization code, and no radio.
+Both run firmware 1.2.0-dev built from `main` (12 November 2026),
+installed clean from aprscc: each has a new key and authorization code,
+and no radio.
