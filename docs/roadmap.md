@@ -481,7 +481,7 @@ what follows. Firmware 1.2's screens are designed in
       the card loses. An eject menu item, the card's state on the screen,
       and a capability in `device.info`. The logs are read by taking the
       card out.
-- [ ] Wi-Fi, if it passes the soak test below: station mode only, a
+- [ ] Wi-Fi, if it passes the soak test in Phase H: station mode only, a
       `tcp-server` port announced with DNS-SD as `_kiss-tnc._tcp`, matching
       the daemon.
 
@@ -678,9 +678,6 @@ numbers are the best case.
       images all work; about 30 s for a 960 KB image. The iPhone's
       throughput waits for the app. See
       [spikes/atom-lite-update](../spikes/atom-lite-update/README.md).
-- [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
-      client and a TCP KISS client together for 24 hours, with no dropped
-      links and stable heap.
 
 ### Phase B: protocol
 
@@ -694,7 +691,7 @@ B.B. Link parity, management over USB serial, device settings, and the web
 installer with first setup. At the end of this phase a ham can buy an ATOM
 Lite and set it up from a browser, with no app.
 
-- [ ] **Design the ATOM Lite's user interface first**, in
+- [x] **Design the ATOM Lite's user interface first**, in
       [atom-lite-ui.md](atom-lite-ui.md). Its only controls are one button
       and one RGB LED.
   - [x] What you can do on the device alone: pair a radio, start
@@ -743,7 +740,7 @@ radio with a standard BLE KISS TNC gains little from a bridge.
 - [x] SPP and the GATT client side by side in the radio task, which keeps
       its retries, holds and status for both, and the TH-D75 tested again
       in full: pairing it after a TD-H9, and bridging.
-- [ ] A word in the vocabulary for selecting a radio, since pairing is
+- [x] A word in the vocabulary for selecting a radio, since pairing is
       Bluetooth Classic only.
 
 ### Phase G: Core2 and StickC Plus SE firmware
@@ -756,13 +753,13 @@ from a browser, with no app.
 - [x] One firmware project builds all three boards from shared code: a
       board's `sdkconfig.<board>` picks it and adds what differs, and
       `board.h` holds its pins.
-- [ ] A spike on each new board: the AXP192, the screen and touch with LVGL
-      on `esp_lcd`, the SD card beside the screen on the Core2, and memory
-      and flash on the StickC Plus SE's 4 MB layout.
+- [x] A spike on each new board: the AXP192, the screen and touch with LVGL
+      on `esp_lcd`, and memory and flash on the StickC Plus SE's 4 MB
+      layout. The Core2's SD card waits for its frame log, below.
 - [x] The Core2's own flash layout, before its first release: two 4 MB
       app partitions, 256 KB of NVS, a crash dump partition and about
       7.6 MB of storage kept for later (`partitions-core2.csv`).
-- [ ] A basic UI on each: the boot splash, the status screen, pairing a
+- [x] A basic UI on each: the boot splash, the status screen, pairing a
       radio, the authorization code and authorization mode, and reset at
       power-on. The Core2's for firmware 1.2 is designed in
       [core2-ui.md](core2-ui.md), without authorization mode. The StickC
@@ -773,7 +770,7 @@ from a browser, with no app.
       TNC apps, with firmware 1.3.0-rc1 (14 November 2026).
 - [x] The web installer: a choice of the three boards, installing and
       updating each. Working with firmware 1.3.0 (14 November 2026).
-- [ ] Installing over USB shows on the device. A USB flash resets the
+- [x] Installing over USB shows on the device. A USB flash resets the
       ESP32 into its ROM download mode, so no firmware runs and there
       can't be a progress bar on the device; but the screen (and the
       ATOM's LED) keeps what it last showed. So a control API command
@@ -789,7 +786,9 @@ from a browser, with no app.
 
 The rest of the Core2 and StickC Plus SE workstreams (the power page,
 sound, the SD card log and so on) follow as they're ready and don't hold
-up Phase D. `ktbctl` and app support for the new boards comes with Phases D
+up Phase D. The SD card log starts with a spike: the microSD card beside
+the screen on the Core2's shared SPI bus, its speed, and what a slow,
+full or missing card does to the screen and the bridge. `ktbctl` and app support for the new boards comes with Phases D
 and E: USB in D, BLE in E.
 
 ### Phase D: `ktbctl` device support
@@ -799,7 +798,7 @@ macOS, for the ATOM Lite, the StickC Plus SE and the Core2. Released in
 software 1.3.0, with firmware 1.3.0, on 14 November 2026. Planned in
 [plan-phase-d.md](plan-phase-d.md).
 
-- [ ] **D1: `ktbctl device flash`.** Installs and updates our firmware
+- [x] **D1: `ktbctl device flash`.** Installs and updates our firmware
       over USB, from local files or a GitHub release, as the web
       installer does. Built 12 November 2026 and released in 1.3.0, apart
       from sending the install notice, which waits for Phase G to define
@@ -854,8 +853,13 @@ ATOM its updating color.
 
 ### Phase H: Core2 Wi-Fi
 
-Only if the Phase A soak test passed: station mode, a `tcp-server` port, and
-DNS-SD.
+First the soak test, then Wi-Fi only if it passes: station mode, a
+`tcp-server` port, and DNS-SD.
+
+- [ ] **Core2 Wi-Fi soak:** station mode, SPP to a TH-D75, a BLE KISS
+      client and a TCP KISS client together for 24 hours, with no dropped
+      links and stable heap. Moved from Phase A's spikes (14 November
+      2026).
 
 ### Phase I: USB TNC and USB app ports
 
