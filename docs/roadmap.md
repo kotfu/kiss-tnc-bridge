@@ -390,12 +390,13 @@ release assets, because GitHub doesn't send CORS headers for them (checked
 
 - [ ] Write the page's functional spec. Drafted:
       [web-installer.md](web-installer.md).
-- [ ] CI builds each board's firmware on every release and publishes the
-      images and a manifest per board. Written:
-      [`firmware.yml`](../.github/workflows/firmware.yml); not yet run on a
-      tag.
-- [ ] One page with a choice of board: ATOM Lite, StickC Plus SE or Core2,
-      installing or updating each (Phase G).
+- [x] CI builds each board's firmware on every release and publishes the
+      images and a manifest per board:
+      [`firmware.yml`](../.github/workflows/firmware.yml), for every
+      release since firmware 1.0.0.
+- [x] One page with a choice of board: ATOM Lite, StickC Plus SE or Core2,
+      installing or updating each (Phase G). Working for all three with
+      firmware 1.3.0, 14 November 2026.
 - [ ] After flashing, the same page connects to the device over Web Serial and
       runs first setup over the control API: show the authorization code, name the
       device, and choose the LED mode. Pairing is on the device's button,
@@ -768,9 +769,10 @@ from a browser, with no app.
       Plus SE runs the ATOM Lite's UI in firmware 1.3, with its whole
       screen as the LED and button A as the button; its own UI is still to
       design.
-- [ ] Bridging tested on each with a TH-D75 and a TD-H9.
-- [ ] The web installer: a choice of the three boards, installing and
-      updating each.
+- [x] Bridging tested on each: pairing, and packets both ways with KISS
+      TNC apps, with firmware 1.3.0-rc1 (14 November 2026).
+- [x] The web installer: a choice of the three boards, installing and
+      updating each. Working with firmware 1.3.0 (14 November 2026).
 - [ ] Installing over USB shows on the device. A USB flash resets the
       ESP32 into its ROM download mode, so no firmware runs and there
       can't be a progress bar on the device; but the screen (and the
@@ -781,8 +783,8 @@ from a browser, with no app.
       web installer and `ktbctl device flash` send it first and show the
       progress themselves. Over firmware that isn't ours (a new device)
       the screen shows whatever that firmware left. Defined and built here,
-      on the firmware side, for firmware 1.3.0; `ktbctl` sends it in Phase
-      D. The ATOM Lite's color is
+      on the firmware side; not in 1.3.0, now planned for firmware 1.4.0,
+      with `ktbctl` sending it (Phase D). The ATOM Lite's color is
       [#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22).
 
 The rest of the Core2 and StickC Plus SE workstreams (the power page,
@@ -793,22 +795,26 @@ and E: USB in D, BLE in E.
 ### Phase D: `ktbctl` device support
 
 `ktbctl device flash` and device management over USB serial, on Linux and
-macOS, for the ATOM Lite and the Core2. Ships in software 1.3.0, with
-firmware 1.3.0. Planned in [plan-phase-d.md](plan-phase-d.md).
+macOS, for the ATOM Lite, the StickC Plus SE and the Core2. Released in
+software 1.3.0, with firmware 1.3.0, on 14 November 2026. Planned in
+[plan-phase-d.md](plan-phase-d.md).
 
 - [ ] **D1: `ktbctl device flash`.** Installs and updates our firmware
       over USB, from local files or a GitHub release, as the web
-      installer does. Built 12 November 2026, apart from sending the
-      install notice, which waits for Phase G to define it.
+      installer does. Built 12 November 2026 and released in 1.3.0, apart
+      from sending the install notice, which waits for Phase G to define
+      it (firmware 1.4.0).
 - [x] **D2: management over USB serial.** `--device PORT` for the
       commands a device answers, and the `device` and `auth` commands.
       Built 12 November 2026.
-- [ ] **StickC Plus SE support in `ktbctl`**, with its firmware: it
-      shares the ATOM Lite's chip and USB serial chip.
-- [ ] **Testing on all three boards** in one round, once the StickC Plus
-      SE has firmware (the list is in
-      [plan-phase-d.md](plan-phase-d.md#testing)), then software and
-      firmware 1.3.0 ship together.
+- [x] **StickC Plus SE support in `ktbctl`**, with its firmware: it
+      shares the ATOM Lite's chip and USB serial chip, so `--board` names
+      it when the chip can't say.
+- [x] **Testing on all three boards** in one round (the list is in
+      [plan-phase-d.md](plan-phase-d.md#testing)), with the 1.3.0-rc1
+      releases, including `ktbctl device` from the Linux package on an
+      Orange Pi Zero 2W. Software and firmware 1.3.0 released together
+      on 14 November 2026.
 
 Not in Phase D: BLE management from `ktbctl` (Phase E), and Windows.
 
