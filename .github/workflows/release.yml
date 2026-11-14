@@ -125,6 +125,13 @@ jobs:
           NOTES=$(awk "/^## ${VERSION} /{found=1; next} /^## /{if(found) exit} found{print}" CHANGELOG.md)
           # Write to a file to preserve formatting
           echo "$NOTES" > /tmp/release-notes.md
+          # A version with a suffix (1.3.0-rc1) is a prerelease, which
+          # GitHub never makes its latest release.
+          if [[ "$VERSION" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download all artifacts
         uses: actions/download-artifact@v8
@@ -135,6 +142,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           body_path: /tmp/release-notes.md
+          prerelease: ${{ steps.changelog.outputs.prerelease }}
           files: |
             *.tar.gz
             **/*.deb

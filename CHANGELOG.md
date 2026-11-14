@@ -5,10 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.3.0-rc1 (13 November 2026)
+
+ktbctl manages and installs the project's own devices over USB: the
+M5Stack ATOM Lite, StickC Plus SE and Core2 v1.3 running the
+kiss-tnc-bridge firmware. The version follows the firmware's, 1.3.
 
 ### Added
 
+- `ktbctl device list` finds ATOM Lite, StickC Plus SE and Core2 v1.3
+  devices on USB by their USB serial chips, and `device info` asks one for
+  its board, firmware and state. No daemon is needed, and opening the port
+  doesn't restart the device.
+- `ktbctl device flash` installs firmware over USB from a GitHub release
+  or a local manifest, checking every part first. An update keeps the
+  device's settings; `--clean` installs afresh, or over other firmware,
+  and prints the new authorization code. The board comes from the
+  firmware, the chip, or `--board` (`atom-lite`, `stickc-plus-se` or
+  `core2-v1.3`) when the chip can't say.
+- `--device PORT` (or `KTBCTL_DEVICE`) sends `status`, `tnc list`,
+  `tnc models`, `scan`, `pair`, `unpair`, `connect`, `disconnect`,
+  `release`, `kick`, `monitor` and `bridge public-name` to a device
+  instead of the daemon, and `tnc update` changes a device's radio.
+- Device commands: `device settings`, `reboot`, `reset` and `identify`,
+  and `auth info`, `code`, `rotate-code`, `mode` and `apps` for the
+  management apps authorized on a device.
+- The control API's schema has the devices' `device.*` and `auth.*`
+  commands, which the daemon refuses with the new `not_supported` error.
 - The control API's `unsubscribe` stops events on some topics, or all of
   them, without closing the connection. Devices need it on USB serial,
   which can't tell them a client has gone.
