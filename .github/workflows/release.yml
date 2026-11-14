@@ -84,7 +84,12 @@ jobs:
 
       - name: Build rpm package
         if: matrix.build_rpm
-        run: cargo generate-rpm --target ${{ matrix.target }}
+        # RPM versions can't hold '-': a prerelease is 1.3.0~rc1, which RPM
+        # sorts before 1.3.0.
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          cargo generate-rpm --target ${{ matrix.target }} \
+            --set-metadata "version = \"${VERSION//-/\~}\""
 
       - name: Create tarball
         run: |
