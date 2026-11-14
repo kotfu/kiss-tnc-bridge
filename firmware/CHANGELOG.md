@@ -8,6 +8,23 @@ CI takes a release's notes from its section here, so each version needs a
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.3.0 (2026-11-14)
+
+Three boards: the StickC Plus SE joins the ATOM Lite and the Core2 v1.3.
+It's the same firmware as 1.3.0-rc1, tested on all three with a radio and
+KISS TNC apps, installed from the web installer and with ktbctl.
+
+### Added
+
+- The StickC Plus SE (`stickc-plus-se`) is released, beside the ATOM
+  Lite and the Core2 v1.3. It runs the ATOM Lite's UI until it has its
+  own: its whole screen is the LED, and button A the button.
+
+### Changed
+
+- The Core2's board id is `core2-v1.3`, in `device.info` and in a
+  release's file names (1.2.0 used `core2`).
+
 ## 1.3.0-rc1 (2026-11-13)
 
 ### Added
