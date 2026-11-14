@@ -769,7 +769,7 @@ A device's `status`, trimmed:
               "partition": "ota_0", "state": "valid",   // or "pending_verify" on a new image's first boot
               "rolled_back": "1.2.0"},                  // present when the last update was rolled back
  "protocol": 1,
- "capabilities": ["spp-client", "ble-client", "ble-server", "firmware-update"],
+ "capabilities": ["spp-client", "ble-client", "ble-server", "install-notice", "firmware-update"],
  "max_message": 4096,
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
  "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
@@ -783,7 +783,9 @@ A device's `status`, trimmed:
 Management apps decide what to offer from `capabilities`, not from `board`, so a new
 board needs no app changes for the features it shares. The capability
 names are provisional; a Core2 adds `screen` and `battery`, and later
-`wifi`. `firmware-update` arrives with updates over BLE (Phase F).
+`wifi`. `install-notice` says the device takes
+[`device.install_notice`](#deviceinstall_notice) (from firmware 1.4.0).
+`firmware-update` arrives with updates over BLE (Phase F).
 `max_message` is the largest request the device accepts, in bytes.
 
 `uptime` is how long the device has been running since it last started,
@@ -851,6 +853,38 @@ you can tell which device you're managing when you own several: on the
 ATOM Lite, magenta, blue, white, three times, then back to its state (see
 [atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too. On
 the Core2 it wakes the screen.
+
+### `device.install_notice`
+
+Sent over USB serial just before a USB install resets the device into
+its ROM download mode, by `ktbctl device flash` and the web installer.
+The device shows that it's being installed, then answers `{}`, so the
+sender can reset it as soon as it has the answer.
+
+```jsonc
+→ {"v":1,"id":9,"cmd":"device.install_notice"}
+← {"v":1,"id":9,"ok":true,"result":{}}
+```
+
+In download mode no firmware runs, so nothing can change what the device
+shows: the LED or screen keeps it through the whole install, until the new
+firmware starts. On the ATOM Lite and the StickC Plus SE it's steady
+white, over every other state and in every `led_normal` mode, dark
+included (see [atom-lite-ui.md](atom-lite-ui.md#states)); the Core2
+doesn't show it yet.
+
+- **It lasts until the device restarts.** There's no way to take it back
+  and no time limit: a sender that decides not to install resets the
+  device.
+- **Nothing else changes.** The device goes on bridging until the reset.
+  On the ATOM Lite and the StickC Plus SE the button does nothing.
+- **Over USB serial only.** Over BLE a management app updates with
+  [`firmware.update`](#firmwareupdate), which shows its own Updating
+  state.
+- **Optional for the sender.** Firmware without the `install-notice`
+  capability (1.3.0 and before) doesn't know it; a sender sends it only
+  when the capability is there, and an install goes ahead without it, or
+  if it fails.
 
 ### `firmware.update`
 

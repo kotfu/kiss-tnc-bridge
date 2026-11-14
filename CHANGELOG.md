@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- The control API's schema has the devices' `device.install_notice`,
+  which the daemon refuses with `not_supported`.
+
 ## 1.3.0 (14 November 2026)
 
 ktbctl manages and installs the project's own devices over USB: the

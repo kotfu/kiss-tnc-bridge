@@ -114,6 +114,7 @@ Reply device_info(const cJSON *, const Pending &)
     cJSON_AddItemToArray(caps, cJSON_CreateString("spp-client"));
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble-client"));
     cJSON_AddItemToArray(caps, cJSON_CreateString("ble-server"));
+    cJSON_AddItemToArray(caps, cJSON_CreateString("install-notice"));
     cJSON_AddNumberToObject(o, "max_message", console::max_message);
     cJSON_AddStringToObject(o, "fingerprint", auth::fingerprint().c_str());
     cJSON *bt = cJSON_AddObjectToObject(o, "bluetooth");
@@ -182,6 +183,18 @@ Reply device_reset(const cJSON *, const Pending &)
 Reply device_identify(const cJSON *, const Pending &)
 {
     ui::post(ui::Event::identify);
+    return Reply::empty();
+}
+
+// A USB install is about to start. Answered once the LED or screen shows
+// it, so the sender can reset the device into its ROM at once; it stays
+// until the device restarts. Only over USB serial, the only transport so
+// far: a management app over BLE updates with firmware.update.
+Reply device_install_notice(const cJSON *, const Pending &)
+{
+    if (!ui::show_installing(500)) {
+        ESP_LOGW(TAG, "install notice: not shown in time");
+    }
     return Reply::empty();
 }
 
@@ -315,6 +328,7 @@ const Command commands[] = {
     {"device.reboot", device_reboot},
     {"device.reset", device_reset},
     {"device.identify", device_identify},
+    {"device.install_notice", device_install_notice},
     {"auth.info", auth_info},
     {"auth.code", auth_code},
     {"auth.rotate_code", auth_rotate_code},

@@ -1571,4 +1571,8 @@ void wait_idle(uint32_t timeout_ms) { vTaskDelay(pdMS_TO_TICKS(timeout_ms < 200 
 
 void set_updating(bool) {}
 
+// Not drawn yet (#22): the Core2 answers device.install_notice and keeps
+// its screen.
+bool show_installing(uint32_t) { return true; }
+
 } // namespace ktb::ui
