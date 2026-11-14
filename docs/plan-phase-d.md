@@ -214,7 +214,7 @@ The web installer's choices:
 
 ### 6. Flash
 
-- [ ] Tell the firmware a flash is coming (see [7](#7-the-install-notice)).
+- [x] Tell the firmware a flash is coming (see [7](#7-the-install-notice)).
 - [x] Reset into the ROM, load the stub, and switch to 1500000 baud,
       falling back to 115200. If anything fails once in the ROM, reset the
       device so it doesn't stay in download mode.
@@ -263,15 +263,22 @@ the chip, so nothing is lost that another install can't fix).
 
 ### 7. The install notice
 
-Phase G adds a control API command that tells our firmware a USB install
-is coming: the Core2 shows "Installing firmware over USB. Keep it
-plugged in; it restarts when done.", and the ATOM Lite holds an LED color
-([#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22)). It's defined
-and built on the firmware side first, in firmware 1.3.0.
+[`device.install_notice`](control-api.md#deviceinstall_notice) tells our
+firmware a USB install is coming, and it shows that it's being installed
+until it restarts: steady white on the ATOM Lite and the StickC Plus SE
+([#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22)), from firmware
+1.4.0, which announces it with the `install-notice` capability.
 
-- [ ] Once it's defined: `ktbctl device flash` sends it before resetting
-      the device, when `device.info` announces its capability. Firmware
-      before 1.3.0 doesn't, and is flashed without it.
+- [x] `ktbctl device flash` sends it just before resetting the device into
+      its ROM, after any download and "Go ahead?", when `device.info`
+      announces the capability
+      ([#29](https://github.com/kotfu/kiss-tnc-bridge/issues/29)). Sent
+      once, with 3 s for the answer. Firmware 1.3.0 and older, other
+      firmware and a device that doesn't answer are flashed without it,
+      and so is the retry at 115200 baud, since the failed attempt's reset
+      ends the notice. When it works ktbctl says nothing (the device shows
+      it); when it fails it says "Device error during install notice
+      command. No problem, installing anyway." and goes ahead.
 
 ## D2: management over USB serial
 
@@ -389,6 +396,6 @@ software and firmware 1.3.0 ship (decided 12 November 2026).
 
 ## Open
 
-- **The install notice:** its name, its capability and the Core2's screen
-  are defined in Phase G; the ATOM Lite's color in
-  [#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22).
+- **The install notice on the Core2's screen**
+  ([#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22)): it answers
+  `device.install_notice` but doesn't show it yet.

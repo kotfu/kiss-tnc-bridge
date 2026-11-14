@@ -123,6 +123,24 @@ where
         .map_err(|e| CtlError::Protocol(format!("device.info: {e}")))
 }
 
+/// The capability in `device.info` of firmware that takes
+/// `device.install_notice` (docs/control-api.md).
+pub const INSTALL_NOTICE: &str = "install-notice";
+
+/// Tells the firmware a USB install is about to reset it into its ROM, so
+/// it shows that it's being installed until it restarts, and waits up to
+/// `wait` for it to answer, which it does once it shows it. Sent once:
+/// asking again would only repeat what it's showing. `Ok(false)` if
+/// nothing answered.
+pub async fn install_notice<S>(port: &mut S, wait: Duration) -> Result<bool, CtlError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    Ok(request(port, "device.install_notice", wait, false)
+        .await?
+        .is_some())
+}
+
 /// Sends a request with no parameters and waits up to `wait` for its
 /// result, sending it again each second if `again`. `None` if nothing
 /// answered. The port also carries the firmware's log, so lines that don't
@@ -240,6 +258,40 @@ mod tests {
         assert_eq!(info.heap.as_ref().map(|h| h.free), Some(119_856));
         // Fields this version doesn't know are kept.
         assert_eq!(info.other.get("max_message"), Some(&json!(4096)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_install_notice_is_sent_once_and_its_answer_awaited() {
+        let (mut ours, device) = tokio::io::duplex(4096);
+        let fake = tokio::spawn(async move {
+            let (mut lines, mut w) = fake(device);
+            let (id, cmd) = read_request(&mut lines).await;
+            assert_eq!(cmd, "device.install_notice");
+            w.write_all(b"I (42103) control: device.install_notice\n")
+                .await
+                .unwrap();
+            w.write_all(
+                format!("{{\"v\":1,\"id\":{id},\"ok\":true,\"result\":{{}}}}\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+        assert!(install_notice(&mut ours, ANSWER_WAIT).await.unwrap());
+        fake.await.unwrap();
+
+        // Silent: given up on after the wait, having asked only once.
+        let (mut ours, device) = tokio::io::duplex(4096);
+        let counter = tokio::spawn(async move {
+            let mut lines = BufReader::new(device).lines();
+            let mut n = 0;
+            while let Ok(Some(_)) = lines.next_line().await {
+                n += 1;
+            }
+            n
+        });
+        assert!(!install_notice(&mut ours, ANSWER_WAIT).await.unwrap());
+        drop(ours);
+        assert_eq!(counter.await.unwrap(), 1);
     }
 
     #[tokio::test(start_paused = true)]

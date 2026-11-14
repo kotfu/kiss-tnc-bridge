@@ -23,9 +23,12 @@
 //! 3. An update, which keeps NVS, or a clean install, which erases the
 //!    whole flash first and is the only way over other firmware. A clean
 //!    install asks first.
-//! 4. The ROM: check the chip is the firmware's board, erase, write,
-//!    reset. At 1500000 baud, then at 115200 if that fails. A failure
-//!    resets the device, so it isn't left in its download mode.
+//! 4. The ROM. First, firmware that takes it is told an install is
+//!    coming (`device.install_notice`), so it shows that it's being
+//!    installed until it restarts. Then check the chip is the firmware's
+//!    board, erase, write, reset. At 1500000 baud, then at 115200 if that
+//!    fails. A failure resets the device, so it isn't left in its download
+//!    mode.
 //! 5. Wait for the new firmware to answer, and check its version. After a
 //!    clean install, show the device's new authorization code.
 
@@ -36,9 +39,10 @@ use espflash::target::ProgressCallbacks;
 use serde::Serialize;
 use serde_json::json;
 
+use super::DeviceInfo;
 use super::manifest::{Firmware, Part, compare_versions};
 use super::ports::DevicePort;
-use super::probe::{self, ANSWER_WAIT};
+use super::probe::{self, ANSWER_WAIT, INSTALL_NOTICE};
 use super::rom::{self, ChipInfo, FAST_BAUD, Rom, SLOW_BAUD};
 use super::{BOARDS, board_name};
 use crate::ctl::cli::FlashArgs;
@@ -208,7 +212,12 @@ impl Ctl {
             },
         );
 
-        // 4. The ROM.
+        // 4. The ROM, once the firmware shows an install is coming. Only
+        // now, after any download and "Go ahead?": a device told it's
+        // being installed shows it until it restarts.
+        if takes_install_notice(running.as_ref()) {
+            send_install_notice(&port, &say).await;
+        }
         let job = Job {
             port: port.clone(),
             parts: fw.parts.clone(),
@@ -399,6 +408,30 @@ fn ambiguous(chip: &ChipInfo, boards: &[&str]) -> CtlError {
     ))
 }
 
+/// Whether the firmware found takes `device.install_notice`: 1.3.0 and
+/// older, other firmware and a device that didn't answer don't.
+fn takes_install_notice(running: Option<&DeviceInfo>) -> bool {
+    running.is_some_and(|i| i.capabilities.iter().any(|c| c == INSTALL_NOTICE))
+}
+
+/// Tells the firmware an install is coming. Nothing to say when it works:
+/// the device shows it. When it doesn't, the install goes ahead anyway;
+/// the device just shows what it showed before.
+async fn send_install_notice(port: &DevicePort, say: &Reporter) {
+    let sent = match probe::open_quiet(&port.path) {
+        Ok(mut serial) => matches!(
+            probe::install_notice(&mut serial, ANSWER_WAIT).await,
+            Ok(true)
+        ),
+        Err(_) => false,
+    };
+    if sent {
+        say.quiet_step("notice");
+    } else {
+        say.note("Device error during install notice command. No problem, installing anyway.");
+    }
+}
+
 /// After a clean install, the device's new authorization code, asked
 /// again each second while it settles after making its new key.
 async fn authorization_code(port: &DevicePort) -> Result<String, String> {
@@ -446,6 +479,23 @@ impl Reporter {
     pub fn step(&self, step: &str, text: &str) {
         if self.json {
             eprintln!("{}", json!({"step": step}));
+        } else {
+            eprintln!("{text}");
+        }
+    }
+
+    /// A step only `--json` reports.
+    pub fn quiet_step(&self, step: &str) {
+        if self.json {
+            eprintln!("{}", json!({"step": step}));
+        }
+    }
+
+    /// Something to tell a person that isn't a problem: as a line, without
+    /// warn's "ktbctl:", or a warning with `--json`.
+    pub fn note(&self, text: &str) {
+        if self.json {
+            eprintln!("{}", json!({"warning": text}));
         } else {
             eprintln!("{text}");
         }
@@ -573,6 +623,25 @@ mod tests {
         assert_eq!(p.shown, Some(50));
         p.update(9);
         assert_eq!(p.shown, Some(100));
+    }
+
+    #[test]
+    fn only_firmware_with_the_capability_is_sent_the_notice() {
+        let info = |caps: &[&str]| -> DeviceInfo {
+            serde_json::from_value(serde_json::json!({
+                "board": "atom-lite",
+                "firmware": {"version": "1.4.0"},
+                "protocol": 1,
+                "capabilities": caps,
+            }))
+            .unwrap()
+        };
+        assert!(takes_install_notice(Some(&info(&[
+            "spp-client",
+            "install-notice"
+        ]))));
+        assert!(!takes_install_notice(Some(&info(&["spp-client"]))));
+        assert!(!takes_install_notice(None));
     }
 
     #[test]

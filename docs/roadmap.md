@@ -800,9 +800,10 @@ software 1.3.0, with firmware 1.3.0, on 14 November 2026. Planned in
 
 - [x] **D1: `ktbctl device flash`.** Installs and updates our firmware
       over USB, from local files or a GitHub release, as the web
-      installer does. Built 12 November 2026 and released in 1.3.0, apart
-      from sending the install notice, which waits for Phase G to define
-      it (firmware 1.4.0).
+      installer does. Built 12 November 2026 and released in 1.3.0. It
+      sends the install notice to firmware that takes it (1.4.0) from
+      software 1.4.0
+      ([#29](https://github.com/kotfu/kiss-tnc-bridge/issues/29)).
 - [x] **D2: management over USB serial.** `--device PORT` for the
       commands a device answers, and the `device` and `auth` commands.
       Built 12 November 2026.
