@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and later; older firmware refuses it, and ktbctl says to update it or
   use `ktbctl device reset`
   ([#31](https://github.com/kotfu/kiss-tnc-bridge/issues/31)).
+- `ktbctl device info` shows how long the device's last run lasted,
+  `last run 5h12m`, from firmware 1.4.0
+  ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
 

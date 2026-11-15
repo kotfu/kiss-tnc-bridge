@@ -782,6 +782,7 @@ A device's `status`, trimmed:
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
  "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
  "uptime": 5423,
+ "last_uptime": 18720,
  "heap": {"free": 128412, "min": 121860, "largest": 110592},
  "last_reset": "power_on",
  "errors": [{"code": "phones",
@@ -798,6 +799,15 @@ names are provisional; a Core2 adds `screen` and `battery`, and later
 
 `uptime` is how long the device has been running since it last started,
 in whole seconds.
+
+`last_uptime` (from firmware 1.4.0) is how long the run before this one
+lasted, in seconds, to the minute: for battery tests. Run the device on
+a battery until it dies, power it up, and read it; `last_reset` says how
+this run started. The device saves its uptime once a minute, so a run
+shorter than a minute saves nothing and leaves `last_uptime` as it was:
+the brief restarts of a battery near empty don't wipe out the run before
+them. It's absent until a run has lasted a minute, survives
+`device.reset`, and is lost with a clean install.
 
 `heap` is the device's internal RAM in bytes: `free` now, the least
 `min` has been since it started, and the `largest` block that could be

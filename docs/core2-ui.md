@@ -281,6 +281,7 @@ before a TD-H9 is forgotten when the TD-H9 is selected.
 | Battery | The percentage and the voltage: "87% · 4.05 V" |
 | Power | "Charging, 280 mA", "External power, full", or "On battery, 95 mA" |
 | Uptime | How long since the device started |
+| Last run | How long the run before this one lasted, to the minute, or "None yet": run it on the battery until it turns off, turn it on, and read it here (see `last_uptime` in [control-api.md](control-api.md#deviceinfo)) |
 | Firmware | The version |
 | Name | The name KISS TNC apps see (`public_name`) |
 | Bluetooth | The device's Bluetooth address |

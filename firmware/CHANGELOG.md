@@ -25,6 +25,12 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which the BLE name follows at once
   ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)).
 
+- `last_uptime` in `device.info`: how long the last run lasted, to the
+  minute, for battery tests. The device saves its uptime once a minute,
+  and a run shorter than that leaves it as it was, so a dying battery's
+  restarts don't wipe it out. The Core2's System page shows it as
+  **Last run** ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
+
 ### Changed
 
 - The ATOM Lite's and StickC Plus SE's double press pairs any radio or

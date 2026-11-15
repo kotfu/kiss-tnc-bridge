@@ -338,6 +338,12 @@ pub fn device_info(port: &DevicePort, i: &DeviceInfo) -> String {
         }
         row("up", s);
     }
+    if let Some(last) = i.last_uptime {
+        row(
+            "last run",
+            ago(UNIX_EPOCH, UNIX_EPOCH + Duration::from_secs(last)),
+        );
+    }
     if let Some(h) = &i.heap {
         row(
             "heap",
@@ -848,6 +854,7 @@ mod tests {
             "fingerprint": "6CDRNJBJYEJMZPMG",
             "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
             "uptime": 1020,
+            "last_uptime": 18720,
             "heap": {"free": 121820, "min": 116044, "largest": 106496},
             "last_reset": "power_on",
             "errors": [{"code": "phones", "message": "advertising didn't start"}]
@@ -867,6 +874,7 @@ mod tests {
              \x20   protocol     1\n\
              \x20   capabilities spp-client, ble-server\n\
              \x20   up           17m, started by power on\n\
+             \x20   last run     5h12m\n\
              \x20   heap         121820 bytes free, never below 116044, largest block 106496\n\
              \x20   error        advertising didn't start (phones)\n"
         );

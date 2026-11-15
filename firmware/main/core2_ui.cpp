@@ -33,6 +33,7 @@
 #include "radio.h"
 #include "settings.h"
 #include "storage.h"
+#include "uptime.h"
 
 namespace ktb::ui {
 
@@ -663,7 +664,7 @@ void update_tnc(const radio::View &v, const std::vector<errors::Item> &errs)
 struct {
     lv_obj_t *errs;
     lv_obj_t *rows;
-    lv_obj_t *battery, *power, *uptime, *firmware, *name, *bluetooth, *screen;
+    lv_obj_t *battery, *power, *uptime, *last_run, *firmware, *name, *bluetooth, *screen;
 } sy;
 
 void open_screen_settings();
@@ -712,6 +713,7 @@ void build_system(lv_obj_t *pg)
     sy.battery = row("Battery", false);
     sy.power = row("Power", false);
     sy.uptime = row("Uptime", false);
+    sy.last_run = row("Last run", false); // how long the last run lasted (#23)
     sy.firmware = row("Firmware", false);
     sy.name = row("Name", false);
     sy.bluetooth = row("Bluetooth", false);
@@ -763,6 +765,8 @@ void update_system(const std::vector<errors::Item> &errs, int64_t now)
     }
     set_text(sy.power, b);
     set_text(sy.uptime, duration(static_cast<uint32_t>(now / 1000)));
+    int64_t last = uptime::last_seconds();
+    set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
     set_text(sy.firmware, esp_app_get_description()->version);
     set_text(sy.name, settings::public_name());
     const uint8_t *a = esp_bt_dev_get_address();
