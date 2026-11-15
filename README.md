@@ -781,6 +781,7 @@ commands that add or change bridges and ports don't apply.
 $ export KTBCTL_DEVICE=/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C8D017949-if00
 $ ktbctl status
 $ ktbctl bridge public-name ktbr0 "D75 bridge"    # the name phones see
+$ ktbctl bridge public-name ktbr0 --default       # back to KTB-EF26 (firmware 1.4.0)
 $ ktbctl scan --le                                # look for a TD-H9
 $ ktbctl tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E
 $ ktbctl monitor

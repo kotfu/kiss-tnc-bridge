@@ -20,6 +20,45 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SE's screen. The Core2's screen says "Installing firmware v1.4.0...",
   with the version the sender gives in `version`, and that the device
   will restart when complete.
+- `device.settings.set` takes `"public_name": null` to go back to the
+  default name, `KTB-` and the last two bytes of the Bluetooth address,
+  which the BLE name follows at once
+  ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)).
+
+- `last_uptime` in `device.info`: how long the last run lasted, to the
+  minute, for battery tests. The device saves its uptime once a minute,
+  and a run shorter than that leaves it as it was, so a dying battery's
+  restarts don't wipe it out. The Core2's System page shows it as
+  **Last run** ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
+
+### Changed
+
+- The ATOM Lite's and StickC Plus SE's double press pairs any radio or
+  TNC in pairing mode that offers a serial port (SPP), as model
+  `generic`, when no Kenwood or TD-H9 turns up first, instead of only a
+  TH-D74 or TH-D75: one whose answer to the scan lists SPP, or else one
+  an SDP lookup finds it on, strongest signal first
+  ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)).
+- The Core2's radio pill says **Waiting** for a TD-H9 that's out of
+  reach, instead of "Waiting for it", **Down** when a management app has
+  taken the link down, instead of "Held", and **Retrying in 8s**, without
+  the space. The time under it reads "for 21m" for every state, instead
+  of "21m" when connected and "down 21m" otherwise, and Down shows it too
+  ([#35](https://github.com/kotfu/kiss-tnc-bridge/issues/35)).
+
+### Fixed
+
+- The Core2 can be reset from the device again: **Reset** on the System
+  page, then hold the amber circle for 3 s. The gesture at power-on, the
+  left and right circles held while turning it on, never worked: the
+  touch panel can't see fingers already on it when it starts, nor tell
+  two fingers apart ([#20](https://github.com/kotfu/kiss-tnc-bridge/issues/20)).
+- A `device.settings.set` that doesn't give `public_name`, such as one
+  for `led_brightness`, no longer saves the name, so a device on its
+  default name stays on it.
+- `bluetooth.unpair` answers with what it unpaired, the `address`, the
+  `adapter` (`builtin`) and `paired` false, as the daemon does, instead
+  of `{}` ([#24](https://github.com/kotfu/kiss-tnc-bridge/issues/24)).
 
 ## 1.3.0 (2026-11-14)
 

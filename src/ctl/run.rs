@@ -570,7 +570,7 @@ impl Ctl {
                 adapter: who.adapter,
             })
             .await?;
-        // Firmware 1.2 answers {}, not the address and adapter.
+        // Firmware 1.3.0 and older answer {}, not the address and adapter.
         let r: Option<PairResult> = serde_json::from_value(v.clone()).ok();
         self.print(&v, || match r {
             Some(r) => format!("unpaired {} on {}\n", r.address, r.adapter),
@@ -600,7 +600,9 @@ impl Ctl {
     }
 
     /// `bridge public-name` on a device, whose public name is its
-    /// `public_name` setting. Showing it works as on the daemon.
+    /// `public_name` setting. Showing it works as on the daemon; `--default`
+    /// sets it to null, which firmware 1.4.0 and later take to go back to
+    /// the default name.
     async fn device_public_name(
         &self,
         c: &mut Client,
@@ -616,14 +618,6 @@ impl Ctl {
                     .into(),
             ));
         }
-        if default {
-            return Err(CtlError::Message(
-                "this firmware can't go back to its default name. 'ktbctl device reset' \
-                 does, but it also clears the settings, the radio pairing and the \
-                 authorized apps"
-                    .into(),
-            ));
-        }
         let s: Status = c.call_as(Command::Status).await?;
         let b = s
             .bridges
@@ -632,10 +626,21 @@ impl Ctl {
             .ok_or_else(|| {
                 CtlError::Message(format!("there's no bridge {bridge:?}; a device's is ktbr0"))
             })?;
-        let name = name.unwrap_or_default();
+        let asked = name.unwrap_or_default();
         let mut settings = Map::new();
-        settings.insert("public_name".into(), json!(name));
-        let v = c.call(Command::DeviceSettingsSet { settings }).await?;
+        settings.insert(
+            "public_name".into(),
+            if default { Value::Null } else { json!(asked) },
+        );
+        let v = c
+            .call(Command::DeviceSettingsSet { settings })
+            .await
+            .map_err(|e| if default { default_name_refused(e) } else { e })?;
+        // The name the device answers with: the default's, with --default.
+        let name = v["settings"]["public_name"]
+            .as_str()
+            .unwrap_or(&asked)
+            .to_string();
         if let Some(w) = crate::ctl::device::name_warning(&name) {
             eprintln!("ktbctl: {w}");
         }
@@ -1202,8 +1207,46 @@ fn set_key(toml: &str, key: &str, value: Option<&str>) -> Result<String, CtlErro
     Ok(doc.to_string())
 }
 
+/// Firmware 1.3.0 and older take only a string for `public_name`, so they
+/// refuse `--default`'s null as a bad request: say what to do instead.
+fn default_name_refused(e: CtlError) -> CtlError {
+    match e {
+        CtlError::Api(a)
+            if a.code == ErrorCode::BadRequest && a.message.contains("public_name") =>
+        {
+            CtlError::Message(
+                "this firmware can't go back to its default name: update it to 1.4.0 or \
+                 later ('ktbctl device flash'), or use 'ktbctl device reset', which also \
+                 clears the settings, the radio pairing and the authorized apps"
+                    .into(),
+            )
+        }
+        e => e,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn older_firmware_refusing_the_default_name_says_what_to_do() {
+        use super::*;
+        let api = |code, message: &str| {
+            CtlError::Api(crate::control::protocol::ApiError {
+                code,
+                message: message.into(),
+                object: None,
+                data: None,
+            })
+        };
+        let e = default_name_refused(api(ErrorCode::BadRequest, "public_name must be a string"));
+        assert!(e.to_string().contains("update it to 1.4.0"), "{e}");
+        // Anything else is left as it was.
+        let e = default_name_refused(api(ErrorCode::Internal, "couldn't save the settings"));
+        assert_eq!(e.to_string(), "couldn't save the settings");
+        let e = default_name_refused(CtlError::Closed);
+        assert!(matches!(e, CtlError::Closed));
+    }
+
     #[test]
     fn daemon_only_commands_are_refused_on_a_device() {
         use clap::Parser;

@@ -694,7 +694,15 @@ system's default agent, if it has one, isn't touched. A `spp-client` port
 waiting for its TNC to be paired connects a few seconds after the pairing.
 
 `bluetooth.unpair` forgets the pairing. It acts at once: a bridge using the
-radio loses its link (`ktbctl unpair` asks first).
+radio loses its link (`ktbctl unpair` asks first). It answers with what it
+unpaired:
+
+```jsonc
+→ {"v":1,"id":8,"cmd":"bluetooth.unpair","tnc":"d75"}
+← {"v":1,"id":8,"ok":true,"result":{"address":"40:79:12:E4:95:9D","adapter":"hci0 (2C:CF:67:6E:2E:BC)","paired":false}}
+```
+
+A device's `adapter` is `builtin`; firmware 1.3.0 and older answer `{}`.
 
 One scan or pairing runs at a time; another gets `busy`.
 
@@ -774,6 +782,7 @@ A device's `status`, trimmed:
  "fingerprint": "Q4M8ZC2V7XKD1B6N",
  "bluetooth": {"address": "B8:7B:4D:18:F2:72"},
  "uptime": 5423,
+ "last_uptime": 18720,
  "heap": {"free": 128412, "min": 121860, "largest": 110592},
  "last_reset": "power_on",
  "errors": [{"code": "phones",
@@ -790,6 +799,15 @@ names are provisional; a Core2 adds `screen` and `battery`, and later
 
 `uptime` is how long the device has been running since it last started,
 in whole seconds.
+
+`last_uptime` (from firmware 1.4.0) is how long the run before this one
+lasted, in seconds, to the minute: for battery tests. Run the device on
+a battery until it dies, power it up, and read it; `last_reset` says how
+this run started. The device saves its uptime once a minute, so a run
+shorter than a minute saves nothing and leaves `last_uptime` as it was:
+the brief restarts of a battery near empty don't wipe out the run before
+them. It's absent until a run has lasted a minute, survives
+`device.reset`, and is lost with a clean install.
 
 `heap` is the device's internal RAM in bytes: `free` now, the least
 `min` has been since it started, and the `largest` block that could be
@@ -828,7 +846,7 @@ keys (`device.settings.get` shows which):
 
 | Key | Values |
 |---|---|
-| `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon |
+| `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon. From firmware 1.4.0, `null` goes back to the default, `KTB-` and the last two bytes of the Bluetooth address (`KTB-EF26`), which `device.settings.get` then shows |
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100 |

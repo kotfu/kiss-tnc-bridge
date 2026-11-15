@@ -3,7 +3,7 @@
 # its screen as the LED, until it has its own.
 set(srcs "main.cpp" "console.cpp" "control.cpp" "settings.cpp" "auth.cpp"
          "firmware.cpp" "radio.cpp" "storage.cpp" "control_radio.cpp" "kiss.cpp"
-         "phones.cpp" "activity.cpp" "errors.cpp" "power.cpp")
+         "phones.cpp" "activity.cpp" "errors.cpp" "power.cpp" "uptime.cpp")
 if(CONFIG_KTB_BOARD_CORE2)
     list(APPEND srcs "core2_ui.cpp" "core2_hw.cpp" "axp192.cpp")
 elseif(CONFIG_KTB_BOARD_STICKC_PLUS_SE)

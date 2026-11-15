@@ -14,6 +14,7 @@
 #include "settings.h"
 #include "storage.h"
 #include "ui.h"
+#include "uptime.h"
 
 namespace {
 constexpr const char *TAG = "main";
@@ -26,6 +27,7 @@ extern "C" void app_main()
     console::start();
     firmware::check_boot();
     storage::init();
+    uptime::start();
 
     // Reset comes before any setting is read or Bluetooth starts, so no
     // setting can get in its way (docs/atom-lite-ui.md, Reset).

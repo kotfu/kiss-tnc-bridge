@@ -355,6 +355,7 @@ enum : EventBits_t {
     EV_FAILED = 1 << 3,
     EV_UNCONGESTED = 1 << 4,
     EV_GATTC_REG = 1 << 5,
+    EV_PROBED = 1 << 6, // an SPP lookup for probe_spp finished
 };
 EventGroupHandle_t events;
 
@@ -369,6 +370,7 @@ struct GapEvent {
     uint32_t cod = 0;
     int8_t rssi = 0;
     bool has_rssi = false;
+    bool spp_listed = false; // its inquiry response lists the Serial Port service
     uint32_t number = 0;
 };
 QueueHandle_t gap_events = nullptr;
@@ -377,6 +379,9 @@ StreamBufferHandle_t from_radio;
 std::atomic<uint32_t> spp_handle{0};
 std::atomic<bool> congested{false};
 Addr connect_addr; // the address an SDP lookup is for
+// probe_spp's lookup: only asks whether there's SPP, and doesn't connect.
+std::atomic<bool> probing{false};
+std::atomic<bool> probe_found_spp{false};
 
 struct WriteResult {
     esp_spp_status_t status;
@@ -413,10 +418,10 @@ void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
                 e.rssi = *static_cast<int8_t *>(p.val);
                 e.has_rssi = true;
                 break;
-            case ESP_BT_GAP_DEV_PROP_EIR:
+            case ESP_BT_GAP_DEV_PROP_EIR: {
+                uint8_t len = 0;
+                uint8_t *eir = static_cast<uint8_t *>(p.val);
                 if (!e.has_name) {
-                    uint8_t len = 0;
-                    uint8_t *eir = static_cast<uint8_t *>(p.val);
                     uint8_t *n = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_CMPL_LOCAL_NAME, &len);
                     if (!n) {
                         n = esp_bt_gap_resolve_eir_data(eir, ESP_BT_EIR_TYPE_SHORT_LOCAL_NAME, &len);
@@ -426,7 +431,15 @@ void gap_cb(esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param)
                         e.has_name = true;
                     }
                 }
+                // The 16-bit service UUIDs, little-endian: 0x1101 is SPP.
+                for (esp_bt_eir_type_t t : {ESP_BT_EIR_TYPE_CMPL_16BITS_UUID, ESP_BT_EIR_TYPE_INCMPL_16BITS_UUID}) {
+                    uint8_t *u = esp_bt_gap_resolve_eir_data(eir, t, &len);
+                    for (int k = 0; u && k + 1 < len; k += 2) {
+                        e.spp_listed = e.spp_listed || (u[k] | u[k + 1] << 8) == 0x1101;
+                    }
+                }
                 break;
+            }
             default:
                 break;
             }
@@ -506,6 +519,11 @@ void spp_cb(esp_spp_cb_event_t event, esp_spp_cb_param_t *p)
         }
         break;
     case ESP_SPP_DISCOVERY_COMP_EVT:
+        if (probing) {
+            probe_found_spp = p->disc_comp.status == ESP_SPP_SUCCESS && p->disc_comp.scn_num > 0;
+            xEventGroupSetBits(events, EV_PROBED);
+            break;
+        }
         if (p->disc_comp.status == ESP_SPP_SUCCESS && p->disc_comp.scn_num > 0) {
             ESP_LOGI(TAG, "SPP on channel %u", p->disc_comp.scn[0]);
             esp_spp_connect(ESP_SPP_SEC_AUTHENTICATE, ESP_SPP_ROLE_MASTER, p->disc_comp.scn[0],
@@ -1395,7 +1413,8 @@ uint8_t inquiry_len(TickType_t left)
 enum class SearchResult : uint8_t { found, none, cancelled };
 
 // The button's search: the first TH-D74 or TH-D75 in pairing mode, or
-// the first TD-H9, within the deadline. Kenwood radios report a phone's
+// the first TD-H9, within the deadline; failing those, another Classic
+// device in pairing mode with a serial port. Kenwood radios report a phone's
 // Class of Device, so it goes by name; one with the right class but no
 // name in its inquiry response is asked for its name. A TD-H9 advertises
 // over BLE whenever nothing is connected to it, so a BLE scan runs
@@ -1520,10 +1539,78 @@ SearchResult search_list(TickType_t deadline, Found &out)
     return res;
 }
 
+// How long an SDP lookup for probe_spp may take: paging a device that
+// doesn't answer gives up after about 5 s.
+constexpr TickType_t probe_timeout = pdMS_TO_TICKS(12000);
+// Probes in each search round, strongest signal first.
+constexpr size_t probes_per_round = 3;
+
+// Whether addr offers the Serial Port service, by an SDP lookup that
+// doesn't connect or pair: for a device whose inquiry response didn't
+// say. False if it doesn't answer in time.
+bool probe_spp(const Addr &addr)
+{
+    xEventGroupClearBits(events, EV_PROBED);
+    probe_found_spp = false;
+    probing = true;
+    connect_addr = addr;
+    bool answered = esp_spp_start_discovery(connect_addr.raw()) == ESP_OK &&
+                    (xEventGroupWaitBits(events, EV_PROBED, pdTRUE, pdFALSE, probe_timeout) & EV_PROBED);
+    probing = false;
+    bool spp = answered && probe_found_spp;
+    ESP_LOGI(TAG, "search: %s %s", addr.str().c_str(),
+             !answered ? "didn't answer an SPP lookup" : spp ? "has SPP" : "has no SPP");
+    return spp;
+}
+
+// Classes of Device that aren't a radio or a TNC: computers, audio and
+// video, peripherals, imaging, wearables, toys and health. A radio may
+// report anything else; Kenwoods report a phone.
+bool could_be_radio(uint32_t cod)
+{
+    uint32_t major = (cod >> 8) & 0x1f;
+    return major != 0x01 && (major < 0x04 || major > 0x09);
+}
+
+// The button's search, without a screen to choose on. A known radio is
+// taken as soon as it's heard. Failing that, after each round of
+// inquiry, any other Classic device in pairing mode that offers a serial
+// port is taken, as a generic TNC (#33): one whose inquiry response
+// lists SPP, or else one an SDP lookup finds it on, strongest first.
 SearchResult search_both(TickType_t deadline, Found &out)
 {
     std::vector<Addr> unnamed;
     std::vector<Addr> asked;
+    std::vector<Found> serial; // other devices listing SPP
+    std::vector<Found> maybe;  // other devices that might have it
+    std::vector<Addr> probed;
+    auto remember = [](std::vector<Found> &v, const GapEvent &e) {
+        auto it = std::find_if(v.begin(), v.end(), [&](const Found &f) { return f.addr == e.addr; });
+        if (it == v.end()) {
+            v.push_back(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi});
+        } else {
+            if (e.has_name) {
+                it->name = e.name;
+            }
+            if (e.has_rssi) {
+                it->rssi = e.rssi;
+                it->has_rssi = true;
+            }
+        }
+    };
+    auto take = [&](const Found &f) {
+        out = f;
+        if (out.name.empty()) {
+            out.name = read_name(f.addr);
+        }
+        ESP_LOGI(TAG, "search: taking %s, %s, which has SPP", out.name.c_str(), f.addr.str().c_str());
+        return SearchResult::found;
+    };
+    auto strongest_first = [](std::vector<Found> &v) {
+        std::sort(v.begin(), v.end(), [](const Found &a, const Found &b) {
+            return (a.has_rssi ? a.rssi : -128) > (b.has_rssi ? b.rssi : -128);
+        });
+    };
     while (xTaskGetTickCount() < deadline) {
         if (esp_bt_gap_start_discovery(ESP_BT_INQ_MODE_GENERAL_INQUIRY,
                                        inquiry_len(deadline - xTaskGetTickCount()), 0) != ESP_OK) {
@@ -1566,10 +1653,14 @@ SearchResult search_both(TickType_t deadline, Found &out)
                     out.cod = e.cod;
                     return SearchResult::found;
                 }
-                if (!e.has_name && e.cod == cod_kenwood &&
-                    std::find(unnamed.begin(), unnamed.end(), e.addr) == unnamed.end() &&
-                    std::find(asked.begin(), asked.end(), e.addr) == asked.end()) {
-                    unnamed.push_back(e.addr);
+                if (!e.has_name && e.cod == cod_kenwood) {
+                    if (std::find(unnamed.begin(), unnamed.end(), e.addr) == unnamed.end() &&
+                        std::find(asked.begin(), asked.end(), e.addr) == asked.end()) {
+                        unnamed.push_back(e.addr);
+                    }
+                } else if (could_be_radio(e.cod) &&
+                           std::find(probed.begin(), probed.end(), e.addr) == probed.end()) {
+                    remember(e.spp_listed ? serial : maybe, e);
                 }
             }
         }
@@ -1588,6 +1679,36 @@ SearchResult search_both(TickType_t deadline, Found &out)
             }
         }
         unnamed.clear();
+
+        // No known radio this round: another device with a serial port.
+        if (!serial.empty()) {
+            strongest_first(serial);
+            return take(serial.front());
+        }
+        strongest_first(maybe);
+        size_t tried = 0;
+        for (const Found &f : maybe) {
+            if (tried == probes_per_round || xTaskGetTickCount() >= deadline) {
+                break;
+            }
+            Request r;
+            while (xQueueReceive(requests, &r, 0) == pdTRUE) {
+                if (r.type == ReqType::button_cancel) {
+                    return SearchResult::cancelled;
+                }
+                refuse_busy(r);
+            }
+            tried++;
+            probed.push_back(f.addr);
+            if (probe_spp(f.addr)) {
+                return take(f);
+            }
+        }
+        maybe.erase(std::remove_if(maybe.begin(), maybe.end(),
+                                   [&](const Found &f) {
+                                       return std::find(probed.begin(), probed.end(), f.addr) != probed.end();
+                                   }),
+                    maybe.end());
     }
     return SearchResult::none;
 }
@@ -1788,7 +1909,7 @@ void do_pair(const Request &req)
     bool cancelled = false;
     set_pair_stage(PairStage::searching, pairing_seconds);
     if (button) {
-        ESP_LOGI(TAG, "pairing: searching for a TH-D74 or TH-D75 in pairing mode, or a TD-H9");
+        ESP_LOGI(TAG, "pairing: searching for a radio in pairing mode, or a TD-H9");
         switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target, board::screen)) {
         case SearchResult::found:
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
@@ -1805,7 +1926,7 @@ void do_pair(const Request &req)
             break;
         case SearchResult::none:
             failure = board::screen && listed_any ? "no radio was chosen in time"
-                                                  : "no TH-D74 or TH-D75 in pairing mode, and no TD-H9, was found";
+                                                  : "no radio in pairing mode with a serial port, and no TD-H9, was found";
             break;
         }
     } else {
@@ -2044,7 +2165,12 @@ void do_unpair(const Request &req)
         esp_bt_gap_remove_bond_device(a.raw());
     }
     ESP_LOGI(TAG, "unpaired %s", a.str().c_str());
-    control::reply_ok(req.p, cJSON_CreateObject());
+    // What it unpaired, as the daemon answers (docs/control-api.md).
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddStringToObject(res, "address", a.str().c_str());
+    cJSON_AddStringToObject(res, "adapter", "builtin");
+    cJSON_AddBoolToObject(res, "paired", false);
+    control::reply_ok(req.p, res);
 }
 
 void do_update(const Request &req)
@@ -2165,8 +2291,8 @@ void radio_task(void *)
         if (!r.present) {
             set_port(PortState::unpaired, board::screen
                                               ? "no radio: pair a TH-D74 or TH-D75, or select a TD-H9, on the TNC page"
-                                              : "no radio: double press the button to pair a TH-D74 or TH-D75, "
-                                                "or select a TD-H9");
+                                              : "no radio: double press the button to pair a radio in pairing "
+                                                "mode, or select a TD-H9");
             serve_until(portMAX_DELAY);
             continue;
         }

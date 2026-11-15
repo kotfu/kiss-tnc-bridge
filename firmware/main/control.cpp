@@ -25,6 +25,7 @@
 #include "settings.h"
 #include "storage.h"
 #include "ui.h"
+#include "uptime.h"
 
 namespace ktb::control {
 
@@ -120,6 +121,9 @@ Reply device_info(const cJSON *, const Pending &)
     cJSON *bt = cJSON_AddObjectToObject(o, "bluetooth");
     cJSON_AddStringToObject(bt, "address", mac_string(ESP_MAC_BT).c_str());
     cJSON_AddNumberToObject(o, "uptime", static_cast<double>(esp_timer_get_time() / 1000000));
+    if (uptime::last_seconds() >= 0) {
+        cJSON_AddNumberToObject(o, "last_uptime", static_cast<double>(uptime::last_seconds()));
+    }
     multi_heap_info_t heap;
     heap_caps_get_info(&heap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     cJSON *h = cJSON_AddObjectToObject(o, "heap");

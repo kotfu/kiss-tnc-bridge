@@ -47,6 +47,10 @@ pub struct DeviceInfo {
     /// Seconds since it last started.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uptime: Option<u64>,
+    /// How long the last run lasted, to the minute (firmware 1.4.0): for
+    /// battery tests. Absent until a run has lasted a minute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_uptime: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heap: Option<Heap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
