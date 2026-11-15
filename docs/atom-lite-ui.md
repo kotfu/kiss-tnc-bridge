@@ -19,7 +19,7 @@ Only what you'd need with no app and no computer:
 | Action | Gesture | What it does |
 |---|---|---|
 | **Wake the LED** | Single press, in dark mode | Lights the LED for `led_wake_seconds` (see [the wake rule](#normal-and-dark-mode)). Only in dark mode, and only while the LED is dark |
-| **Pair or select a radio** | Double press | Scans for a Kenwood in pairing mode and pairs with it, or for a TIDRADIO TD-H9 and selects it. A new radio replaces the old one, since the device keeps one radio |
+| **Pair or select a radio** | Double press | Scans for a radio in pairing mode and pairs with it, a Kenwood first, or for a TIDRADIO TD-H9 and selects it. A new radio replaces the old one, since the device keeps one radio |
 | **Cancel pairing** | Single press, while pairing | Stops pairing and goes back to the radio the device had |
 | **Start authorization mode** | Long press | Lets one new management app be authorized with the authorization code (see [below](#authorization-mode)) |
 | **End authorization mode** | Single press, in authorization mode | Ends it before its time runs out |
@@ -45,7 +45,22 @@ Pairing scans for 60 seconds. A Kenwood is found by its Bluetooth name
 radio, by its Class of Device (`0x620204`, which both report). Its model
 comes from the name, so pairing needs no other setup; a renamed one is
 taken for a TH-D75 until its answer to `ID` at the first connect says
-which it is. The device keeps the old radio until a new
+which it is.
+
+Any other radio or TNC in pairing mode that offers a serial port (SPP)
+is paired too, as model `generic`, if no Kenwood or TD-H9 turns up first
+([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)). After each
+round of the scan, about 10 s, the device takes a Bluetooth Classic
+device whose answer to the scan lists SPP; failing that, it asks up to
+three others, strongest signal first, whether they have SPP (an SDP
+lookup, which neither connects nor pairs). It skips devices whose Class
+of Device says they're a computer, headphones or speakers, a keyboard or
+mouse, a printer or camera, a wearable, a toy or a health device. Phones
+are asked, since radios often report a phone's class; a phone has to be
+in pairing mode to be found, and few offer SPP. With more than one such
+radio in pairing mode, the strongest signal wins.
+
+The device keeps the old radio until a new
 one pairs. If pairing fails, times out, or is cancelled with a single
 press, it goes back to the radio
 it had (or to no radio). So an accidental double press costs only the

@@ -27,6 +27,12 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The ATOM Lite's and StickC Plus SE's double press pairs any radio or
+  TNC in pairing mode that offers a serial port (SPP), as model
+  `generic`, when no Kenwood or TD-H9 turns up first, instead of only a
+  TH-D74 or TH-D75: one whose answer to the scan lists SPP, or else one
+  an SDP lookup finds it on, strongest signal first
+  ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)).
 - The Core2's radio pill says **Waiting** for a TD-H9 that's out of
   reach, instead of "Waiting for it", **Down** when a management app has
   taken the link down, instead of "Held", and **Retrying in 8s**, without
