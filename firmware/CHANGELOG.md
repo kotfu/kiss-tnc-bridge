@@ -32,6 +32,11 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The Core2 can be reset from the device again: **Reset** on the System
+  page, then hold the amber circle for 3 s. The gesture at power-on, the
+  left and right circles held while turning it on, never worked: the
+  touch panel can't see fingers already on it when it starts, nor tell
+  two fingers apart ([#20](https://github.com/kotfu/kiss-tnc-bridge/issues/20)).
 - `bluetooth.unpair` answers with what it unpaired, the `address`, the
   `adapter` (`builtin`) and `paired` false, as the daemon does, instead
   of `{}` ([#24](https://github.com/kotfu/kiss-tnc-bridge/issues/24)).

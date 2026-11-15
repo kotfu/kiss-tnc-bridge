@@ -35,10 +35,12 @@ to watch it and set it up:
 - **TNC page:** the radio the device has, and pairing a Kenwood or
   selecting a TD-H9.
 - **System page:** battery, power, uptime, firmware, the name and
-  Bluetooth address, errors, the screen settings, and power off.
+  Bluetooth address, errors, the screen settings, reset (from 1.4) and
+  power off.
 - **The screen's modes** and its timeout, the Core2's version of the
   ATOM's `led_normal`.
-- **Reset** with a gesture at power-on.
+- **Reset** with a gesture at power-on, which never worked (see
+  [Reset](#reset)); from 1.4 it's on the System page.
 
 Not in 1.2: sound, vibration, authorization mode on the device, brightness
 as a setting, the frame log on the microSD card, Wi-Fi, and the StickC
@@ -131,8 +133,8 @@ the firmware doesn't use it in 1.2.
 **The reset button** restarts the ESP32, as unplugging and plugging in
 the ATOM Lite does. The firmware can't see it or stop it, and
 `device.info`'s `last_reset` says `power_on`. The AXP192 isn't reset, so
-the power stays on. Holding the left and right circles while pressing it
-is the [reset gesture](#reset).
+the power stays on. Reset is on the System page, not a gesture with
+either button (see [Reset](#reset)).
 
 ## The battery
 
@@ -287,7 +289,8 @@ before a TD-H9 is forgotten when the TD-H9 is selected.
 Errors, when there are any, come first, each with its whole message
 (see [Errors](#errors)), and the rows scroll below them.
 
-The middle key is **Power off** (see [Power off](#power-off)).
+The left key is **Reset** (see [Reset](#reset)), and the middle key
+**Power off** (see [Power off](#power-off)).
 
 ## The screen
 
@@ -378,23 +381,39 @@ Reset does what it does on the ATOM Lite (see
 default, the radio forgotten, and every authorized management app
 removed. The firmware, the device's key and the authorization code stay.
 
-The Core2 has no button to hold at power-on, so the gesture is two
-circles:
+It's on the System page:
 
-1. Hold the left and right circles.
-2. Turn the device on with the power button, or press the reset button
-   on the bottom if it's on. Keep holding.
-3. The firmware sees both held before it loads any settings or starts
-   Bluetooth. **Reset:** "Keep holding to clear the settings, the radio
-   and the authorized apps", the soft keys over both circles reading
-   **Hold**, and a bar running out over 3 s (provisional). Let go of
-   either to cancel: the device starts as usual and nothing is cleared.
-4. Still held at the end, the device resets: "Settings cleared.
-   Restarting…", and it restarts.
-5. Let go. The device starts with no radio.
+1. Tap **Reset** (left).
+2. **Reset?**, in amber: "Clears all settings, TNC, and authorized
+   management apps. The firmware and the authorization code are
+   preserved." Under it, a bar, and under the bar an amber circle saying
+   **Hold**.
+3. Hold a finger on the circle. It fills in, and the bar runs over 3 s
+   (provisional). The bar is above the circle so the finger doesn't hide
+   it. Lift the finger and the bar empties, to start again. **Cancel**
+   (left) goes back to System.
+4. Held to the end, the device resets: "Settings cleared. Restarting…",
+   and it restarts with no radio.
 
-Two zones held together is hard to do by accident, by a hand picking the
-device up or a bag. As on the ATOM, no setting can get in reset's way.
+Two steps, a tap and then a 3 s hold, are hard to do by accident.
+
+**Why not a gesture at power-on, as on the ATOM.** Firmware 1.2 had one:
+the left and right circles held while turning the device on. It never
+worked
+([#20](https://github.com/kotfu/kiss-tnc-bridge/issues/20)), for two
+reasons found on the device:
+
+- The touch controller starts with the firmware and takes its baseline
+  then, so fingers already on the glass read as no touch until they lift.
+  The power button is no better: the chip reports a press only once it's
+  over, and not the one that turned the device on.
+- The panel reports one point. Two fingers come out as one touch between
+  them, on the screen or on the circles, so no gesture can need two.
+
+So a Core2 that can't reach the System page can't be reset from the
+device. A management app over USB can, with `device.reset`, if the
+firmware gets far enough to answer; otherwise a clean install from the
+web installer or `ktbctl device flash --clean` starts afresh.
 
 ## Power off
 
@@ -447,5 +466,4 @@ An error wakes the screen.
   2026 have the E).
 - Power off with USB plugged in, and whether plugging in USB turns an
   off Core2 on.
-- The reset gesture: holding two circles while pressing the power button
-  or the reset button.
+- Reset's 3 s hold, and the circle's size.

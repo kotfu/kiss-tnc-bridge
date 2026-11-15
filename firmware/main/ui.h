@@ -20,7 +20,8 @@ enum class Event : uint8_t {
 // At power-on, before settings load: if the button is held, shows the
 // power-on colors and the reset warning. Returns true if it was still held
 // at the end of the warning, so the caller resets. Returns false at once
-// if the button isn't held.
+// if the button isn't held. The Core2 only shows its splash and returns
+// false: its Reset is on the System page.
 bool reset_requested_at_boot();
 
 // Shows the reset done flashes and the dark gap, blocking. For the reset

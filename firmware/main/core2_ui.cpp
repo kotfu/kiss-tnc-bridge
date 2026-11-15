@@ -18,11 +18,13 @@
 
 #include "axp192.h"
 #include "cJSON.h"
+#include "console.h"
 #include "core2_hw.h"
 #include "errors.h"
 #include "esp_app_desc.h"
 #include "esp_bt_device.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -30,6 +32,7 @@
 #include "phones.h"
 #include "radio.h"
 #include "settings.h"
+#include "storage.h"
 
 namespace ktb::ui {
 
@@ -146,7 +149,7 @@ QueueHandle_t queue;
 bool hw_ok = false;
 volatile bool is_started = false;
 
-lv_obj_t *splash_scr, *splash_status, *main_scr, *message_scr, *message_title, *message_text, *message_bar;
+lv_obj_t *splash_scr, *splash_status, *main_scr, *message_scr, *message_title, *message_text;
 std::string step;
 int64_t step_since = 0;
 
@@ -156,7 +159,7 @@ int64_t step_since = 0;
 bool installing = false;
 
 enum class Page : uint8_t { bridge, tnc, system };
-enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off, forget };
+enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off, forget, reset };
 Page page = Page::bridge;
 Flow flow = Flow::none;
 int64_t flow_since = 0;
@@ -781,7 +784,18 @@ struct {
     lv_obj_t *screen, *opts[3], *chips[4];
     lv_obj_t *power_off;
     lv_obj_t *forget, *forget_title, *forget_text;
+    lv_obj_t *reset, *reset_circle, *reset_bar;
 } fl;
+
+// Reset (docs/core2-ui.md, Reset): one circle to hold, with the bar above
+// it, where the finger doesn't hide it. One, because the touch panel
+// reports a single point: two fingers come out as one between them
+// (#20). Positions in the flow, which starts at page_y.
+constexpr int reset_bar_y = 88;
+constexpr int reset_circle_d = 64;
+constexpr int reset_circle_y = 100;
+constexpr int reset_reach = 48; // how far from the circle's centre a touch counts
+int64_t reset_held_since = 0;   // held since; 0 while it isn't
 
 constexpr uint16_t timeouts[4] = {15, 30, 60, 300};
 
@@ -963,6 +977,70 @@ void build_flows()
     lv_obj_set_pos(fl.forget_text, 10, 36);
     lv_obj_set_width(fl.forget_text, W - 20);
     lv_label_set_long_mode(fl.forget_text, LV_LABEL_LONG_MODE_WRAP);
+
+    fl.reset = flow_screen();
+    title(fl.reset, "Reset?", 4, &lv_font_montserrat_20, c_amber);
+    lv_obj_t *r1 = label(fl.reset, &lv_font_montserrat_12, c_fg,
+                         "Clears all settings, TNC, and authorized management apps. The firmware and the "
+                         "authorization code are preserved.");
+    lv_obj_set_pos(r1, 10, 34);
+    lv_obj_set_width(r1, W - 20);
+    lv_label_set_long_mode(r1, LV_LABEL_LONG_MODE_WRAP);
+    fl.reset_bar = bar(fl.reset, reset_bar_y, c_amber);
+    lv_obj_t *c = box(fl.reset, (W - reset_circle_d) / 2, reset_circle_y, reset_circle_d, reset_circle_d);
+    lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(c, 3, 0);
+    lv_obj_set_style_border_color(c, c_amber, 0);
+    lv_obj_set_style_bg_color(c, c_amber, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_t *hold = label(c, &lv_font_montserrat_14, c_amber, "Hold");
+    lv_obj_center(hold);
+    fl.reset_circle = c;
+}
+
+// Settings cleared: says so, at once. From LVGL's task.
+void show_reset_done()
+{
+    lv_label_set_text(message_title, "Reset");
+    lv_label_set_text(message_text, "Settings cleared. Restarting...");
+    lv_screen_load(message_scr);
+    lv_refr_now(core2::display());
+}
+
+// The Reset flow, each tick: the circle fills and the bar runs while a
+// finger is on the circle; lift it and the bar starts again. Held to the
+// end, the device resets and restarts.
+void update_reset(int64_t now)
+{
+    core2::TouchPoint pts[1];
+    bool on = false;
+    if (core2::read_touch(pts, 1) == 1) {
+        int dx = pts[0].x - W / 2;
+        int dy = pts[0].y - (page_y + reset_circle_y + reset_circle_d / 2);
+        on = dx * dx + dy * dy <= reset_reach * reset_reach;
+    }
+    lv_obj_set_style_bg_opa(fl.reset_circle, on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(fl.reset_circle, 0), on ? c_bg : c_amber, 0);
+    if (!on) {
+        reset_held_since = 0;
+        lv_bar_set_value(fl.reset_bar, 0, LV_ANIM_OFF);
+        return;
+    }
+    if (reset_held_since == 0) {
+        reset_held_since = now;
+        ESP_LOGW(TAG, "reset: holding");
+    }
+    int64_t ms = now - reset_held_since;
+    lv_bar_set_value(fl.reset_bar, static_cast<int32_t>(std::min<int64_t>(ms, reset_warning_ms) * 1000 / reset_warning_ms),
+                     LV_ANIM_OFF);
+    if (ms >= reset_warning_ms) {
+        ESP_LOGW(TAG, "reset: held to the end, resetting");
+        storage::reset();
+        show_reset_done();
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        console::flush();
+        esp_restart();
+    }
 }
 
 // Forget: the confirmation's words for the radio there is now.
@@ -1120,6 +1198,7 @@ void set_flow(Flow f)
     show(fl.screen, f == Flow::screen_settings);
     show(fl.power_off, f == Flow::power_off);
     show(fl.forget, f == Flow::forget);
+    show(fl.reset, f == Flow::reset);
     show(flow_box, f != Flow::none);
     for (int i = 0; i < 3; i++) {
         show(pages[i], f == Flow::none && static_cast<int>(page) == i);
@@ -1154,6 +1233,11 @@ void set_flow(Flow f)
                      radio::unpair(control::Pending{}, "");
                      set_flow(Flow::none);
                  }});
+        break;
+    case Flow::reset:
+        reset_held_since = 0;
+        lv_bar_set_value(fl.reset_bar, 0, LV_ANIM_OFF);
+        set_keys({"Cancel", 0, [] { set_flow(Flow::none); }});
         break;
     }
     update_tabs();
@@ -1207,7 +1291,9 @@ void page_keys()
         }
         break;
     }
-    case Page::system: set_keys({}, {"Power off", 1, [] { set_flow(Flow::power_off); }}); break;
+    case Page::system:
+        set_keys({"Reset", 0, [] { set_flow(Flow::reset); }}, {"Power off", 1, [] { set_flow(Flow::power_off); }});
+        break;
     }
 }
 
@@ -1387,6 +1473,8 @@ void tick(lv_timer_t *)
 
     if (flow == Flow::pairing) {
         update_pairing();
+    } else if (flow == Flow::reset) {
+        update_reset(now);
     }
 
     update_bridge(v, apps, errs, now);
@@ -1445,29 +1533,13 @@ void build_splash()
     lv_obj_set_pos(message_text, 16, 52);
     lv_obj_set_width(message_text, W - 32);
     lv_label_set_long_mode(message_text, LV_LABEL_LONG_MODE_WRAP);
-    message_bar = bar(message_scr, 110, c_amber);
-    lv_obj_set_x(message_bar, 16);
-    lv_obj_set_width(message_bar, W - 32);
-}
-
-// Both outer circles held: one touch on the strip's left zone and one on
-// its right.
-bool reset_held()
-{
-    core2::TouchPoint pts[2];
-    int n = core2::read_touch(pts, 2);
-    bool left = false, right = false;
-    for (int i = 0; i < n; i++) {
-        if (pts[i].y >= H) {
-            left = left || zone(pts[i].x) == 0;
-            right = right || zone(pts[i].x) == 2;
-        }
-    }
-    return left && right;
 }
 
 } // namespace
 
+// Shows the splash. The Core2 has no reset gesture at power-on: its
+// touch panel doesn't see fingers already on it when it starts, nor two
+// fingers on the circles, so Reset is on the System page (#20).
 bool reset_requested_at_boot()
 {
     queue = xQueueCreate(16, sizeof(Event));
@@ -1481,41 +1553,7 @@ bool reset_requested_at_boot()
     lv_refr_now(core2::display());
     core2::unlock();
     set_backlight(axp192::Backlight::full);
-    if (!hw_ok) {
-        return false; // no touch: no reset gesture
-    }
-
-    // Held means held for three readings in a row.
-    for (int i = 0; i < 3; i++) {
-        if (!reset_held()) {
-            return false;
-        }
-        vTaskDelay(pdMS_TO_TICKS(30));
-    }
-    ESP_LOGW(TAG, "reset gesture at power-on: let go to cancel");
-    core2::lock(portMAX_DELAY);
-    lv_label_set_text(message_text, "Keep holding to clear the settings, the radio and the authorized apps. "
-                                    "Let go to cancel.");
-    lv_bar_set_value(message_bar, 0, LV_ANIM_OFF);
-    lv_screen_load(message_scr);
-    core2::unlock();
-    int64_t start = now_ms();
-    int up = 0;
-    while (now_ms() - start < reset_warning_ms) {
-        vTaskDelay(pdMS_TO_TICKS(50));
-        up = reset_held() ? 0 : up + 1;
-        if (up >= 2) {
-            ESP_LOGI(TAG, "let go: reset cancelled");
-            core2::lock(portMAX_DELAY);
-            lv_screen_load(splash_scr);
-            core2::unlock();
-            return false;
-        }
-        core2::lock(portMAX_DELAY);
-        lv_bar_set_value(message_bar, static_cast<int32_t>((now_ms() - start) * 1000 / reset_warning_ms), LV_ANIM_OFF);
-        core2::unlock();
-    }
-    return true;
+    return false;
 }
 
 void show_reset_done_blocking()
@@ -1524,11 +1562,7 @@ void show_reset_done_blocking()
         return;
     }
     core2::lock(portMAX_DELAY);
-    lv_label_set_text(message_title, "Reset");
-    lv_label_set_text(message_text, "Settings cleared. Restarting...");
-    show(message_bar, false);
-    lv_screen_load(message_scr);
-    lv_refr_now(core2::display());
+    show_reset_done();
     core2::unlock();
     vTaskDelay(pdMS_TO_TICKS(1500));
 }
