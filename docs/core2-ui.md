@@ -161,17 +161,24 @@ roadmap's [Core2 firmware](roadmap.md#core2-v13-firmware-decisions-6-7-8)).
 Where the device starts, and what it shows unless you've gone elsewhere.
 
 **Radio:** the radio's name (`TH-D75`, `TD-H9`) in large type, its make
-and Bluetooth address, its state, and how long it's been in that state.
+and Bluetooth address, its state in a pill, and under the pill how long
+it's been that way: "for 21m". The TNC page shows the same pill, without
+the time.
 
 | Radio | State shown | Time shown |
 |---|---|---|
-| Connected | **Connected**, green | How long it's been connected |
-| Connecting | **Connecting**, amber | — |
-| A Kenwood, link down | **Retrying in 8 s**, amber, counting down | How long it's been down |
-| A TD-H9, link down | **Waiting for it**, amber (the device connects as soon as it advertises) | How long it's been down |
+| Connected | **Connected**, green | for how long it's been connected |
+| A Kenwood, connecting | **Connecting**, amber | for how long the link's been down |
+| A Kenwood, link down | **Retrying in 8s**, amber, counting down | for how long the link's been down |
+| A TD-H9, link down | **Waiting**, amber (the device connects as soon as it advertises) | for how long the link's been down |
+| Taken down by a management app (`port.disconnect`) | **Down**, grey | for how long it's been down |
 | Pairing or selecting (started from a management app) | **Pairing**, blue | — |
 | No radio | **No radio** in place of the name, and **Not paired**, grey, with "Pair a Kenwood or select a TD-H9 on the TNC tab" | — |
 | Bluetooth didn't start | **Stopped**, grey, with the error's [banner](#errors) | — |
+
+A Kenwood's pill goes between Connecting and Retrying while the device
+tries to reach it; the time counts from when the link went down, not from
+each change.
 
 While the radio is connected, **RX** and **TX** show the frames counted
 since it connected: RX from the radio, TX to it. Each has an activity

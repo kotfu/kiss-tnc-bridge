@@ -416,27 +416,30 @@ void radio_pill(const radio::View &v, std::string &text, lv_color_t &bg, lv_colo
             bg = c_line;
             fg = c_dim;
         } else {
-            text = "Held";
+            text = "Down"; // held down by port.disconnect
             bg = c_line;
             fg = c_dim;
+            time = "for " + duration(v.state_s);
         }
         break;
+    // Connecting and retrying: for how long the link has been down, not
+    // how long since the pill last flipped between them.
     case radio::State::connecting:
-        text = v.ble ? "Waiting for it" : "Connecting";
+        text = v.ble ? "Waiting" : "Connecting";
         bg = c_amber;
-        time = "down " + duration(v.down_s);
+        time = "for " + duration(v.down_s);
         break;
     case radio::State::connected:
         text = "Connected";
         bg = c_green;
-        time = duration(v.state_s);
+        time = "for " + duration(v.state_s);
         break;
     case radio::State::retrying: {
         char b[24];
-        snprintf(b, sizeof(b), "Retrying in %lu s", (unsigned long)v.retry_in_s);
+        snprintf(b, sizeof(b), "Retrying in %lus", (unsigned long)v.retry_in_s);
         text = b;
         bg = c_amber;
-        time = "down " + duration(v.down_s);
+        time = "for " + duration(v.down_s);
         break;
     }
     }

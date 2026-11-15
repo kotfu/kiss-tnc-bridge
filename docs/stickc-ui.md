@@ -127,8 +127,8 @@ the voltage as the Core2's.
 The Core2's Bridge page, stacked:
 
 1. **The radio:** its name (`TH-D75`, `TD-H9`) at 20 px; its state, in
-   color, with how long ("Connected 2h 14m", "Retrying in 8 s",
-   "Waiting for it", "Pairing", "No radio"), the states and wording of
+   color, with how long ("Connected for 2h 14m", "Retrying in 8s",
+   "Waiting", "Pairing", "No radio"), the states and wording of
    the Core2's; its Bluetooth address.
 2. **RX and TX** since it connected, each with its activity light, as
    on the Core2.

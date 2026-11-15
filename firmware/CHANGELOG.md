@@ -21,6 +21,15 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the version the sender gives in `version`, and that the device
   will restart when complete.
 
+### Changed
+
+- The Core2's radio pill says **Waiting** for a TD-H9 that's out of
+  reach, instead of "Waiting for it", **Down** when a management app has
+  taken the link down, instead of "Held", and **Retrying in 8s**, without
+  the space. The time under it reads "for 21m" for every state, instead
+  of "21m" when connected and "down 21m" otherwise, and Down shows it too
+  ([#35](https://github.com/kotfu/kiss-tnc-bridge/issues/35)).
+
 ### Fixed
 
 - `bluetooth.unpair` answers with what it unpaired, the `address`, the
