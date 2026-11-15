@@ -106,6 +106,7 @@ the LED goes dark.
 
 | While | The button |
 |---|---|
+| **Installing over USB** | Does nothing, until the device restarts |
 | **Updating** | Does nothing. Pairing or starting authorization mode mid-update isn't worth the risk |
 | **Error** | Works as usual: whatever still works can still be used |
 | **Pairing** | Only a single press, which cancels pairing |
@@ -232,8 +233,9 @@ while the device goes on bridging.
 
 | State | What it means | Bright | Dim | Breathe | Dark |
 |---|---|---|---|---|---|
+| **Installing over USB** | The web installer or `ktbctl device flash` is about to install firmware over USB, and told the device so ([`device.install_notice`](control-api.md#deviceinstall_notice)). Don't unplug. The install resets the device into its ROM, where no firmware runs, so the LED keeps this color through the whole install, until the new firmware's power-on colors replace it. Steady, since nothing can blink it then. Firmware 1.3.0 and before, and other firmware, aren't told, and show whatever they showed last | White, steady | Same | Same | Same |
 | **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management app to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no management app | Red, three fast blinks, then a pause | Same | Same | Same |
-| **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB the device's firmware isn't running, so the web page or `ktbctl` shows progress and the LED isn't ours | White, fast blink | Same | Same | Same |
+| **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB it's Installing over USB, above | White, fast blink | Same | Same | Same |
 | **Authorization mode** | Accepting one new management app | Magenta, slow blink | Same | Same | Same |
 | **Pairing** | Scanning for a Kenwood in pairing mode or a TD-H9 | Blue, fast blink | Same | Same | Same |
 | **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same | Same |
@@ -312,6 +314,11 @@ flick on top of the state, which carries on around them.
 
 Red is kept for errors: a failed pairing is yellow, like the radio states
 it returns to.
+
+Steady white is both Installing over USB and the reset warning. They
+can't be confused: the reset warning shows only at power-on with the
+button held, before the firmware takes any commands, and installing only
+on a running device an installer has just told.
 
 ### An example
 

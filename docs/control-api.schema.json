@@ -1360,6 +1360,25 @@
           "type": "object"
         },
         {
+          "description": "Over USB serial, just before a USB install resets the device into\nits ROM: the device shows that it's being installed until it\nrestarts, and answers `{}` once it does. `version` is the firmware\nbeing installed, which a screen shows.",
+          "properties": {
+            "cmd": {
+              "const": "device.install_notice",
+              "type": "string"
+            },
+            "version": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "cmd"
+          ],
+          "type": "object"
+        },
+        {
           "description": "The fingerprint, public key, authorization mode and how many apps\nare authorized.",
           "properties": {
             "cmd": {

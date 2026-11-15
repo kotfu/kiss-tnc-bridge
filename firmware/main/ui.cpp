@@ -124,6 +124,7 @@ const char *event_name(Event e)
 
 // States, highest precedence first (docs/atom-lite-ui.md, States)
 enum class Shown : uint8_t {
+    installing,
     error,
     updating,
     authorizing,
@@ -139,6 +140,7 @@ bool is_normal(Shown s) { return s == Shown::normal_idle || s == Shown::normal_p
 const char *shown_name(Shown s)
 {
     switch (s) {
+    case Shown::installing: return "installing over USB";
     case Shown::error: return "error";
     case Shown::updating: return "updating";
     case Shown::authorizing: return "authorization mode";
@@ -152,9 +154,13 @@ const char *shown_name(Shown s)
 }
 
 std::atomic<bool> updating_on{false};
+// Set once and never cleared: only a restart ends it.
+std::atomic<bool> installing_on{false};
+std::atomic<bool> installing_shown{false};
 
 Shown current_state()
 {
+    if (installing_on) return Shown::installing;
     if (errors::any()) return Shown::error;
     if (updating_on) return Shown::updating;
     if (auth::mode_is_on()) return Shown::authorizing;
@@ -210,7 +216,7 @@ int64_t now_ms() { return esp_timer_get_time() / 1000; }
 // What a press does depends on what the LED showed when it went down.
 enum class Press : uint8_t {
     none,        // the button is up
-    ignored,     // updating, or already used (a wake, the second of a double)
+    ignored,     // installing, updating, or already used (a wake, the second of a double)
     candidate,   // could become a long press, or the first of a double
     cancel_pair, // a press while pairing: cancels it when let go
     end_authorizing, // a press in authorization mode: ends it when let go
@@ -298,7 +304,7 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
     if (down) {
         press_start = now;
         long_reached = false;
-        if (state == Shown::updating) {
+        if (state == Shown::installing || state == Shown::updating) {
             press = Press::ignored;
             return;
         }
@@ -354,6 +360,14 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
 void Ui::render(int64_t now, Shown state, bool dark)
 {
     uint8_t brightness = settings::led_brightness();
+    // Steady, over everything (a long press, an event, a frame): once the
+    // device is in its ROM nothing runs to blink the LED, and what's shown
+    // last stays through the install.
+    if (state == Shown::installing) {
+        led::show(led::white, brightness);
+        installing_shown = true;
+        return;
+    }
     if (long_reached) {
         led::show(led::magenta, brightness);
         return;
@@ -373,6 +387,7 @@ void Ui::render(int64_t now, Shown state, bool dark)
     Rgb color = led::off;
     float level = 1.0f;
     switch (state) {
+    case Shown::installing: break; // shown above
     case Shown::error: color = error_on ? led::red : led::off; break;
     case Shown::updating: color = fast_on ? led::white : led::off; break;
     case Shown::authorizing: color = slow_on ? led::magenta : led::off; break;
@@ -526,6 +541,16 @@ void wait_idle(uint32_t timeout_ms)
 }
 
 void set_updating(bool on) { updating_on = on; }
+
+bool show_installing(const char *, uint32_t timeout_ms)
+{
+    installing_on = true;
+    int64_t end = now_ms() + timeout_ms;
+    while (!installing_shown && now_ms() < end) {
+        vTaskDelay(pdMS_TO_TICKS(tick_ms));
+    }
+    return installing_shown;
+}
 
 void starting(const char *) {}
 void started() {}

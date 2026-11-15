@@ -8,6 +8,19 @@ CI takes a release's notes from its section here, so each version needs a
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Added
+
+- `device.install_notice`, announced by the `install-notice` capability:
+  sent over USB just before a USB install, it shows that the device is
+  being installed until it restarts, which the install keeps through the
+  ROM download mode. The ATOM Lite's LED is steady white, over every
+  other state and in every `led_normal` mode, and so is the StickC Plus
+  SE's screen. The Core2's screen says "Installing firmware v1.4.0...",
+  with the version the sender gives in `version`, and that the device
+  will restart when complete.
+
 ## 1.3.0 (2026-11-14)
 
 Three boards: the StickC Plus SE joins the ATOM Lite and the Core2 v1.3.

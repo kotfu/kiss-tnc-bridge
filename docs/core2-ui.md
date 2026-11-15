@@ -344,6 +344,26 @@ device that hangs says where.
 An error at startup goes on the screen as on the Bridge page, where the
 ATOM blinks red.
 
+## Installing over USB
+
+When `ktbctl device flash` or the web installer sends
+[`device.install_notice`](control-api.md#deviceinstall_notice) before a
+USB install, the screen changes at once, over any page or flow, to:
+
+```
+kiss-tnc-bridge
+Installing firmware v1.4.0...
+
+The device will restart when complete.
+```
+
+on black, with the version the sender gave ("Installing firmware..."
+without one), and the backlight full on whatever the screen settings
+say. It's static, with no spinner: the install resets the ESP32 into its
+ROM, where no firmware runs, and the screen and the AXP192 keep what they
+had until the new firmware's splash. Until the reset, touches and the
+power button do nothing; the device goes on bridging.
+
 ## Reset
 
 Reset does what it does on the ATOM Lite (see

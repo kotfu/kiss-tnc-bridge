@@ -289,8 +289,12 @@ OTA data makes it boot the first, where the new firmware was just written.
 
 Progress: a bar for the whole install, with the step (erasing, writing,
 verifying) and the bytes written. An install of the ATOM Lite takes under
-a minute. The device's LED isn't ours while it's being written: what it
-shows doesn't mean anything (see [atom-lite-ui.md](atom-lite-ui.md)).
+a minute. Firmware with the `install-notice` capability (from 1.4.0) shows
+that it's being installed, if the page told it first with
+[`device.install_notice`](control-api.md#deviceinstall_notice), giving
+the version it's installing: steady white on the ATOM Lite and the StickC
+Plus SE, and "Installing firmware v1.4.0..." on the Core2's screen. Over other firmware, what
+the device shows while it's written doesn't mean anything.
 
 The user mustn't unplug the device while it's being written. If the
 install fails partway, nothing is lost that another install can't fix:

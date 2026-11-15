@@ -123,6 +123,31 @@ where
         .map_err(|e| CtlError::Protocol(format!("device.info: {e}")))
 }
 
+/// The capability in `device.info` of firmware that takes
+/// `device.install_notice` (docs/control-api.md).
+pub const INSTALL_NOTICE: &str = "install-notice";
+
+/// Tells the firmware a USB install of firmware `version` is about to
+/// reset it into its ROM, so it shows that it's being installed until it
+/// restarts (with the version, on a screen), and waits up to `wait` for it
+/// to answer, which it does once it shows it. Sent once: asking again
+/// would only repeat what it's showing. `Ok(false)` if nothing answered.
+pub async fn install_notice<S>(
+    port: &mut S,
+    version: &str,
+    wait: Duration,
+) -> Result<bool, CtlError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let params = json!({"version": version});
+    Ok(
+        request_with(port, "device.install_notice", &params, wait, false)
+            .await?
+            .is_some(),
+    )
+}
+
 /// Sends a request with no parameters and waits up to `wait` for its
 /// result, sending it again each second if `again`. `None` if nothing
 /// answered. The port also carries the firmware's log, so lines that don't
@@ -136,8 +161,26 @@ pub async fn request<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    request_with(port, cmd, &json!({}), wait, again).await
+}
+
+/// As [`request`], with `params` (a JSON object) beside `cmd`.
+async fn request_with<S>(
+    port: &mut S,
+    cmd: &str,
+    params: &Value,
+    wait: Duration,
+    again: bool,
+) -> Result<Option<Value>, CtlError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let id = next_id();
-    let request = format!("{}\n", json!({"v": VERSION, "id": id, "cmd": cmd}));
+    let mut message = json!({"v": VERSION, "id": id, "cmd": cmd});
+    if let (Some(m), Some(p)) = (message.as_object_mut(), params.as_object()) {
+        m.extend(p.clone());
+    }
+    let request = format!("{message}\n");
     let deadline = Instant::now() + wait;
     let mut next_ask = Some(Instant::now());
     let mut line: Vec<u8> = Vec::new();
@@ -240,6 +283,51 @@ mod tests {
         assert_eq!(info.heap.as_ref().map(|h| h.free), Some(119_856));
         // Fields this version doesn't know are kept.
         assert_eq!(info.other.get("max_message"), Some(&json!(4096)));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_install_notice_is_sent_once_and_its_answer_awaited() {
+        let (mut ours, device) = tokio::io::duplex(4096);
+        let fake = tokio::spawn(async move {
+            let (mut lines, mut w) = fake(device);
+            let req: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(req["cmd"], "device.install_notice");
+            assert_eq!(req["version"], "1.4.0-dev");
+            let id = req["id"].as_u64().unwrap();
+            w.write_all(b"I (42103) control: device.install_notice\n")
+                .await
+                .unwrap();
+            w.write_all(
+                format!("{{\"v\":1,\"id\":{id},\"ok\":true,\"result\":{{}}}}\n").as_bytes(),
+            )
+            .await
+            .unwrap();
+        });
+        assert!(
+            install_notice(&mut ours, "1.4.0-dev", ANSWER_WAIT)
+                .await
+                .unwrap()
+        );
+        fake.await.unwrap();
+
+        // Silent: given up on after the wait, having asked only once.
+        let (mut ours, device) = tokio::io::duplex(4096);
+        let counter = tokio::spawn(async move {
+            let mut lines = BufReader::new(device).lines();
+            let mut n = 0;
+            while let Ok(Some(_)) = lines.next_line().await {
+                n += 1;
+            }
+            n
+        });
+        assert!(
+            !install_notice(&mut ours, "1.4.0-dev", ANSWER_WAIT)
+                .await
+                .unwrap()
+        );
+        drop(ours);
+        assert_eq!(counter.await.unwrap(), 1);
     }
 
     #[tokio::test(start_paused = true)]

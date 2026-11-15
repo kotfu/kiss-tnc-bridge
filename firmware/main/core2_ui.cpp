@@ -150,6 +150,11 @@ lv_obj_t *splash_scr, *splash_status, *main_scr, *message_scr, *message_title, *
 std::string step;
 int64_t step_since = 0;
 
+// device.install_notice: the installing screen is up, and stays until the
+// restart (docs/core2-ui.md, Installing over USB). Nothing else draws or
+// changes the light.
+bool installing = false;
+
 enum class Page : uint8_t { bridge, tnc, system };
 enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off, forget };
 Page page = Page::bridge;
@@ -1241,10 +1246,13 @@ bool was_pressed = false;
 // the screen is off, a touch only wakes it (the wake rule).
 void read_touch(lv_indev_t *, lv_indev_data_t *data)
 {
-    core2::TouchPoint pts[2];
-    int n = core2::read_touch(pts, 2);
     data->point = last_point;
     data->state = LV_INDEV_STATE_RELEASED;
+    if (installing) {
+        return;
+    }
+    core2::TouchPoint pts[2];
+    int n = core2::read_touch(pts, 2);
     if (n == 0) {
         swallowing = false;
         was_pressed = false;
@@ -1332,6 +1340,9 @@ void on_event(Event e)
 
 void tick(lv_timer_t *)
 {
+    if (installing) {
+        return;
+    }
     int64_t now = now_ms();
     Event e;
     while (xQueueReceive(queue, &e, 0) == pdTRUE) {
@@ -1395,6 +1406,10 @@ lv_obj_t *splash_title(lv_obj_t *scr, int y)
 
 void splash_tick(lv_timer_t *t)
 {
+    if (installing) {
+        lv_timer_delete(t);
+        return;
+    }
     if (is_started) {
         lv_screen_load(main_scr);
         lv_timer_delete(t);
@@ -1570,5 +1585,43 @@ void post(Event e)
 void wait_idle(uint32_t timeout_ms) { vTaskDelay(pdMS_TO_TICKS(timeout_ms < 200 ? timeout_ms : 200)); }
 
 void set_updating(bool) {}
+
+// Draws the installing screen at once and turns the backlight full on.
+// The ROM leaves the screen and the AXP192 alone, so both stay until the
+// new firmware starts. Static: once the ROM runs, nothing moves.
+bool show_installing(const char *version, uint32_t timeout_ms)
+{
+    if (!core2::display()) {
+        return true; // no screen to show it on
+    }
+    if (!core2::lock(timeout_ms)) {
+        return false;
+    }
+    if (!installing) {
+        installing = true;
+        std::string doing = "Installing firmware";
+        if (version != nullptr && *version != '\0') {
+            doing += std::string(" v") + version;
+        }
+        doing += "...";
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        fill(scr, c_bg);
+        lv_obj_set_scrollable(scr, false);
+        lv_obj_t *t = label(scr, &lv_font_montserrat_20, c_fg, "kiss-tnc-bridge");
+        lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 62);
+        lv_obj_t *d = label(scr, &lv_font_montserrat_14, c_fg, doing.c_str());
+        lv_obj_set_width(d, W - 32);
+        lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(d, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 104);
+        lv_obj_t *r = label(scr, &lv_font_montserrat_12, c_dim, "The device will restart when complete.");
+        lv_obj_align(r, LV_ALIGN_TOP_MID, 0, 160);
+        lv_screen_load(scr);
+        lv_refr_now(core2::display());
+        set_backlight(axp192::Backlight::full);
+    }
+    core2::unlock();
+    return true;
+}
 
 } // namespace ktb::ui
