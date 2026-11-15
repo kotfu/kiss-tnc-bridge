@@ -347,9 +347,13 @@ pub enum Command {
     DeviceIdentify,
     /// Over USB serial, just before a USB install resets the device into
     /// its ROM: the device shows that it's being installed until it
-    /// restarts, and answers `{}` once it does.
+    /// restarts, and answers `{}` once it does. `version` is the firmware
+    /// being installed, which a screen shows.
     #[serde(rename = "device.install_notice")]
-    DeviceInstallNotice,
+    DeviceInstallNotice {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<String>,
+    },
     // ── Authorization (docs/control-api.md, auth commands): devices, and
     // later ktb-gateway; the daemon's socket answers not_supported. ──
     /// The fingerprint, public key, authorization mode and how many apps
@@ -438,7 +442,7 @@ impl Command {
                 | Command::DeviceReboot
                 | Command::DeviceReset
                 | Command::DeviceIdentify
-                | Command::DeviceInstallNotice
+                | Command::DeviceInstallNotice { .. }
                 | Command::AuthInfo
                 | Command::AuthCode
                 | Command::AuthRotateCode

@@ -23,9 +23,9 @@
 //! 3. An update, which keeps NVS, or a clean install, which erases the
 //!    whole flash first and is the only way over other firmware. A clean
 //!    install asks first.
-//! 4. The ROM. First, firmware that takes it is told an install is
-//!    coming (`device.install_notice`), so it shows that it's being
-//!    installed until it restarts. Then check the chip is the firmware's
+//! 4. The ROM. First, firmware that takes it is told an install of the
+//!    new version is coming (`device.install_notice`), so it shows that
+//!    it's being installed until it restarts. Then check the chip is the firmware's
 //!    board, erase, write, reset. At 1500000 baud, then at 115200 if that
 //!    fails. A failure resets the device, so it isn't left in its download
 //!    mode.
@@ -216,7 +216,7 @@ impl Ctl {
         // now, after any download and "Go ahead?": a device told it's
         // being installed shows it until it restarts.
         if takes_install_notice(running.as_ref()) {
-            send_install_notice(&port, &say).await;
+            send_install_notice(&port, &fw.version, &say).await;
         }
         let job = Job {
             port: port.clone(),
@@ -414,13 +414,13 @@ fn takes_install_notice(running: Option<&DeviceInfo>) -> bool {
     running.is_some_and(|i| i.capabilities.iter().any(|c| c == INSTALL_NOTICE))
 }
 
-/// Tells the firmware an install is coming. Nothing to say when it works:
-/// the device shows it. When it doesn't, the install goes ahead anyway;
-/// the device just shows what it showed before.
-async fn send_install_notice(port: &DevicePort, say: &Reporter) {
+/// Tells the firmware an install of `version` is coming. Nothing to say
+/// when it works: the device shows it. When it doesn't, the install goes
+/// ahead anyway; the device just shows what it showed before.
+async fn send_install_notice(port: &DevicePort, version: &str, say: &Reporter) {
     let sent = match probe::open_quiet(&port.path) {
         Ok(mut serial) => matches!(
-            probe::install_notice(&mut serial, ANSWER_WAIT).await,
+            probe::install_notice(&mut serial, version, ANSWER_WAIT).await,
             Ok(true)
         ),
         Err(_) => false,

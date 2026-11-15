@@ -559,7 +559,7 @@ impl Daemon {
             | Command::DeviceReboot
             | Command::DeviceReset
             | Command::DeviceIdentify
-            | Command::DeviceInstallNotice => Err(ApiError::new(
+            | Command::DeviceInstallNotice { .. } => Err(ApiError::new(
                 ErrorCode::NotSupported,
                 "this is the kiss-tnc-bridge daemon, not a device; the device commands are \
                  for an ATOM Lite, StickC Plus SE or Core2 v1.3",

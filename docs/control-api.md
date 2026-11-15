@@ -859,10 +859,12 @@ the Core2 it wakes the screen.
 Sent over USB serial just before a USB install resets the device into
 its ROM download mode, by `ktbctl device flash` and the web installer.
 The device shows that it's being installed, then answers `{}`, so the
-sender can reset it as soon as it has the answer.
+sender can reset it as soon as it has the answer. `version`, optional, is
+the firmware being installed, as `device.info` will report it: 1 to 32
+printable characters with no spaces, or the device answers `bad_request`.
 
 ```jsonc
-→ {"v":1,"id":9,"cmd":"device.install_notice"}
+→ {"v":1,"id":9,"cmd":"device.install_notice","version":"1.4.0"}
 ← {"v":1,"id":9,"ok":true,"result":{}}
 ```
 
@@ -870,8 +872,9 @@ In download mode no firmware runs, so nothing can change what the device
 shows: the LED or screen keeps it through the whole install, until the new
 firmware starts. On the ATOM Lite and the StickC Plus SE it's steady
 white, over every other state and in every `led_normal` mode, dark
-included (see [atom-lite-ui.md](atom-lite-ui.md#states)); the Core2
-doesn't show it yet.
+included (see [atom-lite-ui.md](atom-lite-ui.md#states)), and the version
+isn't shown. The Core2 shows "Installing firmware v1.4.0..." with the
+backlight full on (see [core2-ui.md](core2-ui.md#installing-over-usb)).
 
 - **It lasts until the device restarts.** There's no way to take it back
   and no time limit: a sender that decides not to install resets the

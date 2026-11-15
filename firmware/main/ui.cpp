@@ -542,7 +542,7 @@ void wait_idle(uint32_t timeout_ms)
 
 void set_updating(bool on) { updating_on = on; }
 
-bool show_installing(uint32_t timeout_ms)
+bool show_installing(const char *, uint32_t timeout_ms)
 {
     installing_on = true;
     int64_t end = now_ms() + timeout_ms;

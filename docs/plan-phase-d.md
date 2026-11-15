@@ -265,12 +265,14 @@ the chip, so nothing is lost that another install can't fix).
 
 [`device.install_notice`](control-api.md#deviceinstall_notice) tells our
 firmware a USB install is coming, and it shows that it's being installed
-until it restarts: steady white on the ATOM Lite and the StickC Plus SE
+until it restarts: steady white on the ATOM Lite and the StickC Plus SE,
+and the version being installed on the Core2's screen
 ([#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22)), from firmware
 1.4.0, which announces it with the `install-notice` capability.
 
-- [x] `ktbctl device flash` sends it just before resetting the device into
-      its ROM, after any download and "Go ahead?", when `device.info`
+- [x] `ktbctl device flash` sends it, with the version it's installing,
+      just before resetting the device into its ROM, after any download
+      and "Go ahead?", when `device.info`
       announces the capability
       ([#29](https://github.com/kotfu/kiss-tnc-bridge/issues/29)). Sent
       once, with 3 s for the answer. Firmware 1.3.0 and older, other
@@ -396,6 +398,4 @@ software and firmware 1.3.0 ship (decided 12 November 2026).
 
 ## Open
 
-- **The install notice on the Core2's screen**
-  ([#22](https://github.com/kotfu/kiss-tnc-bridge/issues/22)): it answers
-  `device.install_notice` but doesn't show it yet.
+Nothing.

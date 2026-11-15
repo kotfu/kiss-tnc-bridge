@@ -127,18 +127,25 @@ where
 /// `device.install_notice` (docs/control-api.md).
 pub const INSTALL_NOTICE: &str = "install-notice";
 
-/// Tells the firmware a USB install is about to reset it into its ROM, so
-/// it shows that it's being installed until it restarts, and waits up to
-/// `wait` for it to answer, which it does once it shows it. Sent once:
-/// asking again would only repeat what it's showing. `Ok(false)` if
-/// nothing answered.
-pub async fn install_notice<S>(port: &mut S, wait: Duration) -> Result<bool, CtlError>
+/// Tells the firmware a USB install of firmware `version` is about to
+/// reset it into its ROM, so it shows that it's being installed until it
+/// restarts (with the version, on a screen), and waits up to `wait` for it
+/// to answer, which it does once it shows it. Sent once: asking again
+/// would only repeat what it's showing. `Ok(false)` if nothing answered.
+pub async fn install_notice<S>(
+    port: &mut S,
+    version: &str,
+    wait: Duration,
+) -> Result<bool, CtlError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    Ok(request(port, "device.install_notice", wait, false)
-        .await?
-        .is_some())
+    let params = json!({"version": version});
+    Ok(
+        request_with(port, "device.install_notice", &params, wait, false)
+            .await?
+            .is_some(),
+    )
 }
 
 /// Sends a request with no parameters and waits up to `wait` for its
@@ -154,8 +161,26 @@ pub async fn request<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    request_with(port, cmd, &json!({}), wait, again).await
+}
+
+/// As [`request`], with `params` (a JSON object) beside `cmd`.
+async fn request_with<S>(
+    port: &mut S,
+    cmd: &str,
+    params: &Value,
+    wait: Duration,
+    again: bool,
+) -> Result<Option<Value>, CtlError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let id = next_id();
-    let request = format!("{}\n", json!({"v": VERSION, "id": id, "cmd": cmd}));
+    let mut message = json!({"v": VERSION, "id": id, "cmd": cmd});
+    if let (Some(m), Some(p)) = (message.as_object_mut(), params.as_object()) {
+        m.extend(p.clone());
+    }
+    let request = format!("{message}\n");
     let deadline = Instant::now() + wait;
     let mut next_ask = Some(Instant::now());
     let mut line: Vec<u8> = Vec::new();
@@ -265,8 +290,11 @@ mod tests {
         let (mut ours, device) = tokio::io::duplex(4096);
         let fake = tokio::spawn(async move {
             let (mut lines, mut w) = fake(device);
-            let (id, cmd) = read_request(&mut lines).await;
-            assert_eq!(cmd, "device.install_notice");
+            let req: Value =
+                serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+            assert_eq!(req["cmd"], "device.install_notice");
+            assert_eq!(req["version"], "1.4.0-dev");
+            let id = req["id"].as_u64().unwrap();
             w.write_all(b"I (42103) control: device.install_notice\n")
                 .await
                 .unwrap();
@@ -276,7 +304,11 @@ mod tests {
             .await
             .unwrap();
         });
-        assert!(install_notice(&mut ours, ANSWER_WAIT).await.unwrap());
+        assert!(
+            install_notice(&mut ours, "1.4.0-dev", ANSWER_WAIT)
+                .await
+                .unwrap()
+        );
         fake.await.unwrap();
 
         // Silent: given up on after the wait, having asked only once.
@@ -289,7 +321,11 @@ mod tests {
             }
             n
         });
-        assert!(!install_notice(&mut ours, ANSWER_WAIT).await.unwrap());
+        assert!(
+            !install_notice(&mut ours, "1.4.0-dev", ANSWER_WAIT)
+                .await
+                .unwrap()
+        );
         drop(ours);
         assert_eq!(counter.await.unwrap(), 1);
     }

@@ -17,7 +17,9 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being installed until it restarts, which the install keeps through the
   ROM download mode. The ATOM Lite's LED is steady white, over every
   other state and in every `led_normal` mode, and so is the StickC Plus
-  SE's screen. The Core2 answers it but doesn't show it yet.
+  SE's screen. The Core2's screen says "Installing firmware v1.4.0...",
+  with the version the sender gives in `version`, and that the device
+  will restart when complete.
 
 ## 1.3.0 (2026-11-14)
 

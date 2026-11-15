@@ -10,9 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `ktbctl device flash` tells firmware that takes it (from 1.4.0) that an
-  install is coming, with `device.install_notice`, just before resetting
-  it into its ROM: the ATOM Lite's LED and the StickC Plus SE's screen
-  show steady white through the install.
+  install is coming, with `device.install_notice` and the version it's
+  installing, just before resetting it into its ROM: the ATOM Lite's LED
+  and the StickC Plus SE's screen show steady white through the install,
+  and the Core2's screen shows the version.
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
 

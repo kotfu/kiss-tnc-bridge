@@ -47,8 +47,9 @@ void set_updating(bool on);
 
 // A USB install is about to start (device.install_notice): shows it until
 // the device restarts, since the install resets the ESP32 into its ROM and
-// the LED or screen keeps what it last showed. Returns once it's shown, or
-// after timeout_ms; false if it wasn't shown by then.
-bool show_installing(uint32_t timeout_ms);
+// the LED or screen keeps what it last showed. version is the firmware
+// being installed, for a screen to show, or empty. Returns once it's
+// shown, or after timeout_ms; false if it wasn't shown by then.
+bool show_installing(const char *version, uint32_t timeout_ms);
 
 } // namespace ktb::ui

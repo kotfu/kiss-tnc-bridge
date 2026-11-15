@@ -189,10 +189,23 @@ Reply device_identify(const cJSON *, const Pending &)
 // A USB install is about to start. Answered once the LED or screen shows
 // it, so the sender can reset the device into its ROM at once; it stays
 // until the device restarts. Only over USB serial, the only transport so
-// far: a management app over BLE updates with firmware.update.
-Reply device_install_notice(const cJSON *, const Pending &)
+// far: a management app over BLE updates with firmware.update. version,
+// optional, is the firmware being installed, which a screen shows.
+Reply device_install_notice(const cJSON *req, const Pending &)
 {
-    if (!ui::show_installing(500)) {
+    const char *version = "";
+    if (const cJSON *v = cJSON_GetObjectItemCaseSensitive(req, "version")) {
+        version = cJSON_GetStringValue(v);
+        size_t n = version ? strlen(version) : 0;
+        bool ok = n >= 1 && n <= 32;
+        for (size_t i = 0; ok && i < n; i++) {
+            ok = version[i] > ' ' && version[i] <= '~';
+        }
+        if (!ok) {
+            return Reply::error("bad_request", "version must be 1 to 32 printable characters, no spaces");
+        }
+    }
+    if (!ui::show_installing(version, 500)) {
         ESP_LOGW(TAG, "install notice: not shown in time");
     }
     return Reply::empty();

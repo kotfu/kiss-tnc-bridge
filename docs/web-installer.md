@@ -291,8 +291,9 @@ Progress: a bar for the whole install, with the step (erasing, writing,
 verifying) and the bytes written. An install of the ATOM Lite takes under
 a minute. Firmware with the `install-notice` capability (from 1.4.0) shows
 that it's being installed, if the page told it first with
-[`device.install_notice`](control-api.md#deviceinstall_notice): steady
-white on the ATOM Lite and the StickC Plus SE. Over other firmware, what
+[`device.install_notice`](control-api.md#deviceinstall_notice), giving
+the version it's installing: steady white on the ATOM Lite and the StickC
+Plus SE, and "Installing firmware v1.4.0..." on the Core2's screen. Over other firmware, what
 the device shows while it's written doesn't mean anything.
 
 The user mustn't unplug the device while it's being written. If the
