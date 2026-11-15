@@ -2044,7 +2044,12 @@ void do_unpair(const Request &req)
         esp_bt_gap_remove_bond_device(a.raw());
     }
     ESP_LOGI(TAG, "unpaired %s", a.str().c_str());
-    control::reply_ok(req.p, cJSON_CreateObject());
+    // What it unpaired, as the daemon answers (docs/control-api.md).
+    cJSON *res = cJSON_CreateObject();
+    cJSON_AddStringToObject(res, "address", a.str().c_str());
+    cJSON_AddStringToObject(res, "adapter", "builtin");
+    cJSON_AddBoolToObject(res, "paired", false);
+    control::reply_ok(req.p, res);
 }
 
 void do_update(const Request &req)

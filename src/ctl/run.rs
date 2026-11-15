@@ -570,7 +570,7 @@ impl Ctl {
                 adapter: who.adapter,
             })
             .await?;
-        // Firmware 1.2 answers {}, not the address and adapter.
+        // Firmware 1.3.0 and older answer {}, not the address and adapter.
         let r: Option<PairResult> = serde_json::from_value(v.clone()).ok();
         self.print(&v, || match r {
             Some(r) => format!("unpaired {} on {}\n", r.address, r.adapter),

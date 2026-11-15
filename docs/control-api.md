@@ -694,7 +694,15 @@ system's default agent, if it has one, isn't touched. A `spp-client` port
 waiting for its TNC to be paired connects a few seconds after the pairing.
 
 `bluetooth.unpair` forgets the pairing. It acts at once: a bridge using the
-radio loses its link (`ktbctl unpair` asks first).
+radio loses its link (`ktbctl unpair` asks first). It answers with what it
+unpaired:
+
+```jsonc
+→ {"v":1,"id":8,"cmd":"bluetooth.unpair","tnc":"d75"}
+← {"v":1,"id":8,"ok":true,"result":{"address":"40:79:12:E4:95:9D","adapter":"hci0 (2C:CF:67:6E:2E:BC)","paired":false}}
+```
+
+A device's `adapter` is `builtin`; firmware 1.3.0 and older answer `{}`.
 
 One scan or pairing runs at a time; another gets `busy`.
 

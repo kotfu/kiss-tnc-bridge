@@ -21,6 +21,12 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the version the sender gives in `version`, and that the device
   will restart when complete.
 
+### Fixed
+
+- `bluetooth.unpair` answers with what it unpaired, the `address`, the
+  `adapter` (`builtin`) and `paired` false, as the daemon does, instead
+  of `{}` ([#24](https://github.com/kotfu/kiss-tnc-bridge/issues/24)).
+
 ## 1.3.0 (2026-11-14)
 
 Three boards: the StickC Plus SE joins the ATOM Lite and the Core2 v1.3.
