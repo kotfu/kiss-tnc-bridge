@@ -20,6 +20,10 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SE's screen. The Core2's screen says "Installing firmware v1.4.0...",
   with the version the sender gives in `version`, and that the device
   will restart when complete.
+- `device.settings.set` takes `"public_name": null` to go back to the
+  default name, `KTB-` and the last two bytes of the Bluetooth address,
+  which the BLE name follows at once
+  ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)).
 
 ### Changed
 
@@ -37,6 +41,9 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   left and right circles held while turning it on, never worked: the
   touch panel can't see fingers already on it when it starts, nor tell
   two fingers apart ([#20](https://github.com/kotfu/kiss-tnc-bridge/issues/20)).
+- A `device.settings.set` that doesn't give `public_name`, such as one
+  for `led_brightness`, no longer saves the name, so a device on its
+  default name stays on it.
 - `bluetooth.unpair` answers with what it unpaired, the `address`, the
   `adapter` (`builtin`) and `paired` false, as the daemon does, instead
   of `{}` ([#24](https://github.com/kotfu/kiss-tnc-bridge/issues/24)).

@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installing, just before resetting it into its ROM: the ATOM Lite's LED
   and the StickC Plus SE's screen show steady white through the install,
   and the Core2's screen shows the version.
+- `ktbctl --device PORT bridge public-name ktbr0 --default` puts a
+  device back on its default name, such as `KTB-EF26`, on firmware 1.4.0
+  and later; older firmware refuses it, and ktbctl says to update it or
+  use `ktbctl device reset`
+  ([#31](https://github.com/kotfu/kiss-tnc-bridge/issues/31)).
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
 

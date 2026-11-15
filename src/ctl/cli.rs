@@ -375,7 +375,7 @@ pub enum BridgeCmd {
         bridge: String,
         /// The new public name (dynamic bridges only)
         name: Option<String>,
-        /// Go back to the bridge's name (dynamic bridges only)
+        /// Go back to the default: the bridge's name (dynamic bridges only), or a device's KTB- name
         #[arg(long, conflicts_with_all = ["name", "retry"])]
         default: bool,
         /// Drop a DNS-SD collision adjustment and try the configured name again

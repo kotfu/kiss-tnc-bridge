@@ -219,6 +219,8 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
 
     // Check everything first, so a bad value changes nothing.
     std::string new_name = public_name();
+    bool name_given = false;      // only a name given is saved, so the default stays the default
+    bool name_to_default = false; // null: forget the name set, and follow default_name()
     LedNormal new_normal = normal;
     uint16_t new_wake = wake_seconds;
     uint8_t new_brightness = brightness;
@@ -229,13 +231,20 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
         const char *key = item->string;
         long n;
         if (strcmp(key, "public_name") == 0) {
+            name_given = true;
+            if (cJSON_IsNull(item)) {
+                new_name = default_name();
+                name_to_default = true;
+                continue;
+            }
             if (!cJSON_IsString(item) || !valid_name(item->valuestring, error)) {
                 if (error.empty()) {
-                    error = "public_name must be a string";
+                    error = "public_name must be a string, or null for the default";
                 }
                 return false;
             }
             new_name = item->valuestring;
+            name_to_default = false;
         } else if (board::screen && strcmp(key, "screen_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_screen_normal(item->valuestring, new_screen)) {
                 error = "screen_normal must be \"bright\", \"dim\" or \"dark\"";
@@ -275,7 +284,14 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
     nvs_handle_t h;
     esp_err_t err = nvs_open(nvs_namespace, NVS_READWRITE, &h);
     if (err == ESP_OK) {
-        err = nvs_set_str(h, key_name, new_name.c_str());
+        if (name_to_default) {
+            err = nvs_erase_key(h, key_name);
+            if (err == ESP_ERR_NVS_NOT_FOUND) {
+                err = ESP_OK; // already the default
+            }
+        } else if (name_given) {
+            err = nvs_set_str(h, key_name, new_name.c_str());
+        }
         if (err == ESP_OK) {
             err = nvs_set_u8(h, key_led_normal, static_cast<uint8_t>(new_normal));
         }

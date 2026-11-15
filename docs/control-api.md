@@ -836,7 +836,7 @@ keys (`device.settings.get` shows which):
 
 | Key | Values |
 |---|---|
-| `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon |
+| `public_name` | The BLE name KISS TNC apps show, as `public_name` on the daemon. From firmware 1.4.0, `null` goes back to the default, `KTB-` and the last two bytes of the Bluetooth address (`KTB-EF26`), which `device.settings.get` then shows |
 | `cpu_mhz` | 240 (the default), 160 or 80. On a Tail Bat, 240 (see the roadmap's hardware notes) |
 | `tx_power` | Bluetooth transmit power, in dBm, from what the board supports |
 | `led_brightness` | 0–100 |

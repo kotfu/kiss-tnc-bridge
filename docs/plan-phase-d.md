@@ -325,9 +325,12 @@ Done 12 November 2026. How it works:
 - **`bridge public-name`** works on a device too: it shows or sets the
   `public_name` setting, as `device settings set public_name=...` does,
   and both warn when a name is longer than the advertisement's 11 bytes.
-  `--retry` is refused (no DNS-SD on a device), and so is `--default`
-  until the firmware can go back to its default name
-  ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)). The other
+  `--retry` is refused (no DNS-SD on a device). `--default` sets
+  `public_name` to null, which firmware 1.4.0 takes to go back to the
+  default name ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25),
+  [#31](https://github.com/kotfu/kiss-tnc-bridge/issues/31)); older
+  firmware refuses it, and ktbctl says to update it or use
+  `ktbctl device reset`. The other
   `bridge` commands, `enable`, `disable` and `switch` are refused with the
   reason: a device has exactly one bridge, `ktbr0`, always enabled, whose
   name is its public name.
