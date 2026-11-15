@@ -215,9 +215,7 @@ impl Ctl {
         // 4. The ROM, once the firmware shows an install is coming. Only
         // now, after any download and "Go ahead?": a device told it's
         // being installed shows it until it restarts.
-        if takes_install_notice(running.as_ref()) {
-            send_install_notice(&port, &fw.version, &say).await;
-        }
+        send_install_notice(&port, running.as_ref(), &fw.version, &say).await;
         let job = Job {
             port: port.clone(),
             parts: fw.parts.clone(),
@@ -414,10 +412,21 @@ fn takes_install_notice(running: Option<&DeviceInfo>) -> bool {
     running.is_some_and(|i| i.capabilities.iter().any(|c| c == INSTALL_NOTICE))
 }
 
-/// Tells the firmware an install of `version` is coming. Nothing to say
-/// when it works: the device shows it. When it doesn't, the install goes
-/// ahead anyway; the device just shows what it showed before.
-async fn send_install_notice(port: &DevicePort, version: &str, say: &Reporter) {
+/// Tells the firmware an install of `version` is coming, if it takes it.
+/// Nothing to say when it works: the device shows it. When it doesn't,
+/// the install goes ahead anyway; the device just shows what it showed
+/// before. `--json` reports the `notice` step's outcome: `sent`, `failed`
+/// or `skipped` (firmware that doesn't take it).
+async fn send_install_notice(
+    port: &DevicePort,
+    running: Option<&DeviceInfo>,
+    version: &str,
+    say: &Reporter,
+) {
+    if !takes_install_notice(running) {
+        say.quiet_step("notice", json!({"outcome": "skipped"}));
+        return;
+    }
     let sent = match probe::open_quiet(&port.path) {
         Ok(mut serial) => matches!(
             probe::install_notice(&mut serial, version, ANSWER_WAIT).await,
@@ -426,9 +435,10 @@ async fn send_install_notice(port: &DevicePort, version: &str, say: &Reporter) {
         Err(_) => false,
     };
     if sent {
-        say.quiet_step("notice");
+        say.quiet_step("notice", json!({"outcome": "sent"}));
     } else {
         say.note("Device error during install notice command. No problem, installing anyway.");
+        say.quiet_step("notice", json!({"outcome": "failed"}));
     }
 }
 
@@ -484,10 +494,15 @@ impl Reporter {
         }
     }
 
-    /// A step only `--json` reports.
-    pub fn quiet_step(&self, step: &str) {
+    /// A step only `--json` reports, with `fields` (a JSON object) beside
+    /// its name.
+    pub fn quiet_step(&self, step: &str, fields: serde_json::Value) {
         if self.json {
-            eprintln!("{}", json!({"step": step}));
+            let mut line = json!({"step": step});
+            if let (Some(l), Some(f)) = (line.as_object_mut(), fields.as_object()) {
+                l.extend(f.clone());
+            }
+            eprintln!("{line}");
         }
     }
 

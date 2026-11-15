@@ -280,7 +280,9 @@ and the version being installed on the Core2's screen
       and so is the retry at 115200 baud, since the failed attempt's reset
       ends the notice. When it works ktbctl says nothing (the device shows
       it); when it fails it says "Device error during install notice
-      command. No problem, installing anyway." and goes ahead.
+      command. No problem, installing anyway." and goes ahead. With
+      `--json`, a `notice` step gives the `outcome`: `sent`, `failed` or
+      `skipped`.
 
 ## D2: management over USB serial
 
