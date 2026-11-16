@@ -30,16 +30,31 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and a run shorter than that leaves it as it was, so a dying battery's
   restarts don't wipe it out. The Core2's System page shows it as
   **Last run** ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
+- BLE TNCs on the BLE KISS API, such as an Ailunce HA2, as the radio, as
+  the daemon's `ble-client` reaches them: model `generic` with a
+  `ble.address`. The device connects as it does to a TD-H9, finds the
+  KISS service by its UUID, subscribes, and splits each frame to the MTU,
+  as the TNC puts frames back together. A scan or search knows one by
+  the service in its advertisement, not its name; another bridge, which
+  advertises it beside its management service, isn't taken for one. The
+  ATOM Lite's and StickC Plus SE's double press selects the first one it
+  hears, like a TD-H9, and the Core2 lists them as "BLE KISS TNC"
+  ([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)).
 
 ### Changed
 
+- `tnc.update` takes the transport from the address's key, `spp.address`
+  or `ble.address`, instead of from the model, so `generic` goes over
+  either; `th-d74` and `th-d75` still take only `spp.address`, and
+  `td-h9` only `ble.address`
+  ([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)).
 - The ATOM Lite's and StickC Plus SE's double press pairs any radio or
   TNC in pairing mode that offers a serial port (SPP), as model
-  `generic`, when no Kenwood or TD-H9 turns up first, instead of only a
+  `generic`, when no Kenwood or BLE TNC turns up first, instead of only a
   TH-D74 or TH-D75: one whose answer to the scan lists SPP, or else one
   an SDP lookup finds it on, strongest signal first
   ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)).
-- The Core2's radio pill says **Waiting** for a TD-H9 that's out of
+- The Core2's radio pill says **Waiting** for a BLE TNC that's out of
   reach, instead of "Waiting for it", **Down** when a management app has
   taken the link down, instead of "Held", and **Retrying in 8s**, without
   the space. The time under it reads "for 21m" for every state, instead

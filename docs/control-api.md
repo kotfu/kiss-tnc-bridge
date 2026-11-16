@@ -734,7 +734,8 @@ doesn't read its events loses them rather than slowing the daemon.
 
 The ATOM Lite and Core2 firmware present themselves in the daemon's terms:
 one fixed bridge, `ktbr0`, with a TNC port, `radio`, to the radio's TNC
-(`spp-client` for a TH-D74 or TH-D75, `ble-client` for a TIDRADIO TD-H9),
+(`spp-client` for a TH-D74, TH-D75 or other SPP TNC, `ble-client` for a
+TNC on the BLE KISS API or a TIDRADIO TD-H9),
 and a `ble-server` app port, `phones`, serving the BLE KISS API. Its TNC is `radio`, with a `model` that picks the KISS init sequence,
 as on the daemon. A management app can tell a device from the daemon by
 `device.info`, which the daemon refuses with `not_supported`.
@@ -745,9 +746,9 @@ as on the daemon. A management app can tell a device from the daemon by
 |---|---|
 | `status` | The same, with one bridge, one TNC and the device's one adapter, `builtin`. No `since` times: the device has no clock. No `source`, no `editable` on the bridge, and no `settings` on a port that has none |
 | `subscribe`, `unsubscribe` | The same. Frame events have no `at` |
-| `tnc.update` | Changes the radio's `model`, and its `spp.address` (a Classic model) or `ble.address` (`td-h9`). Moving between the two needs the other's address. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
+| `tnc.update` | Changes the radio's `model`, and its `spp.address` (over Classic) or `ble.address` (over BLE). The address's key says the transport; without an address, it stays as it is. The model has to go over it: `th-d74` and `th-d75` only over Classic, `td-h9` only over BLE, `generic` over either (over BLE, a TNC on the BLE KISS API, as on the daemon). Moving between the two needs the other's address. The result is a change result with `applied`, `disruptive` and `disruptions`, and an empty `plan`; a change that drops a radio link in use is disruptive, so `non_disruptive` works as on the daemon |
 | `tnc.models` | The same, for the models the firmware knows |
-| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same. `bluetooth.scan` with `"transport": "le"` lists named LE devices; a TD-H9 that something is connected to doesn't advertise, so it isn't listed. Pairing is Classic only: a TD-H9 becomes the radio with `tnc.update` (`model` `td-h9` and its `ble.address`) or a double press, and `bluetooth.unpair` with its address forgets it. The TH-D75's `confirm` step goes to the management app as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
+| `bluetooth.scan`, `bluetooth.scan_stop`, `bluetooth.pair`, `bluetooth.pair_reply`, `bluetooth.unpair` | The same. `bluetooth.scan` with `"transport": "le"` lists named LE devices, and those advertising the BLE KISS service, named or not, with `known_tnc` "BLE KISS TNC" and `model` `generic`; another device advertising it beside the management service is a bridge, and isn't taken for a TNC. A BLE TNC that something is connected to doesn't advertise, so it isn't listed. Pairing is Classic only: a BLE TNC becomes the radio with `tnc.update` (its `model` and `ble.address`) or a double press, and `bluetooth.unpair` with its address forgets it. The TH-D75's `confirm` step goes to the management app as on the daemon, and `pair_reply` takes only `accept`. A device paired with `bluetooth.pair` becomes the radio, its model taken from its name (`generic` if it isn't a known radio); the old radio's pairing is removed once the new one has paired. `bluetooth.pair` with no `address` pairs the radio's own address again |
 | `port.connect`, `port.disconnect`, `port.release`, `session.kick` | The same. A session is a phone subscribed to the BLE KISS service, `ktbr0/phones/<its address>`; a kicked phone may reconnect at once, as on the daemon |
 | `auth.*` | See [Authentication](#authentication) |
 | `device.*`, `firmware.update.*` | Devices only; below |

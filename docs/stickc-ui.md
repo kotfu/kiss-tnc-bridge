@@ -25,7 +25,7 @@ The same as the Core2's 1.2:
 - **Bridge page:** the radio, the KISS TNC apps connected, and the
   device's name. Where the device starts.
 - **TNC page:** the radio the device has; pairing a Kenwood, selecting a
-  TD-H9, and forgetting the radio.
+  BLE TNC, and forgetting the radio.
 - **System page:** battery, power, uptime, firmware, the name and
   Bluetooth address, errors, the screen settings, and power off.
 - **The screen's modes** and its timeout, the same settings as the
@@ -142,7 +142,7 @@ Nothing for A.
 ## TNC page and pairing
 
 The radio the device has: its name, its make, whether it's paired (a
-Kenwood) or selected (a TD-H9), its address, and its state. Under it,
+Kenwood) or selected (a BLE TNC), its address, and its state. Under it,
 what to do on the radio before changing it, as on the Core2.
 
 A is **Change**, which opens a list:
@@ -163,7 +163,7 @@ The pairing flow is the Core2's, with lists instead of taps:
    number at 28 px and "Does it show this number?" **A: Yes**, **B: No**.
    The device waits for your answer, as the Core2 does.
 3. **A Kenwood: Press OK on the radio,** counting down. **B: Cancel.**
-4. **A TD-H9: Selected,** connecting. **A: OK.**
+4. **A BLE TNC: Selected,** connecting. **A: OK.**
 5. **Done:** back to the TNC page, with the new radio connecting.
 
 If it fails: **Didn't pair** and why, as on the Core2. **A: Try again**,

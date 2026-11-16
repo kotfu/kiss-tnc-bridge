@@ -1,5 +1,6 @@
 // The radio: Bluetooth Classic SPP to a Kenwood TH-D74 or TH-D75 (or any
-// SPP TNC in KISS mode), or BLE to a TIDRADIO TD-H9 as a GATT client; its
+// SPP TNC in KISS mode), or BLE to a TNC on the BLE KISS service or a
+// TIDRADIO TD-H9, as a GATT client; its
 // KISS init, reconnecting, and pairing or selecting it.
 //
 // One task owns all of it. The button and the control API send it
@@ -42,13 +43,13 @@ int phones();
 enum class State : uint8_t {
     none,       // no radio paired or selected
     idle,       // held down, pairing, or Bluetooth didn't start: see detail
-    connecting, // connecting, or waiting for a TD-H9 to advertise
+    connecting, // connecting, or waiting for a BLE TNC to advertise
     connected,  // bridging
     retrying,   // the link failed; it tries again in retry_in_s
 };
 struct View {
     bool present = false; // a radio is paired or selected
-    bool ble = false;     // a TD-H9
+    bool ble = false;     // a BLE TNC
     bool paired = false;  // a Kenwood that's bonded
     std::string name;     // its Bluetooth name, "TH-D75"
     std::string make;     // "Kenwood TH-D75", or "" for an unknown model
@@ -72,7 +73,7 @@ void send_frame(const uint8_t *frame, size_t len, const std::string &session);
 constexpr uint32_t pairing_seconds = 60;
 
 // The button: pair with the first TH-D74 or TH-D75 found in pairing mode,
-// or select the first TD-H9 found; or cancel that. The ATOM confirms the
+// or select the first BLE TNC found; or cancel that. The ATOM confirms the
 // number at once; a board with a screen shows it and waits for
 // answer_pairing.
 void start_pairing();
@@ -102,7 +103,7 @@ struct FoundRadio {
     std::string address;
     std::string name; // "TH-D75"
     std::string make; // "Kenwood TH-D75"
-    bool ble = false; // a TD-H9
+    bool ble = false; // a BLE TNC
     int rssi = 0;     // dBm, if has_rssi
     bool has_rssi = false;
 };
@@ -126,7 +127,8 @@ void pair(const control::Pending &p, const std::string &address);
 void pair_reply(const control::Pending &p, double pair_request, bool accept);
 void unpair(const control::Pending &p, const std::string &address);
 // tnc.update: model and/or address may be empty to keep them. The address
-// is spp.address for a Classic model and ble.address for the TD-H9.
+// is spp.address over Classic and ble.address over BLE: generic takes
+// either, a TH-D74 or TH-D75 only spp, a TD-H9 only ble.
 void update(const control::Pending &p, const std::string &model, const std::string &address, bool address_ble,
             bool non_disruptive);
 // port.connect, port.disconnect, port.release
@@ -137,7 +139,7 @@ void hold(const control::Pending &p, Hold h);
 void name_changed();
 
 // Every BLE GAP event, from phones' callback (Bluedroid takes one): the
-// radio's scans and its TD-H9 link.
+// radio's scans and its link to a BLE TNC.
 void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param);
 
 // For status: the adapters, tncs and bridges arrays. Safe from any task.

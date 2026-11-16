@@ -39,7 +39,7 @@ constexpr const char *MGMT_SERVICE = "e3370001-156d-4ba6-90dd-14075e7ca557";
 constexpr uint16_t APP_ID = 0x4b;
 constexpr uint16_t LOCAL_MTU = 517;
 // KISS TNC apps at once. The controller allows more BLE links than this:
-// the others are for a TD-H9 and a management app.
+// the others are for a BLE TNC and a management app.
 constexpr int MAX_CONNS = 2;
 static_assert(MAX_CONNS + 2 <= CONFIG_BTDM_CTRL_BLE_MAX_CONN, "no BLE link left for the radio and management");
 // The most of the name that fits in the scan response beside the
@@ -325,7 +325,7 @@ void gatts_cb(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_
     case ESP_GATTS_CONNECT_EVT: {
         if (param->connect.link_role == 0) {
             // Bluedroid tells every GATT app about every link. In this one
-            // the device is the central: it's the radio's (a TD-H9).
+            // the device is the central: it's the radio's (a BLE TNC).
             break;
         }
         std::lock_guard<std::mutex> g(lock);

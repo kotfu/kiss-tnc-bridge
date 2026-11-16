@@ -68,15 +68,17 @@ struct Model {
     const char *radio;       // known radio, or null
     const char *name_prefix; // its Bluetooth name starts with this
     bool kiss_init;          // the TH-D7x init at every connect
-    bool ble;                // a BLE TNC, not Classic SPP
+    bool spp;                // reached over Bluetooth Classic SPP
+    bool ble;                // reached over BLE
 };
 
-// generic stays third: it's the fallback for a model that isn't known.
+// generic stays third: it's the fallback for a model that isn't known. It
+// takes either transport: SPP, or BLE on the BLE KISS API.
 const Model models[] = {
-    {"th-d74", "Kenwood TH-D74", "TH-D74", true, false},
-    {"th-d75", "Kenwood TH-D75", "TH-D75", true, false},
-    {"generic", nullptr, nullptr, false, false},
-    {"td-h9", "TIDRADIO TD-H9", "TD-H9", false, true},
+    {"th-d74", "Kenwood TH-D74", "TH-D74", true, true, false},
+    {"th-d75", "Kenwood TH-D75", "TH-D75", true, true, false},
+    {"generic", nullptr, nullptr, false, true, true},
+    {"td-h9", "TIDRADIO TD-H9", "TD-H9", false, false, true},
 };
 const Model &generic_model = models[2];
 
@@ -102,7 +104,7 @@ const Model &model_of(const std::string &name)
 const Model *model_for_name(const std::string &name, bool ble)
 {
     for (const Model &m : models) {
-        if (m.name_prefix && m.ble == ble && name.compare(0, strlen(m.name_prefix), m.name_prefix) == 0) {
+        if (m.name_prefix && (ble ? m.ble : m.spp) && name.compare(0, strlen(m.name_prefix), m.name_prefix) == 0) {
             return &m;
         }
     }
@@ -179,7 +181,7 @@ struct Record {
     uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC; // a BLE radio's
     std::string model = "th-d75";
     std::string name;
-    bool ble() const { return model_of(model).ble; }
+    bool ble = false; // reached over BLE, not Classic SPP
 };
 
 std::mutex state_lock; // guards rec and port_detail
@@ -203,6 +205,7 @@ bool save_record(const Record &r)
         if (err == ESP_OK) err = nvs_set_str(h, "model", r.model.c_str());
         if (err == ESP_OK) err = nvs_set_str(h, "name", r.name.c_str());
         if (err == ESP_OK) err = nvs_set_u8(h, "addr_type", r.addr_type);
+        if (err == ESP_OK) err = nvs_set_u8(h, "ble", r.ble);
     } else {
         err = nvs_erase_all(h);
     }
@@ -240,6 +243,14 @@ void load_record()
             uint8_t type;
             if (nvs_get_u8(h, "addr_type", &type) == ESP_OK) {
                 r.addr_type = type;
+            }
+            // Missing before 1.4, when the model said which: only a
+            // TD-H9 was reached over BLE.
+            uint8_t ble;
+            if (nvs_get_u8(h, "ble", &ble) == ESP_OK) {
+                r.ble = ble != 0;
+            } else {
+                r.ble = !model_of(r.model).spp;
             }
         }
         nvs_close(h);
@@ -371,6 +382,7 @@ struct GapEvent {
     int8_t rssi = 0;
     bool has_rssi = false;
     bool spp_listed = false; // its inquiry response lists the Serial Port service
+    bool kiss_listed = false; // its advertisement lists the BLE KISS service
     uint32_t number = 0;
 };
 QueueHandle_t gap_events = nullptr;
@@ -653,6 +665,7 @@ struct Request {
     double ref = 0; // the request a scan_stop or pair_reply is about
     uint32_t seconds = 0;
     bool flag = false; // pair_reply: accept; update: non_disruptive
+    bool ble = false;  // update: the radio is reached over BLE
     char addr[18] = {};
     char model[16] = {};
     Hold hold = Hold::none;
@@ -732,7 +745,7 @@ void refuse_busy(const Request &r)
     }
 }
 
-// ---- BLE: scans, and the TD-H9's KISS service as a GATT client ----
+// ---- BLE: scans, and a BLE TNC's KISS service as a GATT client ----
 //
 // docs/td-h9-ble-kiss.md and spikes/atom-lite-ble-tnc. Bluedroid's GATT
 // callbacks only feed the task, as the SPP ones do: the same events bits
@@ -740,10 +753,57 @@ void refuse_busy(const Request &r)
 // the radio.
 
 constexpr uint16_t GATTC_APP_ID = 0x52;
-constexpr uint16_t TDH9_SERVICE = 0xAF00;
-constexpr uint16_t TDH9_TX = 0xAF01; // write without response
-constexpr uint16_t TDH9_RX = 0xAF02; // notify
 constexpr uint16_t NO_CONN = 0xFFFF;
+
+esp_bt_uuid_t uuid16(uint16_t u)
+{
+    esp_bt_uuid_t id = {};
+    id.len = ESP_UUID_LEN_16;
+    id.uuid.uuid16 = u;
+    return id;
+}
+
+// 0000000n-ba2a-46c9-ae49-01b0961f68bb, little-endian as Bluedroid has it.
+esp_bt_uuid_t kiss_api_uuid(uint8_t n)
+{
+    esp_bt_uuid_t id = {};
+    id.len = ESP_UUID_LEN_128;
+    const uint8_t le[16] = {0xbb, 0x68, 0x1f, 0x96, 0xb0, 0x01, 0x49, 0xae, 0xc9, 0x46, 0x2a, 0xba, n, 0, 0, 0};
+    memcpy(id.uuid.uuid128, le, sizeof(le));
+    return id;
+}
+
+bool same_uuid(const esp_bt_uuid_t &a, const esp_bt_uuid_t &b)
+{
+    if (a.len != b.len) {
+        return false;
+    }
+    switch (a.len) {
+    case ESP_UUID_LEN_16: return a.uuid.uuid16 == b.uuid.uuid16;
+    case ESP_UUID_LEN_32: return a.uuid.uuid32 == b.uuid.uuid32;
+    default: return memcmp(a.uuid.uuid128, b.uuid.uuid128, ESP_UUID_LEN_128) == 0;
+    }
+}
+
+// Where a BLE TNC keeps its KISS byte stream, as the daemon's ble-client
+// has it (src/port/ble_client.rs).
+struct GattProfile {
+    esp_bt_uuid_t service;
+    esp_bt_uuid_t tx; // bridge to TNC: written
+    esp_bt_uuid_t rx; // TNC to bridge: notified
+    // Each frame in one write: the TD-H9 doesn't put a frame back together
+    // across writes. A TNC on the BLE KISS API does.
+    bool whole_frames;
+    const char *what;
+    const char *hint; // when the service is missing
+};
+
+const GattProfile kiss_api = {kiss_api_uuid(1), kiss_api_uuid(2), kiss_api_uuid(3), false, "the BLE KISS service",
+                              "if it's a TIDRADIO TD-H9, set its model to td-h9; otherwise, is its KISS TNC on?"};
+const GattProfile td_h9 = {uuid16(0xAF00), uuid16(0xAF01), uuid16(0xAF02), true, "TIDRADIO's KISS service (af00)",
+                           "is it a TD-H9?"};
+
+const GattProfile &profile_for(const std::string &model) { return model == "td-h9" ? td_h9 : kiss_api; }
 // A connect attempt that lasted this long was waiting for the radio to
 // advertise (Bluedroid gives up after 30 s), so the next starts at once.
 constexpr TickType_t ble_waited = pdMS_TO_TICKS(20000);
@@ -754,11 +814,13 @@ std::atomic<bool> ble_up{false};     // ready: subscribed, frames can go
 Addr ble_target;
 std::atomic<uint16_t> ble_conn{NO_CONN};
 std::atomic<uint16_t> ble_mtu{23};
+const GattProfile *ble_profile = &kiss_api; // the TNC's: set before ble_active
 uint16_t ble_svc_start = 0, ble_svc_end = 0, ble_tx = 0, ble_rx = 0;
+esp_gatt_write_type_t ble_write_type = ESP_GATT_WRITE_TYPE_NO_RSP;
 
 // A BLE scan's length, until its parameters are set; 0 once it's stopped.
 std::atomic<uint32_t> ble_scan_seconds{0};
-// The TD-H9 ble_wait_for is waiting for: set before ble_awaiting.
+// The BLE TNC ble_wait_for is waiting for: set before ble_awaiting.
 Addr ble_awaited;
 std::atomic<bool> ble_awaiting{false};
 // Addresses already reported in this scan, so the task isn't flooded with
@@ -808,6 +870,34 @@ std::string adv_name(esp_ble_gap_cb_param_t::ble_scan_result_evt_param &r)
     return n ? std::string(reinterpret_cast<char *>(n), len) : std::string();
 }
 
+// Whether the advertisement or scan response lists a 128-bit service.
+bool adv_lists(esp_ble_gap_cb_param_t::ble_scan_result_evt_param &r, const esp_bt_uuid_t &svc)
+{
+    uint16_t total = r.adv_data_len + r.scan_rsp_len;
+    for (auto type : {ESP_BLE_AD_TYPE_128SRV_CMPL, ESP_BLE_AD_TYPE_128SRV_PART}) {
+        uint8_t len = 0;
+        uint8_t *list = esp_ble_resolve_adv_data_by_type(r.ble_adv, total, type, &len);
+        for (uint8_t i = 0; list && i + ESP_UUID_LEN_128 <= len; i += ESP_UUID_LEN_128) {
+            if (memcmp(list + i, svc.uuid.uuid128, ESP_UUID_LEN_128) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// e3370001-156d-4ba6-90dd-14075e7ca557: a device's management service. A
+// bridge advertises it beside the BLE KISS service, so another bridge
+// isn't taken for a TNC.
+esp_bt_uuid_t mgmt_uuid()
+{
+    esp_bt_uuid_t id = {};
+    id.len = ESP_UUID_LEN_128;
+    const uint8_t le[16] = {0x57, 0xa5, 0x7c, 0x5e, 0x07, 0x14, 0xdd, 0x90, 0xa6, 0x4b, 0x6d, 0x15, 0x01, 0x00, 0x37, 0xe3};
+    memcpy(id.uuid.uuid128, le, sizeof(le));
+    return id;
+}
+
 void gattc_fail(const char *why)
 {
     ESP_LOGW(TAG, "%s", why);
@@ -851,15 +941,12 @@ void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t ifc, esp_ble_gattc_cb_pa
             break;
         }
         ble_mtu = p->cfg_mtu.status == ESP_GATT_OK ? p->cfg_mtu.mtu : 23;
-        esp_bt_uuid_t svc = {};
-        svc.len = ESP_UUID_LEN_16;
-        svc.uuid.uuid16 = TDH9_SERVICE;
+        esp_bt_uuid_t svc = ble_profile->service;
         esp_ble_gattc_search_service(gattc_if, ble_conn, &svc);
         break;
     }
     case ESP_GATTC_SEARCH_RES_EVT:
-        if (ble_ours(p->search_res.conn_id) && p->search_res.srvc_id.uuid.len == ESP_UUID_LEN_16 &&
-            p->search_res.srvc_id.uuid.uuid.uuid16 == TDH9_SERVICE) {
+        if (ble_ours(p->search_res.conn_id) && same_uuid(p->search_res.srvc_id.uuid, ble_profile->service)) {
             ble_svc_start = p->search_res.start_handle;
             ble_svc_end = p->search_res.end_handle;
         }
@@ -869,23 +956,28 @@ void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t ifc, esp_ble_gattc_cb_pa
             break;
         }
         if (!ble_svc_start) {
-            gattc_fail("the radio has no 0xAF00 service: is it a TD-H9?");
+            gattc_fail((std::string("the radio doesn't offer ") + ble_profile->what + ": " + ble_profile->hint).c_str());
             break;
         }
         esp_gattc_char_elem_t el;
-        esp_bt_uuid_t u = {};
-        u.len = ESP_UUID_LEN_16;
-        for (uint16_t want : {TDH9_TX, TDH9_RX}) {
-            uint16_t count = 1;
-            u.uuid.uuid16 = want;
-            if (esp_ble_gattc_get_char_by_uuid(gattc_if, ble_conn, ble_svc_start, ble_svc_end, u, &el, &count) ==
-                    ESP_GATT_OK &&
-                count > 0) {
-                (want == TDH9_TX ? ble_tx : ble_rx) = el.char_handle;
-            }
+        uint16_t count = 1;
+        if (esp_ble_gattc_get_char_by_uuid(gattc_if, ble_conn, ble_svc_start, ble_svc_end, ble_profile->tx, &el,
+                                           &count) == ESP_GATT_OK &&
+            count > 0) {
+            ble_tx = el.char_handle;
+            // Without a response when it allows that, as BlueZ's
+            // AcquireWrite does for the daemon; otherwise with one.
+            ble_write_type = (el.properties & ESP_GATT_CHAR_PROP_BIT_WRITE_NR) ? ESP_GATT_WRITE_TYPE_NO_RSP
+                                                                               : ESP_GATT_WRITE_TYPE_RSP;
+        }
+        count = 1;
+        if (esp_ble_gattc_get_char_by_uuid(gattc_if, ble_conn, ble_svc_start, ble_svc_end, ble_profile->rx, &el,
+                                           &count) == ESP_GATT_OK &&
+            count > 0) {
+            ble_rx = el.char_handle;
         }
         if (!ble_tx || !ble_rx) {
-            gattc_fail("the radio's 0xAF00 service is missing 0xAF01 or 0xAF02");
+            gattc_fail((std::string(ble_profile->what) + " is missing its TX or RX characteristic").c_str());
             break;
         }
         esp_ble_gattc_register_for_notify(gattc_if, ble_target.raw(), ble_rx);
@@ -903,7 +995,7 @@ void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t ifc, esp_ble_gattc_cb_pa
         if (p->reg_for_notify.status != ESP_GATT_OK ||
             esp_ble_gattc_get_descr_by_char_handle(gattc_if, ble_conn, ble_rx, u, &d, &count) != ESP_GATT_OK ||
             count == 0) {
-            gattc_fail("couldn't subscribe to the radio's 0xAF02");
+            gattc_fail("couldn't subscribe to the radio's RX characteristic");
             break;
         }
         static uint8_t notify_on[2] = {0x01, 0x00};
@@ -916,10 +1008,11 @@ void gattc_cb(esp_gattc_cb_event_t event, esp_gatt_if_t ifc, esp_ble_gattc_cb_pa
             break;
         }
         if (p->write.status != ESP_GATT_OK) {
-            gattc_fail("the radio refused the subscription to 0xAF02");
+            gattc_fail("the radio refused the subscription to its RX characteristic");
             break;
         }
-        ESP_LOGI(TAG, "BLE link ready, MTU %u", (unsigned)ble_mtu);
+        ESP_LOGI(TAG, "BLE link ready, MTU %u, writes %s a response", (unsigned)ble_mtu,
+                 ble_write_type == ESP_GATT_WRITE_TYPE_RSP ? "with" : "without");
         congested = false;
         ble_up = true;
         xEventGroupSetBits(events, EV_OPEN | EV_UNCONGESTED);
@@ -993,7 +1086,7 @@ void ble_close()
 
 enum class BleOpen : uint8_t { opened, waited, failed, interrupted };
 
-// Connects to a TD-H9 and subscribes, once ble_wait_for has seen it
+// Connects to a BLE TNC and subscribes, once ble_wait_for has seen it
 // advertise, so the connect is quick: given up after ble_connect_limit. A
 // request arriving meanwhile ends the attempt, and stays in the queue for
 // the task. Advertising for phones stops meanwhile: the ESP32's controller
@@ -1013,7 +1106,7 @@ BleOpen ble_connect(const Record &r)
 
 enum class Seen : uint8_t { seen, gone, interrupted };
 
-// Waits up to timeout for the TD-H9 to advertise, with a BLE scan, so the
+// Waits up to timeout for the BLE TNC to advertise, with a BLE scan, so the
 // bridge goes on advertising for phones while the radio is off or away. A
 // request arriving meanwhile ends the wait, and stays in the queue.
 Seen ble_wait_for(const Record &r, TickType_t timeout)
@@ -1045,6 +1138,23 @@ Seen ble_wait_for(const Record &r, TickType_t timeout)
             continue;
         }
         if (e.type == GapEvent::ble_found && e.addr == r.addr) {
+            // A BLE TNC can be selected from an advertisement that lists
+            // the KISS service without its name, which comes in the scan
+            // response. Then wait a moment for the name, and keep it.
+            if (r.name.empty() && !e.has_name && res != Seen::seen) {
+                res = Seen::seen;
+                deadline = std::min(deadline, xTaskGetTickCount() + pdMS_TO_TICKS(1000));
+                continue;
+            }
+            if (r.name.empty() && e.has_name) {
+                Record named = record();
+                if (named.present && named.addr == r.addr && named.name.empty()) {
+                    named.name = e.name;
+                    if (save_record(named)) {
+                        ESP_LOGI(TAG, "%s is called \"%s\"", r.addr.str().c_str(), e.name);
+                    }
+                }
+            }
             ESP_LOGI(TAG, "%s is advertising%s: connecting", r.addr.str().c_str(),
                      e.ok ? " to this device" : "");
             res = Seen::seen;
@@ -1068,6 +1178,8 @@ BleOpen ble_connect_now(const Record &r)
     xEventGroupClearBits(events, EV_OPEN | EV_CLOSED | EV_FAILED);
     xStreamBufferReset(from_radio);
     ble_target = r.addr;
+    ble_profile = &profile_for(r.model);
+    ble_write_type = ESP_GATT_WRITE_TYPE_NO_RSP;
     ble_conn = NO_CONN;
     ble_mtu = 23;
     ble_active = true;
@@ -1103,26 +1215,35 @@ BleOpen ble_connect_now(const Record &r)
     }
 }
 
-// Writes one whole frame, FENDs included: the TD-H9 doesn't put a frame
-// back together across writes.
+// Writes a frame, FENDs included: in one write for a TD-H9, which doesn't
+// put a frame back together across writes; otherwise split to the MTU, as
+// the TNC reassembles it.
 bool ble_write(const uint8_t *data, size_t len)
 {
     if (!ble_up) {
         return false;
     }
     size_t most = ble_mtu - 3;
-    if (len > most) {
+    if (len > most && ble_profile->whole_frames) {
         ESP_LOGW(TAG, "a %u-byte frame doesn't fit in one write to the radio (%u at most): dropped",
                  (unsigned)len, (unsigned)most);
         return false;
     }
-    if (congested && !(xEventGroupWaitBits(events, EV_UNCONGESTED, pdFALSE, pdFALSE, write_timeout) &
-                       EV_UNCONGESTED)) {
-        ESP_LOGW(TAG, "write: still congested");
-        return false;
+    while (len > 0) {
+        if (congested && !(xEventGroupWaitBits(events, EV_UNCONGESTED, pdFALSE, pdFALSE, write_timeout) &
+                           EV_UNCONGESTED)) {
+            ESP_LOGW(TAG, "write: still congested");
+            return false;
+        }
+        size_t n = std::min(len, most);
+        if (esp_ble_gattc_write_char(gattc_if, ble_conn, ble_tx, n, const_cast<uint8_t *>(data), ble_write_type,
+                                     ESP_GATT_AUTH_REQ_NONE) != ESP_OK) {
+            return false;
+        }
+        data += n;
+        len -= n;
     }
-    return esp_ble_gattc_write_char(gattc_if, ble_conn, ble_tx, len, const_cast<uint8_t *>(data),
-                                    ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE) == ESP_OK;
+    return true;
 }
 
 // ---- The link ----
@@ -1370,7 +1491,20 @@ struct Found {
     bool has_rssi = false;
     bool ble = false; // found by a BLE scan
     uint8_t addr_type = BLE_ADDR_TYPE_PUBLIC;
+    bool kiss = false; // it advertises the BLE KISS service
 };
+
+// The model of a TNC a search or scan found: a radio known by its name or
+// Class of Device, or any TNC advertising the BLE KISS service, which is
+// generic over BLE. Null for anything else.
+const Model *model_for(const Found &f)
+{
+    if (const Model *m = model_for_found(f.name, f.ble, f.cod)) {
+        return m;
+    }
+    return f.ble && f.kiss ? &generic_model : nullptr;
+}
+
 
 // Asks a device its name. Empty if it doesn't answer.
 std::string read_name(const Addr &addr)
@@ -1413,11 +1547,12 @@ uint8_t inquiry_len(TickType_t left)
 enum class SearchResult : uint8_t { found, none, cancelled };
 
 // The button's search: the first TH-D74 or TH-D75 in pairing mode, or
-// the first TD-H9, within the deadline; failing those, another Classic
+// the first BLE TNC (a TD-H9, or any advertising the BLE KISS service),
+// within the deadline; failing those, another Classic
 // device in pairing mode with a serial port. Kenwood radios report a phone's
 // Class of Device, so it goes by name; one with the right class but no
-// name in its inquiry response is asked for its name. A TD-H9 advertises
-// over BLE whenever nothing is connected to it, so a BLE scan runs
+// name in its inquiry response is asked for its name. A BLE TNC advertises
+// whenever nothing is connected to it, so a BLE scan runs
 // alongside the inquiries.
 SearchResult search_both(TickType_t deadline, Found &out);
 SearchResult search_list(TickType_t deadline, Found &out);
@@ -1441,7 +1576,7 @@ SearchResult search_list(TickType_t deadline, Found &out)
     auto publish = [&]() {
         SearchView v;
         for (const Found &f : radios) {
-            const Model *m = model_for_found(f.name, f.ble, f.cod);
+            const Model *m = model_for(f);
             v.radios.push_back({f.addr.str(), f.name.empty() ? f.addr.str() : f.name, m && m->radio ? m->radio : "",
                                 f.ble, f.rssi, f.has_rssi});
         }
@@ -1450,7 +1585,7 @@ SearchResult search_list(TickType_t deadline, Found &out)
         search_now = std::move(v);
     };
     auto note = [&](const Found &f) {
-        if (!model_for_found(f.name, f.ble, f.cod)) {
+        if (!model_for(f)) {
             if (std::find(others.begin(), others.end(), f.addr) == others.end()) {
                 others.push_back(f.addr);
                 publish();
@@ -1515,7 +1650,7 @@ SearchResult search_list(TickType_t deadline, Found &out)
                     }
                     continue;
                 }
-                note(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type});
+                note(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type, e.kiss_listed});
             }
         }
         if (!stopped) {
@@ -1634,12 +1769,15 @@ SearchResult search_both(TickType_t deadline, Found &out)
             if (e.type == GapEvent::disc_stopped) {
                 stopped = true;
             } else if (e.type == GapEvent::ble_found) {
-                if (model_for_name(e.name, true)) {
+                // A TD-H9 by its name, or any TNC advertising the BLE KISS
+                // service.
+                if (e.kiss_listed || model_for_name(e.name, true)) {
                     stop_discovery();
                     out.addr = e.addr;
-                    out.name = e.name;
+                    out.name = e.has_name ? e.name : "";
                     out.ble = true;
                     out.addr_type = e.addr_type;
+                    out.kiss = e.kiss_listed;
                     return SearchResult::found;
                 }
             } else if (e.type == GapEvent::found) {
@@ -1730,6 +1868,9 @@ cJSON *device_json(const Found &f, const Record &r)
     if (const Model *m = model_for_name(f.name, f.ble)) {
         cJSON_AddStringToObject(d, "known_tnc", m->radio);
         cJSON_AddStringToObject(d, "model", m->name);
+    } else if (f.ble && f.kiss) {
+        cJSON_AddStringToObject(d, "known_tnc", "BLE KISS TNC"); // as the daemon says it
+        cJSON_AddStringToObject(d, "model", "generic");
     }
     if (r.present && r.addr == f.addr) {
         cJSON_AddStringToObject(d, "tnc", "radio");
@@ -1823,7 +1964,7 @@ void do_scan(const Request &req)
             auto it = std::find_if(found.begin(), found.end(), [&](const Found &f) { return f.addr == e.addr; });
             bool news = false;
             if (it == found.end()) {
-                found.push_back(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type});
+                found.push_back(Found{e.addr, e.has_name ? e.name : "", e.cod, e.rssi, e.has_rssi, le, e.addr_type, e.kiss_listed});
                 it = found.end() - 1;
                 news = true;
             } else if (e.has_name && it->name.empty()) {
@@ -1841,7 +1982,7 @@ void do_scan(const Request &req)
     }
     // Known radios first
     std::stable_sort(found.begin(), found.end(), [](const Found &a, const Found &b) {
-        return model_for_name(a.name, a.ble) && !model_for_name(b.name, b.ble);
+        return model_for(a) && !model_for(b);
     });
     cJSON *list = cJSON_CreateArray();
     for (const Found &f : found) {
@@ -1867,9 +2008,10 @@ void pairing_event(const control::Pending &p, const char *step, const char *key 
     control::send_event(p.conn, e);
 }
 
-// The button found a TD-H9: it becomes the radio. It isn't paired: it
-// takes a connection from anything, so the bridge only remembers its
-// address. A Classic radio paired before is forgotten.
+// The button found a BLE TNC (a TD-H9, or one advertising the BLE KISS
+// service): it becomes the radio. It isn't paired: it takes a connection
+// from anything, so the bridge only remembers its address. A Classic
+// radio paired before is forgotten.
 void select_ble(const Found &target)
 {
     Record old = record();
@@ -1878,9 +2020,10 @@ void select_ble(const Found &target)
     r.addr = target.addr;
     r.addr_type = target.addr_type;
     r.name = target.name;
-    r.model = model_for_name(target.name, true)->name;
+    r.model = model_for(target)->name;
+    r.ble = true;
     if (save_record(r)) {
-        if (old.present && !old.ble() && bonded(old.addr)) {
+        if (old.present && !old.ble && bonded(old.addr)) {
             esp_bt_gap_remove_bond_device(old.addr.raw());
         }
         ESP_LOGI(TAG, "selected %s (%s), model %s", r.name.c_str(), r.addr.str().c_str(), r.model.c_str());
@@ -1893,7 +2036,7 @@ void select_ble(const Found &target)
 // Pairs with a radio and makes it the radio, keeping the old one until the
 // new one has paired. From the button (search, confirm at once) or from
 // bluetooth.pair (a given address, the management app confirms). The
-// button selects a TD-H9 instead if it finds one first.
+// button selects a BLE TNC instead if it finds one first.
 void do_pair(const Request &req)
 {
     bool button = req.type == ReqType::button_pair;
@@ -1909,7 +2052,7 @@ void do_pair(const Request &req)
     bool cancelled = false;
     set_pair_stage(PairStage::searching, pairing_seconds);
     if (button) {
-        ESP_LOGI(TAG, "pairing: searching for a radio in pairing mode, or a TD-H9");
+        ESP_LOGI(TAG, "pairing: searching for a radio in pairing mode, or a BLE TNC");
         switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target, board::screen)) {
         case SearchResult::found:
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
@@ -1926,7 +2069,7 @@ void do_pair(const Request &req)
             break;
         case SearchResult::none:
             failure = board::screen && listed_any ? "no radio was chosen in time"
-                                                  : "no radio in pairing mode with a serial port, and no TD-H9, was found";
+                                                  : "no radio in pairing mode with a serial port, and no BLE TNC, was found";
             break;
         }
     } else {
@@ -2189,10 +2332,12 @@ void do_update(const Request &req)
             next.name.clear();
         }
     }
-    if (next.ble()) {
+    next.ble = req.ble;
+    if (next.ble) {
         next.addr_type = le_type(next.addr);
     }
-    bool changed = next.present != r.present || next.addr != r.addr || next.model != r.model;
+    bool changed =
+        next.present != r.present || next.addr != r.addr || next.model != r.model || next.ble != r.ble;
     bool link_up = port_state == PortState::connected;
     bool disruptive = changed && link_up && phones() > 0;
 
@@ -2282,7 +2427,7 @@ void radio_task(void *)
 {
     xEventGroupWaitBits(events, EV_SPP_INIT, pdFALSE, pdFALSE, portMAX_DELAY);
     if (!(xEventGroupWaitBits(events, EV_GATTC_REG, pdFALSE, pdFALSE, pdMS_TO_TICKS(5000)) & EV_GATTC_REG)) {
-        ESP_LOGE(TAG, "the GATT client didn't register: a TD-H9 can't connect");
+        ESP_LOGE(TAG, "the GATT client didn't register: a BLE TNC can't connect");
     }
     for (;;) {
         restart = false;
@@ -2290,14 +2435,13 @@ void radio_task(void *)
         Record r = record();
         if (!r.present) {
             set_port(PortState::unpaired, board::screen
-                                              ? "no radio: pair a TH-D74 or TH-D75, or select a TD-H9, on the TNC page"
+                                              ? "no radio: pair a TH-D74 or TH-D75, or select a BLE TNC, on the TNC page"
                                               : "no radio: double press the button to pair a radio in pairing "
-                                                "mode, or select a TD-H9");
+                                                "mode, or select a BLE TNC");
             serve_until(portMAX_DELAY);
             continue;
         }
-        const Model &m = model_of(r.model);
-        if (!m.ble && !bonded(r.addr)) {
+        if (!r.ble && !bonded(r.addr)) {
             // Bluedroid removes a bond when the radio refuses its key: the
             // radio has forgotten this device. Retrying can't help.
             set_port(PortState::unpaired, r.addr.str() +
@@ -2314,8 +2458,8 @@ void radio_task(void *)
             continue;
         }
         set_port(PortState::connecting, r.addr.str());
-        if (m.ble) {
-            // A TD-H9: a scan waits for it to advertise, so a radio that's
+        if (r.ble) {
+            // A BLE TNC: a scan waits for it to advertise, so a radio that's
             // off or away is caught within a second of coming back
             // (spikes/atom-lite-ble-tnc), and phones can still connect
             // meanwhile; then the connect is quick.
@@ -2348,7 +2492,7 @@ void radio_task(void *)
         }
         if (connect_to(r.addr, connect_timeout)) {
             counters.tnc_connects++;
-            if (kiss_init(m)) {
+            if (kiss_init(model_of(r.model))) {
                 set_port(PortState::connected);
                 bridge();
             } else {
@@ -2447,9 +2591,9 @@ View view()
     Record r = record();
     View v;
     v.present = r.present;
-    v.ble = r.ble();
+    v.ble = r.ble;
     v.paired = r.present && !v.ble && bonded(r.addr);
-    v.name = r.name.empty() ? r.model : r.name;
+    v.name = !r.name.empty() ? r.name : r.ble ? "BLE TNC" : r.model;
     const Model *m = find_model(r.model);
     v.make = m && m->radio ? m->radio : "";
     v.address = r.present ? r.addr.str() : "";
@@ -2626,18 +2770,19 @@ void update(const control::Pending &p, const std::string &model, const std::stri
         }
         strlcpy(r.model, model.c_str(), sizeof(r.model));
     }
-    // The model decides the transport: spp for a Classic radio, ble for a
-    // TD-H9. Moving between them needs the new transport's address.
+    // The address's key says the transport, spp.address for Classic or
+    // ble.address for BLE; without one, it stays as it is. The model has
+    // to go over it: a TH-D74 or TH-D75 only over SPP, a TD-H9 only over
+    // BLE, generic over either.
     Record cur = record();
-    bool ble = model.empty() ? cur.ble() : model_of(model).ble;
+    std::string name = model.empty() ? cur.model : model;
+    const Model &m = model_of(name);
+    bool ble = !address.empty() ? address_ble : cur.present ? cur.ble : !m.spp;
     const char *key = ble ? "ble.address" : "spp.address";
-    if (!address.empty() && address_ble != ble) {
-        control::reply_error(p, "bad_request", std::string("model ") + (model.empty() ? cur.model : model) +
-                                                   " takes " + key);
-        return;
-    }
-    if (address.empty() && cur.present && ble != cur.ble()) {
-        control::reply_error(p, "bad_request", std::string("changing to model ") + model + " needs " + key);
+    if (!(ble ? m.ble : m.spp)) {
+        const char *other = ble ? "spp.address" : "ble.address";
+        control::reply_error(p, "bad_request", address.empty() ? "changing to model " + name + " needs " + other
+                                                               : "model " + name + " takes " + other);
         return;
     }
     if (!address.empty()) {
@@ -2649,6 +2794,7 @@ void update(const control::Pending &p, const std::string &model, const std::stri
         strlcpy(r.addr, a.str().c_str(), sizeof(r.addr));
     }
     r.flag = non_disruptive;
+    r.ble = ble;
     post(r);
 }
 
@@ -2667,7 +2813,7 @@ cJSON *status_json()
         std::lock_guard<std::mutex> g(state_lock);
         detail = port_detail;
     }
-    bool ble = r.ble();
+    bool ble = r.ble;
     bool paired = r.present && !ble && bonded(r.addr);
     const uint8_t *own = esp_bt_dev_get_address();
     char mac[18] = "";
@@ -2757,7 +2903,21 @@ cJSON *models_json()
     cJSON *generic = cJSON_CreateObject();
     cJSON *gn = cJSON_AddArrayToObject(generic, "names");
     cJSON_AddItemToArray(gn, cJSON_CreateString("generic"));
-    cJSON_AddStringToObject(generic, "summary", "any SPP TNC that's always in KISS mode; nothing is sent at connect");
+    cJSON_AddStringToObject(generic, "summary",
+                            "any TNC that's always in KISS mode, over SPP or on the BLE KISS service; nothing is "
+                            "sent at connect");
+    // As the daemon lists it. The firmware knows a BLE KISS TNC by the
+    // service it advertises, not by this name.
+    cJSON *gr = cJSON_AddArrayToObject(generic, "radios");
+    cJSON *ha2 = cJSON_CreateObject();
+    cJSON_AddStringToObject(ha2, "name", "Ailunce HA2");
+    cJSON_AddStringToObject(ha2, "model", "generic");
+    cJSON *ha2b = cJSON_AddObjectToObject(ha2, "ble");
+    cJSON_AddStringToObject(ha2b, "name_prefix", "Ailunce HA2");
+    cJSON_AddStringToObject(ha2b, "setup",
+                            "On the radio, turn Bluetooth on, and disconnect any phone app from it: while "
+                            "something is connected, it doesn't advertise.");
+    cJSON_AddItemToArray(gr, ha2);
     cJSON_AddItemToArray(list, generic);
 
     cJSON *d7x = cJSON_CreateObject();
@@ -2846,22 +3006,26 @@ void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
             return;
         }
         // Only named devices, each once: a scan lists what someone could
-        // pick, and a TD-H9 is known by its name. A known radio is passed on
+        // pick, and a TD-H9 is known by its name; and those advertising the
+        // BLE KISS service, named or not. A known radio or TNC is passed on
         // every time (a TD-H9 advertises about five times a second), as the
         // search can miss one while it waits for something else.
-        // The TD-H9 ble_wait_for waits for is passed on whatever it sends:
+        // The BLE TNC ble_wait_for waits for is passed on whatever it sends:
         // after losing a central it knows, it advertises to that central
         // alone, with no name in it.
         std::string name = adv_name(r);
         e.addr = Addr::of(r.bda);
         bool awaited = ble_awaiting && e.addr == ble_awaited;
-        if (name.empty() && !awaited) {
+        static const esp_bt_uuid_t kiss_svc = kiss_api_uuid(1);
+        static const esp_bt_uuid_t mgmt_svc = mgmt_uuid();
+        e.kiss_listed = adv_lists(r, kiss_svc) && !adv_lists(r, mgmt_svc);
+        if (name.empty() && !awaited && !e.kiss_listed) {
             return;
         }
         if (awaited && r.ble_evt_type == ESP_BLE_EVT_CONN_DIR_ADV) {
             e.ok = true; // directed at us: ble_wait_for says so in the log
         }
-        if (!awaited && !model_for_name(name, true)) {
+        if (!awaited && !e.kiss_listed && !model_for_name(name, true)) {
             std::lock_guard<std::mutex> g(scan_lock);
             if (std::find(scan_seen.begin(), scan_seen.end(), e.addr) != scan_seen.end()) {
                 return;
@@ -2871,7 +3035,7 @@ void ble_gap_event(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param)
         e.type = GapEvent::ble_found;
         e.addr_type = r.ble_addr_type;
         copy_name(e.name, reinterpret_cast<const uint8_t *>(name.data()), name.size());
-        e.has_name = true;
+        e.has_name = !name.empty();
         e.rssi = r.rssi;
         e.has_rssi = true;
         break;
