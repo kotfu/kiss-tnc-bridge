@@ -33,7 +33,8 @@ to watch it and set it up:
 - **Bridge page:** the radio, the KISS TNC apps connected, and the
   device's name. Where the device starts.
 - **TNC page:** the radio the device has, and pairing a Kenwood or
-  selecting a TD-H9.
+  selecting a BLE TNC (from 1.4, any on the BLE KISS service, as well as
+  a TD-H9).
 - **System page:** battery, power, uptime, firmware, the name and
   Bluetooth address, errors, the screen settings, reset (from 1.4) and
   power off.
@@ -163,7 +164,8 @@ roadmap's [Core2 firmware](roadmap.md#core2-v13-firmware-decisions-6-7-8)).
 Where the device starts, and what it shows unless you've gone elsewhere.
 
 **Radio:** the radio's name (`TH-D75`, `TD-H9`) in large type, its make
-and Bluetooth address, its state in a pill, and under the pill how long
+(for a BLE TNC that isn't a known radio, "BLE KISS TNC") and Bluetooth
+address, its state in a pill, and under the pill how long
 it's been that way: "for 21m". The TNC page shows the same pill, without
 the time.
 
@@ -172,10 +174,10 @@ the time.
 | Connected | **Connected**, green | for how long it's been connected |
 | A Kenwood, connecting | **Connecting**, amber | for how long the link's been down |
 | A Kenwood, link down | **Retrying in 8s**, amber, counting down | for how long the link's been down |
-| A TD-H9, link down | **Waiting**, amber (the device connects as soon as it advertises) | for how long the link's been down |
+| A BLE TNC, link down | **Waiting**, amber (the device connects as soon as it advertises) | for how long the link's been down |
 | Taken down by a management app (`port.disconnect`) | **Down**, grey | for how long it's been down |
 | Pairing or selecting (started from a management app) | **Pairing**, blue | — |
-| No radio | **No radio** in place of the name, and **Not paired**, grey, with "Pair a Kenwood or select a TD-H9 on the TNC tab" | — |
+| No radio | **No radio** in place of the name, and **Not paired**, grey, with "Pair a Kenwood or select a BLE TNC on the TNC tab" | — |
 | Bluetooth didn't start | **Stopped**, grey, with the error's [banner](#errors) | — |
 
 A Kenwood's pill goes between Connecting and Retrying while the device
@@ -212,18 +214,20 @@ Durations read `45s`, `21m`, `2h 14m` and `3d 2h`.
 ## TNC page and pairing
 
 The TNC page shows the radio the device has: its name, its make and
-model, whether it's paired (a Kenwood) or selected (a TD-H9), its
+model, whether it's paired (a Kenwood) or selected (a BLE TNC), its
 address, and its state. Under it, what to do on the radio before
 changing it:
 
 - Kenwood: Menu › Bluetooth › Pairing Mode
 - TD-H9: Bluetooth on, BT Mode set to Receiver (see
   [td-h9-ble-kiss.md](td-h9-ble-kiss.md#setting-up-the-radio))
+- Other BLE TNCs: Bluetooth on, with no app connected to it (a BLE TNC
+  doesn't advertise while something is connected)
 
 **Forget** (left), shown only while there's a radio, asks first:
 "Forget TH-D75? The bridge stops using it and deletes its pairing. To use
 it again, pair it again, after deleting KTB-EF26 from the radio's
-Bluetooth list." (for a TD-H9: it stops connecting to it, and selecting
+Bluetooth list." (for a BLE TNC: it stops connecting to it, and selecting
 it again brings it back). **Cancel** (left) goes back; **Forget** (right,
 red) does what `bluetooth.unpair` does for the radio, and the TNC page
 shows no radio.
@@ -236,8 +240,11 @@ radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
    does, and lists each radio as it's found: a Kenwood whose name starts
    with `TH-D74` or `TH-D75`, or whose Class of Device is a Kenwood's
    (`0x620204`, which renaming the radio doesn't change: a D75 called
-   "marconi" is listed as marconi), or a TD-H9 whose name starts with
-   `TD-H9`, with its make and signal strength. A renamed Kenwood is taken
+   "marconi" is listed as marconi), a TD-H9 whose name starts with
+   `TD-H9`, or any BLE TNC advertising the BLE KISS service, named or
+   not (listed as "BLE KISS TNC"), with its make and signal strength.
+   Another bridge advertises that service too, beside its management
+   service, and isn't listed. A renamed Kenwood is taken
    for a TH-D75 until its answer to `ID` at the first connect says which
    it is, as on the ATOM. Anything else is counted ("3 other
    devices aren't radios") and not listed. Until a radio turns up, the
@@ -258,7 +265,7 @@ radio, so the page has no list of TNCs or adapters as in `ktbctl tui`.
    on the middle key, so a thumb in the middle can't answer.
 3. **A Kenwood: Press OK on the radio.** With the time the radio gives,
    about 30 s, counting down. **Cancel** (left).
-4. **A TD-H9: Selected.** "Selected TD-H9, connecting", and that the
+4. **A BLE TNC: Selected.** "Selected TD-H9, connecting", and that the
    device remembers its address and connects whenever it's on. It isn't
    paired. **OK** (right) goes back to the TNC page.
 5. **Done.** When the Kenwood confirms, the TNC page comes back with the
@@ -272,7 +279,7 @@ radio just put in pairing mode sometimes turns it down. **Back** (left) goes to 
 **Try again** (middle) starts looking again.
 
 A new radio replaces the old one, as on the ATOM, and a Kenwood paired
-before a TD-H9 is forgotten when the TD-H9 is selected.
+before a BLE TNC is forgotten when the BLE TNC is selected.
 
 ## System page
 

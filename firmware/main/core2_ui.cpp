@@ -451,7 +451,11 @@ void radio_pill(const radio::View &v, std::string &text, lv_color_t &bg, lv_colo
 
 std::string make_line(const radio::View &v)
 {
-    std::string make = v.ble ? "TIDRADIO" : v.make.rfind("Kenwood", 0) == 0 ? "Kenwood" : v.make;
+    // The maker: "Kenwood", "TIDRADIO"; for any other BLE TNC, what it is.
+    std::string make = v.make.substr(0, v.make.find(' '));
+    if (make.empty() && v.ble) {
+        make = "BLE KISS TNC";
+    }
     if (make.empty()) {
         return v.address;
     }
@@ -543,7 +547,7 @@ void update_bridge(const radio::View &v, const std::vector<phones::SessionView> 
     lv_color_t bg, fg;
     radio_pill(v, pt, bg, fg, time);
     set_pill(br.radio_pill, br.radio_pill_text, pt, bg, fg);
-    set_text(br.radio_sub, v.present ? make_line(v) : "Pair a Kenwood or select a TD-H9 on the TNC tab.");
+    set_text(br.radio_sub, v.present ? make_line(v) : "Pair a Kenwood or select a BLE TNC on the TNC tab.");
     set_text(br.radio_time, time);
     lv_obj_set_style_text_color(br.radio_time, v.state == radio::State::connected ? c_fg : c_dim, 0);
 
@@ -632,7 +636,8 @@ void build_tnc(lv_obj_t *pg)
     lv_obj_t *hint = label(pg, &lv_font_montserrat_12, c_dim,
                            "To change it, put the new radio in pairing mode first.\n"
                            "Kenwood: Menu > Bluetooth > Pairing Mode.\n"
-                           "TD-H9: Bluetooth on, BT Mode set to Receiver.");
+                           "TD-H9: Bluetooth on, BT Mode set to Receiver.\n"
+                           "Other BLE TNCs: Bluetooth on, no app connected.");
     lv_obj_set_pos(hint, 10, 118);
     lv_obj_set_style_text_line_space(hint, 3, 0);
 }
@@ -646,7 +651,7 @@ void update_tnc(const radio::View &v, const std::vector<errors::Item> &errs)
     radio_pill(v, pt, bg, fg, time);
     set_pill(tn.pill, tn.pill_text, pt, bg, fg);
     std::string model = v.make.empty() ? v.name : v.make;
-    set_text(tn.model, !v.present ? "Pair a Kenwood or select a TD-H9."
+    set_text(tn.model, !v.present ? "Pair a Kenwood or select a BLE TNC."
                                   : model + (v.ble ? ", selected" : v.paired ? ", paired" : ", not paired"));
     set_text(tn.address, v.address);
     bool bt_error = false;
@@ -1101,15 +1106,16 @@ void update_list()
         row_address[i] = r.address;
         set_text(fl.row_name[i], r.name);
         std::string maker = r.make.substr(0, r.make.find(' '));
-        set_text(fl.row_desc[i], (maker.empty() ? std::string("Unknown") : maker) +
-                                     (r.ble ? ", Bluetooth LE" : ", in pairing mode"));
+        set_text(fl.row_desc[i], maker.empty() && r.ble ? std::string("BLE KISS TNC")
+                                                        : (maker.empty() ? std::string("Unknown") : maker) +
+                                                              (r.ble ? ", Bluetooth LE" : ", in pairing mode"));
         set_text(fl.row_signal[i], (r.has_rssi ? std::to_string(r.rssi) + " dBm  >" : std::string(">")));
     }
     std::string foot;
     if (chosen) {
         foot = "Stopping the search...";
     } else if (n == 0) {
-        foot = "Put the radio in pairing mode. Kenwood: Menu > Bluetooth > Pairing Mode. TD-H9: Bluetooth on.";
+        foot = "Put the radio in pairing mode. Kenwood: Menu > Bluetooth > Pairing Mode. A BLE TNC: Bluetooth on.";
     } else {
         foot = "Tap a radio.";
     }

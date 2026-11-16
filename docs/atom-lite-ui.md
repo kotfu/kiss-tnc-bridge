@@ -19,7 +19,7 @@ Only what you'd need with no app and no computer:
 | Action | Gesture | What it does |
 |---|---|---|
 | **Wake the LED** | Single press, in dark mode | Lights the LED for `led_wake_seconds` (see [the wake rule](#normal-and-dark-mode)). Only in dark mode, and only while the LED is dark |
-| **Pair or select a radio** | Double press | Scans for a radio in pairing mode and pairs with it, a Kenwood first, or for a TIDRADIO TD-H9 and selects it. A new radio replaces the old one, since the device keeps one radio |
+| **Pair or select a radio** | Double press | Scans for a radio in pairing mode and pairs with it, a Kenwood first, or for a BLE TNC (a TIDRADIO TD-H9, or any on the BLE KISS service) and selects it. A new radio replaces the old one, since the device keeps one radio |
 | **Cancel pairing** | Single press, while pairing | Stops pairing and goes back to the radio the device had |
 | **Start authorization mode** | Long press | Lets one new management app be authorized with the authorization code (see [below](#authorization-mode)) |
 | **End authorization mode** | Single press, in authorization mode | Ends it before its time runs out |
@@ -48,7 +48,7 @@ taken for a TH-D75 until its answer to `ID` at the first connect says
 which it is.
 
 Any other radio or TNC in pairing mode that offers a serial port (SPP)
-is paired too, as model `generic`, if no Kenwood or TD-H9 turns up first
+is paired too, as model `generic`, if no Kenwood or BLE TNC turns up first
 ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)). After each
 round of the scan, about 10 s, the device takes a Bluetooth Classic
 device whose answer to the scan lists SPP; failing that, it asks up to
@@ -73,19 +73,24 @@ number as usual, and if the radio turns the old pairing down outright,
 the device deletes it and pairs afresh. Cancelling keeps the old pairing
 unless the radio had already turned it down.
 
-The same scan looks for a TIDRADIO TD-H9 over Bluetooth LE, by its name.
-A TD-H9 isn't paired: it takes a connection from anything, and advertises
-whenever nothing is connected to it, so it has no pairing mode. The first
-one found is **selected**: it becomes the radio, the device remembers its
-Bluetooth address, and a Kenwood paired before is forgotten. Selecting
-shows the same feedback as pairing. A TD-H9 is usually found within a
-second or two, so don't double press with more than one TD-H9 nearby
-that has nothing connected to it: the device takes whichever it hears
-first. (One across the room was found as quickly as one beside the
-device; spikes/atom-lite-ble-tnc.) For the same reason, to pair a
-TH-D74 or TH-D75 in place of a TD-H9, turn the TD-H9's Bluetooth off
-first: the double press drops the TD-H9's link, it starts advertising at
-once, and it would be found before the Kenwood. The TD-H9 needs Bluetooth on, BT Mode
+The same scan looks for a BLE TNC over Bluetooth LE: a TIDRADIO TD-H9,
+by its name, or, from 1.4, any TNC that advertises the BLE KISS service,
+such as an Ailunce HA2
+([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)). Another
+bridge advertises that service too, beside its management service, and
+isn't taken. A BLE TNC isn't paired: it takes a connection from anything,
+and advertises whenever nothing is connected to it, so it has no pairing
+mode. The first one found is **selected**: it becomes the radio, the
+device remembers its Bluetooth address, and a Kenwood paired before is
+forgotten. Selecting shows the same feedback as pairing. A BLE TNC is
+usually found within a second or two, so don't double press with more
+than one nearby that has nothing connected to it: the device takes
+whichever it hears first, and choosing between them takes a management
+app. (One across the room was found as quickly as one beside the device;
+spikes/atom-lite-ble-tnc.) For the same reason, to pair a TH-D74 or
+TH-D75 in place of a BLE TNC, turn the BLE TNC's Bluetooth off first:
+the double press drops its link, it starts advertising at once, and it
+would be found before the Kenwood. The TD-H9 needs Bluetooth on, BT Mode
 set to Receiver, APRS Switch on and wide FM (see
 [td-h9-ble-kiss.md](td-h9-ble-kiss.md#setting-up-the-radio)).
 
@@ -252,9 +257,9 @@ while the device goes on bridging.
 | **Error** | Something the device can't fix by retrying (see [Errors](#errors)). Connect a management app to see what; with none, unplug the device and plug it in, then reinstall the firmware. One generic error: blink codes can come later if a cause turns up that you could fix with no management app | Red, three fast blinks, then a pause | Same | Same | Same |
 | **Updating** | A firmware update is being written over BLE, about 30 s. Don't unplug. Over USB it's Installing over USB, above | White, fast blink | Same | Same | Same |
 | **Authorization mode** | Accepting one new management app | Magenta, slow blink | Same | Same | Same |
-| **Pairing** | Scanning for a Kenwood in pairing mode or a TD-H9 | Blue, fast blink | Same | Same | Same |
+| **Pairing** | Scanning for a Kenwood in pairing mode or a BLE TNC | Blue, fast blink | Same | Same | Same |
 | **No radio** | No radio is paired: after installing or a reset. Nothing is bridged | Yellow and blue, alternating at the slow blink pace | Same | Same | Same |
-| **Radio not connected** | A radio is paired or selected, but the link is down: the radio is off or out of range, or the device has just started. It tries a Kenwood again every 15 s, and waits for a TD-H9 to advertise | Yellow, slow blink | Same | Same | Same |
+| **Radio not connected** | A radio is paired or selected, but the link is down: the radio is off or out of range, or the device has just started. It tries a Kenwood again every 15 s, and waits for a BLE TNC to advertise | Yellow, slow blink | Same | Same | Same |
 | **Radio connected, no phones** | Normal: bridging is ready, but no KISS TNC app is connected | Cyan, steady | Cyan, steady, dimmed | Cyan, slow pulse | Off; a press shows it steady |
 | **Radio connected, phones connected** | Normal: bridging | Green, steady | Green, steady, dimmed | Green, slow pulse | Off; a press shows it steady |
 

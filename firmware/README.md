@@ -3,7 +3,8 @@
 Firmware for the M5Stack ATOM Lite, StickC Plus SE and Core2 v1.3 (see
 [Boards](#boards)): a KISS
 bridge from a Kenwood TH-D74 or TH-D75 over Bluetooth Classic, or a
-TIDRADIO TD-H9 over BLE, to phones over BLE, managed with the
+BLE TNC (one on the BLE KISS API, or a TIDRADIO TD-H9) over BLE, to
+phones over BLE, managed with the
 [control API](../docs/control-api.md). The plan is
 Phase C of the [roadmap](../docs/roadmap.md#phase-c-atom-lite-firmware-and-web-installer);
 the ATOM's button and LED are designed in [atom-lite-ui.md](../docs/atom-lite-ui.md),
@@ -24,7 +25,8 @@ Phase C, milestone 4 of 4:
 | 4 | The error list, the Tail Bat measurement, and CI release builds for the web installer | Done |
 
 Firmware 1.1 adds the TIDRADIO TD-H9 (roadmap, Firmware 1.1), as a GATT
-client to its KISS service.
+client to its KISS service, and 1.4 any TNC on the BLE KISS API, such as
+an Ailunce HA2.
 
 The ATOM bridges the radio to up to two phones. BLE management (Noise
 authorization) is Phase E and updates over BLE are Phase F; until then
@@ -102,10 +104,11 @@ ktbctl auth code                     # the authorization code and its link
 ktbctl auth mode 120                 # start authorization mode
 ktbctl --device PORT status
 ktbctl --device PORT monitor         # frames, decoded
-ktbctl --device PORT scan --le       # over BLE, for a TD-H9
+ktbctl --device PORT scan --le       # over BLE, for a BLE TNC
 ktbctl --device PORT pair --address 40:79:12:E4:95:9D
 ktbctl --device PORT disconnect ktbr0/radio    # and connect, release
 ktbctl --device PORT tnc update radio --model td-h9 --ble-address FB:5D:C0:5E:D5:7E
+ktbctl --device PORT tnc update radio --model generic --ble-address 34:3E:27:3F:E0:10   # BLE KISS API
 ```
 
 `tools/ktbdev.py` has only what `ktbctl` doesn't: the `debug` commands
@@ -133,9 +136,10 @@ it had.
 Over USB, `ktbctl --device PORT pair --address ADDRESS` does the same
 for an address, and asks you to compare the number first.
 
-The same double press selects a TIDRADIO TD-H9: the scan looks for one
-over BLE too, and the first device whose advertised name starts with
-`TD-H9` becomes the radio. It isn't paired; the ATOM keeps its address and
+The same double press selects a BLE TNC: the scan looks over BLE too,
+and the first TIDRADIO TD-H9 (a device whose advertised name starts with
+`TD-H9`) or TNC advertising the BLE KISS service becomes the radio, as
+model `td-h9` or `generic`. It isn't paired; the ATOM keeps its address and
 connects to it as a GATT client (see
 [td-h9-ble-kiss.md](../docs/td-h9-ble-kiss.md) for the radio's settings).
 While it's off or away, the ATOM looks for it with a BLE scan, still
@@ -143,7 +147,9 @@ advertising to phones, and connects once it hears it: ready within a few
 seconds of it coming back. Advertising stops for that connect, because
 the ESP32's Bluetooth controller crashes (an assert in `llc.c`, line 135)
 when it sends a connection request while advertising with a phone
-connected. Each frame goes to the radio in one write, which it needs.
+connected. Each frame goes to a TD-H9 in one write, which it needs; to a
+TNC on the BLE KISS API, it's split to the MTU, and the TNC puts it back
+together.
 Opening the port must not reboot the device. The ATOM's reset circuit
 pulls EN low while RTS is asserted without DTR, so a management app has to
 drop RTS before DTR, or both at once; pyserial drops DTR first, so `ktbdev.py`
@@ -155,7 +161,7 @@ KISS TNC apps find the ATOM by the BLE KISS service, which its advertisement
 carries; the scan response carries the management service's UUID and the
 first 11 bytes of `public_name`. Apps that connect read the whole name.
 The ATOM takes two phones. The controller allows four BLE links: the
-others are a TD-H9 and, from Phase E, a management app. A phone that subscribes to KISS
+others are a BLE TNC and, from Phase E, a management app. A phone that subscribes to KISS
 notifications is a session; its writes are rebuilt into whole frames
 before they go to the radio, and frames from the radio go to every session
 whole. Phones aren't bonded: one that asks for encryption gets it without
