@@ -214,8 +214,8 @@ turn the screen off and on by hand.
 - **The power button:** a short press turns the screen off at once, in
   any mode, and the next short press, or A or B, wakes it.
 - **What wakes it on its own,** as on the Core2: a new error, the radio
-  connecting or disconnecting, and an app connecting or disconnecting.
-  `device.identify` doesn't yet.
+  connecting or disconnecting, an app connecting or disconnecting, and
+  `device.identify`.
 - **Installing over USB** lights it, even if the power button had
   turned it off (see [`device.install_notice`](control-api.md#deviceinstall_notice)).
 

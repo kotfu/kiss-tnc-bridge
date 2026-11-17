@@ -42,4 +42,8 @@ void started();
 // The StickC's installing screen, as the Core2's (ui::show_installing()).
 bool show_installing(const char *version, uint32_t timeout_ms);
 
+// Wakes the StickC's screen, as a press does: for device.identify, as on
+// the Core2. Safe from any task.
+void wake();
+
 } // namespace ktb::led

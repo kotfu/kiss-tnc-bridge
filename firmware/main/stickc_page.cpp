@@ -108,7 +108,7 @@ bool screen_is_off() { return level == 0; }
 
 int64_t now_ms();
 
-void wake()
+void wake_screen()
 {
     last_wake = now_ms();
     turned_off = false;
@@ -590,7 +590,7 @@ void tick(lv_timer_t *)
     int64_t now = now_ms();
     if (axp192::short_presses() > 0) {
         if (screen_is_off()) {
-            wake();
+            wake_screen();
         } else {
             turned_off = true;
         }
@@ -677,7 +677,7 @@ void tick(lv_timer_t *)
     static size_t last_apps = 0, last_errors = 0;
     size_t errs = errors::list().size();
     if (connected != was_connected || apps.size() != last_apps || errs > last_errors) {
-        wake();
+        wake_screen();
     }
     was_connected = connected;
     last_apps = apps.size();
@@ -715,7 +715,7 @@ void read_b(lv_timer_t *)
     if (gpio_get_level(pin_b) == 0) {
         if (++down == 2) {
             bool was_off = screen_is_off();
-            wake();
+            wake_screen();
             if (!was_off) {
                 show_page((page + 1) % page_count);
             }
@@ -726,7 +726,7 @@ void read_b(lv_timer_t *)
     }
     if (gpio_get_level(pin_a) == 0) {
         if (++a_down == 2) {
-            wake();
+            wake_screen();
             update_light(now_ms());
         }
     } else {
@@ -877,6 +877,13 @@ void starting(const char *s)
 {
     step_since = esp_timer_get_time() / 1000;
     step = s;
+}
+
+void wake()
+{
+    if (ready) {
+        wake_screen();
+    }
 }
 
 void started()

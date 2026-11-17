@@ -527,6 +527,11 @@ void start()
 
 void post(Event e)
 {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    if (e == Event::identify) {
+        led::wake(); // and the ATOM's sequence runs as before
+    }
+#endif
     if (!queue) {
         return;
     }
