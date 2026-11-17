@@ -468,6 +468,11 @@ void ui_task(void *)
 bool reset_requested_at_boot()
 {
     button_init();
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    // The start-up screen, as soon as the device is on.
+    led::init();
+    led_ready = true;
+#endif
     // Held means down for three samples in a row, so a bounce isn't a hold.
     for (int i = 0; i < 3; i++) {
         if (!button_down()) {
@@ -552,7 +557,12 @@ bool show_installing(const char *, uint32_t timeout_ms)
     return installing_shown;
 }
 
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+void starting(const char *step) { led::starting(step); }
+void started() { led::started(); }
+#else
 void starting(const char *) {}
 void started() {}
+#endif
 
 } // namespace ktb::ui

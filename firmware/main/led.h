@@ -1,5 +1,5 @@
 // The ATOM Lite's one SK6812 RGB LED (led.cpp). On the StickC Plus SE the
-// whole screen stands in for it (stickc_screen.cpp). On boards with
+// screen stands in for it (stickc_page.cpp). On boards with
 // neither (board.h), init() and show() do nothing.
 #pragma once
 
@@ -32,5 +32,11 @@ void init();
 // Shows a color at a brightness (0-100, led_brightness), times a level
 // (0-1) for breathing and the frame dip. Writes the LED only on a change.
 void show(Rgb color, uint8_t brightness, float level = 1.0f);
+
+// The StickC Plus SE's start-up screen, as the Core2's: the step under
+// way, shown once it's slow, and the end of starting, when the pages
+// replace it. ui::starting() and ui::started() pass them on.
+void starting(const char *step);
+void started();
 
 } // namespace ktb::led

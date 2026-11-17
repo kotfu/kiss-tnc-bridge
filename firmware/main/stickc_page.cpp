@@ -84,10 +84,21 @@ constexpr int64_t light_ms = 300;
 
 bool ready = false;
 // The power button's short press turns the screen off and on (B also
-// turns it on). The backlight is on from the first show(); from then on
-// tick() keeps it as screen_on says.
+// turns it on). The backlight is on once init() has drawn the screen;
+// from then on tick() keeps it as screen_on says.
 std::atomic<bool> lit{false};
 std::atomic<bool> screen_on{true};
+
+// The start-up screen until main() has started everything, as the
+// Core2's: the step under way shows once it's taken this long.
+constexpr int64_t slow_step_ms = 2000;
+std::atomic<const char *> step{nullptr};
+std::atomic<int64_t> step_since{0};
+std::atomic<bool> is_started{false};
+lv_display_t *display = nullptr;
+lv_obj_t *main_scr = nullptr;
+lv_obj_t *splash_scr = nullptr;
+lv_obj_t *splash_status = nullptr;
 
 lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h)
 {
@@ -366,6 +377,50 @@ void show_page(int i)
     set_text(title, page_titles[i]);
 }
 
+// ---- the start-up screen ----
+
+void tick(lv_timer_t *);
+
+void splash_tick(lv_timer_t *t)
+{
+    if (is_started) {
+        tick(nullptr); // the pages filled in before they show
+        lv_screen_load(main_scr);
+        lv_timer_delete(t);
+        return;
+    }
+    const char *s = step;
+    bool slow = s && now_ms() - step_since > slow_step_ms;
+    set_text(splash_status, slow ? std::string(s) + "..." : "Starting...");
+}
+
+// The Core2's, fitted to 135 px: the name, the firmware, a spinner and
+// the step.
+void build_splash()
+{
+    splash_scr = lv_obj_create(nullptr);
+    fill(splash_scr, c_bg);
+    lv_obj_set_scrollable(splash_scr, false);
+    lv_obj_t *t = label(splash_scr, &lv_font_montserrat_20, c_fg, 0, 0);
+    lv_label_set_text(t, "kiss-tnc-bridge");
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 14);
+    lv_obj_t *v = label(splash_scr, &lv_font_montserrat_14, c_dim, 0, 0);
+    lv_label_set_text(v, (std::string("firmware ") + esp_app_get_description()->version).c_str());
+    lv_obj_align(v, LV_ALIGN_TOP_MID, 0, 42);
+    lv_obj_t *sp = lv_spinner_create(splash_scr);
+    lv_obj_set_size(sp, 30, 30);
+    lv_obj_align(sp, LV_ALIGN_TOP_MID, 0, 66);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(sp, c_line, LV_PART_MAIN);
+    lv_obj_set_style_arc_width(sp, 4, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_color(sp, c_blue, LV_PART_INDICATOR);
+    splash_status = label(splash_scr, &lv_font_montserrat_12, c_dim, 0, 0);
+    lv_label_set_text(splash_status, "Starting...");
+    lv_obj_align(splash_status, LV_ALIGN_TOP_MID, 0, 104);
+}
+
+// ---- the pages ----
+
 void build(lv_obj_t *scr)
 {
     fill(scr, c_bg);
@@ -479,6 +534,11 @@ void tick(lv_timer_t *)
         power_read_at = now;
         update_battery();
     }
+    // Settings, the radio and the phones aren't read until main() has
+    // started them: the start-up screen shows till then.
+    if (!is_started) {
+        return;
+    }
 
     radio::View v = radio::view();
     update_tnc(v);
@@ -563,6 +623,9 @@ void move_glint(lv_timer_t *)
 void read_b(lv_timer_t *)
 {
     static int down = 0;
+    if (!is_started) {
+        return; // the start-up screen has no pages
+    }
     if (gpio_get_level(pin_b) == 0) {
         if (++down == 2) {
             if (!screen_on) {
@@ -678,8 +741,13 @@ bool start_screen()
         ESP_LOGE(TAG, "LVGL display didn't start");
         return false;
     }
+    display = disp;
     lvgl_port_lock(0);
-    build(lv_display_get_screen_active(disp));
+    main_scr = lv_display_get_screen_active(disp);
+    build(main_scr);
+    build_splash();
+    lv_screen_load(splash_scr);
+    lv_timer_create(splash_tick, 100, nullptr);
     tick(nullptr);
     lv_timer_create(tick, 250, nullptr);
     start_b();
@@ -701,18 +769,26 @@ void init()
         ESP_LOGE(TAG, "the screen didn't start: the device runs without it");
         return;
     }
+    // Drawn before the backlight comes on, so nothing half-drawn shows.
+    lvgl_port_lock(0);
+    lv_refr_now(display);
+    lvgl_port_unlock();
+    lit = true;
+    axp192::backlight(brightness);
     ready = true;
     ESP_LOGI(TAG, "ready");
 }
 
-// The ATOM's LED states and events aren't shown in this trial: the page
-// is, with the backlight on from the first call.
-void show(Rgb, uint8_t, float)
+void starting(const char *s)
 {
-    if (ready && !lit) {
-        lit = true;
-        axp192::backlight(brightness);
-    }
+    step_since = esp_timer_get_time() / 1000;
+    step = s;
 }
+
+void started() { is_started = true; }
+
+// The ATOM's LED states and events aren't shown in this trial: the pages
+// are, lit from init().
+void show(Rgb, uint8_t, float) {}
 
 } // namespace ktb::led
