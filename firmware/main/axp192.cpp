@@ -219,6 +219,8 @@ bool init(i2c_master_bus_handle_t bus)
     // The power button: on after 512 ms, a long press at 1 s, and off
     // after 6 s held, in the chip, as on the Core2 (the factory sets 4 s).
     write8(REG_PEK, 0x4d);
+    update(REG_IRQ_EN_3, 0xff, 0x03);   // report the button's presses
+    write8(REG_IRQ_STATUS_3, 0x03);     // and forget those from before
     update(REG_ADC_EN_1, 0xff, 0xc0);      // battery voltage and current
     update(REG_LDO23_V, 0xf0, 0x0c);       // LDO3 (the screen's logic) at 3.0 V
     // LDO3 on, LDO2 (the backlight) off until something is drawn.

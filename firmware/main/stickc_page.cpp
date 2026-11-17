@@ -1,5 +1,5 @@
-// The StickC Plus SE's first screens of their own (issue #28): the Bridge
-// and TNC pages in landscape, layout B in docs/stickc-mockups, with B
+// The StickC Plus SE's first screens of their own (issue #28): the Bridge,
+// TNC and System pages in landscape, layout B in docs/stickc-mockups, with B
 // moving between them. A trial build, to judge on the device: the ATOM's
 // UI (ui.cpp) still runs button A and calls led::show(), which only keeps
 // the backlight on, and LVGL draws the pages from what the radio and the
@@ -9,6 +9,7 @@
 // tried in spikes/stickc-plus-se.
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -20,16 +21,19 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
+#include "esp_app_desc.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "led.h"
 #include "phones.h"
 #include "radio.h"
 #include "settings.h"
+#include "uptime.h"
 
 namespace ktb::led {
 
@@ -79,6 +83,11 @@ constexpr int line_w = W - 2 * pad;
 constexpr int64_t light_ms = 300;
 
 bool ready = false;
+// The power button's short press turns the screen off and on (B also
+// turns it on). The backlight is on from the first show(); from then on
+// tick() keeps it as screen_on says.
+std::atomic<bool> lit{false};
+std::atomic<bool> screen_on{true};
 
 lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h)
 {
@@ -140,8 +149,8 @@ int64_t now_ms() { return esp_timer_get_time() / 1000; }
 
 // ---- the pages ----
 
-constexpr int page_count = 2;
-const char *const page_titles[page_count] = {"Bridge", "TNC"};
+constexpr int page_count = 3;
+const char *const page_titles[page_count] = {"Bridge", "TNC", "System"};
 int page = 0;
 lv_obj_t *pages[page_count];
 lv_obj_t *marker, *title;
@@ -158,6 +167,10 @@ struct {
     lv_obj_t *name, *model, *address, *state, *time, *hint;
 } tn;
 
+struct {
+    lv_obj_t *uptime, *last_run, *firmware;
+} sy;
+
 struct Seen {
     uint32_t rx = 0, tx = 0;
     int64_t rx_at = -10000, tx_at = -10000;
@@ -167,71 +180,27 @@ std::map<std::string, Seen> app_seen; // by the app's address
 
 int64_t power_read_at = -10000;
 
-// ---- fixed-width text ----
-// Montserrat has no fixed-width digits, so a Bluetooth address would
-// change width with its digits. This draws one character to a cell, each
-// hex digit centered in a cell as wide as the widest of them, and the
-// colons in cells of their own, so every address is the same width.
-
-struct Mono {
-    char text[24] = "";
-    const lv_font_t *font = nullptr;
-    lv_color_t color;
-    int cell = 0;  // a hex digit's cell
-    int colon = 0; // a colon's cell
-};
-Mono monos[2];  // the Bridge page's apps
-Mono tn_mono;   // the TNC page's radio
-
-int mono_cell(const Mono &m, char c) { return c == ':' ? m.colon : m.cell; }
-
-// An address's width: twelve hex digits and five colons.
-int mono_width(const Mono &m) { return 12 * m.cell + 5 * m.colon; }
-
-void draw_mono(lv_event_t *e)
-{
-    lv_obj_t *o = static_cast<lv_obj_t *>(lv_event_get_target(e));
-    const Mono &m = *static_cast<const Mono *>(lv_event_get_user_data(e));
-    lv_layer_t *layer = lv_event_get_layer(e);
-    lv_area_t a;
-    lv_obj_get_coords(o, &a);
-    lv_draw_label_dsc_t dsc;
-    lv_draw_label_dsc_init(&dsc);
-    dsc.font = m.font;
-    dsc.color = m.color;
-    int x = a.x1;
-    for (const char *c = m.text; *c; c++) {
-        int cell = mono_cell(m, *c);
-        lv_point_t pt = {x + (cell - lv_font_get_glyph_width(m.font, *c, 0)) / 2, a.y1};
-        lv_draw_character(layer, &dsc, &pt, static_cast<uint32_t>(*c));
-        x += cell;
-    }
-}
-
-// An address-wide object at x, y that draws its text one character to a cell.
-lv_obj_t *mono(lv_obj_t *p, Mono &m, const lv_font_t *font, lv_color_t color, int x, int y)
-{
-    m.font = font;
-    m.color = color;
-    for (char c : std::string("0123456789ABCDEF")) {
-        m.cell = std::max(m.cell, static_cast<int>(lv_font_get_glyph_width(font, c, 0)));
-    }
-    m.colon = lv_font_get_glyph_width(font, ':', 0);
-    lv_obj_t *o = box(p, x, y, mono_width(m), lv_font_get_line_height(font));
-    lv_obj_add_event_cb(o, draw_mono, LV_EVENT_DRAW_MAIN, &m);
-    return o;
-}
+// ---- addresses ----
 
 // Addresses in capitals, whatever case they come in.
-void set_mono(lv_obj_t *o, Mono &m, std::string s)
+std::string upper(std::string s)
 {
     for (char &c : s) {
         c = static_cast<char>(toupper(static_cast<unsigned char>(c)));
     }
-    if (s != m.text) {
-        snprintf(m.text, sizeof(m.text), "%s", s.c_str());
-        lv_obj_invalidate(o);
+    return s;
+}
+
+// The widest a Bluetooth address can be in a font: twelve of its widest
+// hex digit and five colons. Montserrat's digits differ in width, so the
+// app rows' times start past this, and line up whatever the addresses.
+int address_width(const lv_font_t *f)
+{
+    int digit = 0;
+    for (char c : std::string("0123456789ABCDEF")) {
+        digit = std::max(digit, static_cast<int>(lv_font_get_glyph_width(f, c, 0)));
     }
+    return 12 * digit + 5 * lv_font_get_glyph_width(f, ':', 0);
 }
 
 lv_obj_t *light(lv_obj_t *parent, int x, int y, int size)
@@ -328,9 +297,8 @@ void build_bridge(lv_obj_t *p)
     int cap_top = f->line_height - f->base_line - (g.ofs_y + g.box_h);
     for (int i = 0; i < 2; i++) {
         int y = 96 + i * 16;
-        pg.app_addr[i] = mono(p, monos[i], f, c_fg, pad, y);
-        // From the cells, not lv_obj_get_width: that's 0 until LVGL lays out.
-        pg.app_time[i] = label(p, f, c_dim, pad + mono_width(monos[i]) + 8, y);
+        pg.app_addr[i] = label(p, f, c_fg, pad, y);
+        pg.app_time[i] = label(p, f, c_dim, pad + address_width(f) + 8, y);
         pg.app_tx[i] = light(p, W - pad - cap, y + cap_top, cap);
         pg.app_rx[i] = light(p, W - pad - 2 * cap - 4, y + cap_top, cap);
     }
@@ -341,7 +309,7 @@ void build_tnc(lv_obj_t *p)
 {
     tn.name = label(p, &lv_font_montserrat_20, c_fg, pad, 23, line_w);
     tn.model = label(p, &lv_font_montserrat_12, c_dim, pad, 46, line_w);
-    tn.address = mono(p, tn_mono, &lv_font_montserrat_12, c_dim, pad, 61);
+    tn.address = label(p, &lv_font_montserrat_12, c_dim, pad, 61);
     tn.state = label(p, &lv_font_montserrat_14, c_green, pad, 78);
     tn.time = label(p, &lv_font_montserrat_12, c_dim, pad, 80);
 
@@ -350,6 +318,40 @@ void build_tnc(lv_obj_t *p)
 
     // One line, in the middle of the space under the rule.
     tn.hint = label(p, &lv_font_montserrat_12, c_fg, pad, 109, line_w);
+}
+
+// Only what's worth seeing on the device: a management app reads the
+// rest. Under the rows, room for the screen's timeout (next round).
+lv_obj_t *system_row(lv_obj_t *p, const char *name, int y)
+{
+    lv_obj_t *k = label(p, &lv_font_montserrat_14, c_dim, pad, y);
+    lv_label_set_text(k, name);
+    lv_obj_t *v = label(p, &lv_font_montserrat_14, c_fg, 0, y);
+    lv_obj_align(v, LV_ALIGN_TOP_RIGHT, -pad, y);
+    return v;
+}
+
+void build_system(lv_obj_t *p)
+{
+    sy.uptime = system_row(p, "Uptime", 27);
+    sy.last_run = system_row(p, "Last run", 47);
+    sy.firmware = system_row(p, "Firmware", 67);
+    set_text(sy.firmware, esp_app_get_description()->version);
+
+    // The bridge's own Bluetooth address.
+    lv_obj_t *a = system_row(p, "Bluetooth", 87);
+    uint8_t mac[6] = {};
+    esp_read_mac(mac, ESP_MAC_BT);
+    char b[18];
+    snprintf(b, sizeof(b), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    set_text(a, b);
+}
+
+void update_system(int64_t now)
+{
+    set_text(sy.uptime, duration(static_cast<uint32_t>(now / 1000)));
+    int64_t last = uptime::last_seconds();
+    set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
 }
 
 void show_page(int i)
@@ -375,6 +377,7 @@ void build(lv_obj_t *scr)
     }
     build_bridge(pages[0]);
     build_tnc(pages[1]);
+    build_system(pages[2]);
     build_chrome(scr);
     show_page(0);
 }
@@ -454,7 +457,7 @@ void update_tnc(const radio::View &v)
     std::string model = v.make.empty() ? (v.ble ? "BLE KISS TNC" : v.name) : v.make;
     set_text(tn.model, !v.present ? "Nothing paired or selected"
                                   : model + (v.ble ? ", selected" : v.paired ? ", paired" : ", not paired"));
-    set_mono(tn.address, tn_mono, v.address);
+    set_text(tn.address, upper(v.address));
     show(tn.state, v.present);
     show(tn.time, v.present);
     if (v.present) {
@@ -466,6 +469,12 @@ void update_tnc(const radio::View &v)
 void tick(lv_timer_t *)
 {
     int64_t now = now_ms();
+    if (axp192::short_presses() > 0) {
+        screen_on = !screen_on;
+    }
+    if (lit) {
+        axp192::backlight(screen_on ? brightness : 0);
+    }
     if (now - power_read_at >= 1000) {
         power_read_at = now;
         update_battery();
@@ -473,6 +482,7 @@ void tick(lv_timer_t *)
 
     radio::View v = radio::view();
     update_tnc(v);
+    update_system(now);
     set_text(pg.radio_name, v.present ? v.name : "No radio");
     lv_obj_set_style_text_color(pg.radio_name, v.present ? c_fg : c_dim, 0);
     set_state(pg.radio_state, pg.radio_time, v);
@@ -515,7 +525,7 @@ void tick(lv_timer_t *)
             continue;
         }
         const auto &a = apps[i];
-        set_mono(pg.app_addr[i], monos[i], a.address);
+        set_text(pg.app_addr[i], upper(a.address));
         set_text(pg.app_time[i], duration(a.connected_s));
         auto it = app_seen.find(a.address);
         Seen s = it != app_seen.end() ? it->second : Seen{};
@@ -548,13 +558,19 @@ void move_glint(lv_timer_t *)
 
 // Button B, read every 20 ms: a press counts once it's been down for two
 // reads, so a glitch on GPIO39 (an input-only pin with a known erratum)
-// isn't taken for one. It moves to the next page.
+// isn't taken for one. It moves to the next page, or with the screen off
+// turns it on at the page it was on.
 void read_b(lv_timer_t *)
 {
     static int down = 0;
     if (gpio_get_level(pin_b) == 0) {
         if (++down == 2) {
-            show_page((page + 1) % page_count);
+            if (!screen_on) {
+                screen_on = true;
+                axp192::backlight(brightness);
+            } else {
+                show_page((page + 1) % page_count);
+            }
         }
     } else {
         down = 0;
@@ -690,10 +706,11 @@ void init()
 }
 
 // The ATOM's LED states and events aren't shown in this trial: the page
-// is, with the backlight on.
+// is, with the backlight on from the first call.
 void show(Rgb, uint8_t, float)
 {
-    if (ready) {
+    if (ready && !lit) {
+        lit = true;
         axp192::backlight(brightness);
     }
 }
