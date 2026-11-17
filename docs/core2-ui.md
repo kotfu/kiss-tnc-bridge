@@ -319,6 +319,8 @@ the control API takes any number of seconds (provisional range). Both
 are device settings, beside `led_normal` and `led_wake_seconds` in
 [`device.settings`](control-api.md#devicesettingsget-and-devicesettingsset);
 a Core2 and a StickC Plus SE have these and an ATOM Lite has the LED's.
+The StickC's `screen_normal` has no `breathe`: its red LED has its own
+settings (see [The red LED](stickc-ui.md#the-red-led)).
 Brightness itself is fixed in 1.2.
 
 **The wake rule:** while the screen is dark, a touch anywhere, the

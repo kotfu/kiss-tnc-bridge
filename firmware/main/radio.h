@@ -64,6 +64,10 @@ struct View {
 };
 View view();
 
+// Every frame to and from the radio since starting, for an LED that
+// blinks on activity. Cheap, and safe from any task.
+uint32_t frames();
+
 // A frame from a phone (stuffed, without FENDs) for the radio. Safe from
 // the Bluetooth task: it only queues.
 void send_frame(const uint8_t *frame, size_t len, const std::string &session);

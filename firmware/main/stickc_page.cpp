@@ -29,7 +29,6 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_st7789.h"
 #include "esp_log.h"
-#include "esp_mac.h"
 #include "esp_lvgl_port.h"
 #include "esp_timer.h"
 #include "led.h"
@@ -106,7 +105,7 @@ void set_backlight(uint8_t b)
     axp192::backlight(b);
 }
 
-bool screen_is_off() { return level == 0; }
+bool screen_is_dark() { return level == 0; }
 
 int64_t now_ms();
 
@@ -224,7 +223,7 @@ struct {
 } tn;
 
 struct {
-    lv_obj_t *uptime, *last_run, *firmware, *screen;
+    lv_obj_t *uptime, *last_run, *firmware, *screen, *led;
 } sy;
 
 struct Seen {
@@ -389,19 +388,12 @@ lv_obj_t *system_row(lv_obj_t *p, const char *name, int y)
 
 void build_system(lv_obj_t *p)
 {
-    sy.screen = system_row(p, "Screen", 107);
     sy.uptime = system_row(p, "Uptime", 27);
     sy.last_run = system_row(p, "Last run", 47);
     sy.firmware = system_row(p, "Firmware", 67);
     set_text(sy.firmware, esp_app_get_description()->version);
-
-    // The bridge's own Bluetooth address.
-    lv_obj_t *a = system_row(p, "Bluetooth", 87);
-    uint8_t mac[6] = {};
-    esp_read_mac(mac, ESP_MAC_BT);
-    char b[18];
-    snprintf(b, sizeof(b), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    set_text(a, b);
+    sy.screen = system_row(p, "Screen", 87);
+    sy.led = system_row(p, "LED", 107);
 }
 
 // The screen's settings, as the Core2's System page says them. They're
@@ -413,14 +405,34 @@ std::string screen_line()
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: return "Bright";
     case settings::ScreenNormal::dark: return "Dark after " + after;
-    case settings::ScreenNormal::breathe: return "Breathe after " + after;
     default: return "Dim after " + after;
     }
+}
+
+// The red LED's three settings on one line: "Breathe, screen dark,
+// blink", "Dim, always", "Off".
+std::string led_line()
+{
+    if (settings::led_when() == settings::LedWhen::never) {
+        return "Off";
+    }
+    std::string line;
+    switch (settings::led_pattern()) {
+    case settings::LedPattern::bright: line = "Bright"; break;
+    case settings::LedPattern::dim: line = "Dim"; break;
+    default: line = "Breathe"; break;
+    }
+    line += settings::led_when() == settings::LedWhen::always ? ", always" : ", screen dark";
+    if (settings::led_activity_blink()) {
+        line += ", blink";
+    }
+    return line;
 }
 
 void update_system(int64_t now)
 {
     set_text(sy.screen, screen_line());
+    set_text(sy.led, led_line());
     set_text(sy.uptime, duration(static_cast<uint32_t>(now / 1000)));
     int64_t last = uptime::last_seconds();
     set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
@@ -593,7 +605,7 @@ void tick(lv_timer_t *)
     }
     int64_t now = now_ms();
     if (axp192::short_presses() > 0) {
-        if (screen_is_off()) {
+        if (screen_is_dark()) {
             wake_screen();
         } else {
             turned_off = true;
@@ -703,13 +715,13 @@ void move_glint(lv_timer_t *)
 
 // Button B, read every 20 ms: a press counts once it's been down for two
 // reads, so a glitch on GPIO39 (an input-only pin with a known erratum)
-// isn't taken for one. It moves to the next page, or with the screen off
+// isn't taken for one. It moves to the next page, or with the screen dark
 // turns it on at the page it was on.
 //
-// A press while the screen is off only wakes it, so a press on a screen
+// A press while the screen is dark only wakes it, so a press on a screen
 // you can't see doesn't change the page; dimmed, it's readable, so it
 // wakes it and moves on. A press of A wakes it too: the ATOM's UI acts on
-// A's double press and hold, and none of those needs the screen dark.
+// A's double press and hold, whatever the screen shows.
 void read_b(lv_timer_t *)
 {
     static int down = 0, a_down = 0;
@@ -718,7 +730,7 @@ void read_b(lv_timer_t *)
     }
     if (gpio_get_level(pin_b) == 0) {
         if (++down == 2) {
-            bool was_off = screen_is_off();
+            bool was_off = screen_is_dark();
             wake_screen();
             if (!was_off) {
                 show_page((page + 1) % page_count);
@@ -749,13 +761,21 @@ void start_b()
 }
 
 // ---- the red LED ----
-// In screen_normal breathe, the red LED breathes while the screen is off,
-// whatever turned it off, so the StickC can be told from one that's off.
-// The ATOM's breath: 8 s, starting bright, down to 15% (ui.cpp).
+// Its settings, each on its own: led_when (always, while the screen is
+// dark, whether the timeout or the power button did it, or never),
+// led_pattern (bright, dim or breathe) and led_activity_blink, so the
+// StickC can be told from one that's off. The ATOM's breath: 8 s, starting bright, down to 15%
+// (ui.cpp), peaking at bright.
 constexpr uint32_t breathe_ms = 8000;
 constexpr float breathe_low = 0.15f;
-constexpr float red_peak = 0.08f; // of full: half was too bright
+constexpr float red_bright = 0.08f; // of full: half was too bright
+constexpr float red_dim = 0.02f;
 constexpr uint32_t red_full = (1 << 10) - 1;
+// A blink: dark this long for a frame to or from the radio, then lit at
+// least as long before the next, so steady traffic flickers rather than
+// holding it dark. A frame in the lit gap blinks once the gap ends.
+constexpr int64_t blink_dark_ms = 100;
+constexpr int64_t blink_lit_ms = 100;
 bool red_ready = false;
 uint32_t red_duty = 1;
 
@@ -798,23 +818,63 @@ void start_red_led()
     gpio_set_level(pin_red_led, 1);
 }
 
-void breathe_red(lv_timer_t *)
+bool red_lit()
 {
-    static int64_t since = -1; // when the screen went off
-    bool on = is_started && !installing && settings::screen_normal() == settings::ScreenNormal::breathe &&
-              screen_is_off();
-    if (!on) {
+    if (!is_started || installing) {
+        return false;
+    }
+    switch (settings::led_when()) {
+    case settings::LedWhen::always: return true;
+    case settings::LedWhen::screen_dark: return screen_is_dark();
+    default: return false;
+    }
+}
+
+void update_red(lv_timer_t *)
+{
+    static int64_t since = -1;     // when it was lit, for the breath
+    static uint32_t frames = 0;    // radio::frames() last seen
+    static bool pending = false;   // a frame seen, not yet blinked for
+    static int64_t dark_until = 0; // a blink, until then
+    static int64_t next_blink = 0; // the earliest the next blink can start
+    int64_t now = now_ms();
+    uint32_t f = radio::frames();
+    if (f != frames) {
+        frames = f;
+        pending = true;
+    }
+    if (!red_lit()) {
         since = -1;
+        pending = false;
+        dark_until = 0;
         set_red(0);
         return;
     }
-    int64_t now = now_ms();
     if (since < 0) {
         since = now;
     }
-    float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
-    float level = breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
-    set_red(static_cast<uint32_t>(level * red_peak * red_full));
+    if (!settings::led_activity_blink()) {
+        pending = false;
+    } else if (pending && now >= next_blink) {
+        pending = false;
+        dark_until = now + blink_dark_ms;
+        next_blink = dark_until + blink_lit_ms;
+    }
+    if (now < dark_until) {
+        set_red(0);
+        return;
+    }
+    float level = red_bright;
+    switch (settings::led_pattern()) {
+    case settings::LedPattern::bright: break;
+    case settings::LedPattern::dim: level = red_dim; break;
+    case settings::LedPattern::breathe: {
+        float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
+        level *= breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
+        break;
+    }
+    }
+    set_red(static_cast<uint32_t>(level * red_full));
 }
 
 bool start_power()
@@ -911,7 +971,7 @@ bool start_screen()
     start_b();
     lv_timer_create(read_b, 20, nullptr);
     lv_timer_create(move_glint, 150, nullptr);
-    lv_timer_create(breathe_red, 40, nullptr);
+    lv_timer_create(update_red, 40, nullptr);
     lvgl_port_unlock();
     return true;
 }

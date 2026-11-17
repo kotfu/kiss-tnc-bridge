@@ -2586,6 +2586,8 @@ int phones()
     return d >= 0 ? d : phones::sessions();
 }
 
+uint32_t frames() { return counters.frames_up + counters.frames_down; }
+
 View view()
 {
     Record r = record();

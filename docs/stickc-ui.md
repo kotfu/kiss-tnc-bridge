@@ -28,8 +28,8 @@ Held in landscape, with the USB port at the right:
 |---|---|---|
 | **A** | The large button right of the screen | The ATOM Lite's button (see [The buttons](#the-buttons)) |
 | **B** | The top edge, at the left end | The next page |
-| **Power** | The bottom edge | A short press turns the screen off, or wakes it; held, it turns the device on, and off |
-| **Red LED** | The left end | Breathes while the screen is off, in `breathe` (see [The screen](#the-screen)) |
+| **Power** | The bottom edge | A short press turns the screen dark, or wakes it; held, it turns the device on, and off |
+| **Red LED** | The left end | By default, breathes while the screen is dark and blinks on radio traffic (see [The red LED](#the-red-led)) |
 
 A and B are GPIOs the firmware reads (A is GPIO37, B GPIO39). The power
 button is the AXP192's, as on the Core2: the chip turns the device on,
@@ -39,7 +39,7 @@ firmware is doing.
 | Power button | While | What happens | Whose |
 |---|---|---|---|
 | Hold about half a second | Off | Turns the StickC on | The AXP192's |
-| Short press | On | Turns the screen off, or wakes it | The firmware's |
+| Short press | On | Turns the screen dark, or wakes it | The firmware's |
 | Hold 6 s | On | Cuts the power | The AXP192's. The factory firmware sets 4 s; 6 s, as on the Core2, is harder to do by accident in a pocket |
 
 ## The buttons
@@ -59,7 +59,7 @@ A press of A also wakes the screen, and a double press or a hold does
 what it does whatever the screen shows.
 
 **B moves to the next page:** Bridge, TNC, System, and round to Bridge.
-While the screen is off, a press of B only wakes it, on the page it was
+While the screen is dark, a press of B only wakes it, on the page it was
 on (see [The screen](#the-screen)). B is read every 20 ms, and a press
 counts once it's been down for two reads: GPIO39 has a known erratum
 that can glitch it.
@@ -149,8 +149,11 @@ the rest.
 | Uptime | How long it's been running |
 | Last run | How long the run before this one lasted, or "None yet" |
 | Firmware | The version, `1.4.0` |
-| Bluetooth | The device's own Bluetooth address |
-| Screen | The [screen setting](#the-screen): "Dim after 30 s", "Dark after 1 min", "Breathe after 15 s", "Bright" |
+| Screen | The [screen settings](#the-screen): "Dim after 30 s", "Dark after 1 min", "Bright" |
+| LED | The [red LED's settings](#the-red-led), all three on one line: "Breathe, screen dark, blink", "Dim, always", or "Off" |
+
+The device's own Bluetooth address isn't shown: a management app and
+`ktbctl device info` have it.
 
 ## The battery
 
@@ -175,8 +178,7 @@ measure).
 ## The screen
 
 The Core2's modes and timeout, with the same settings, `screen_normal`
-(`bright`, `dim`, `dark`, `breathe`) and `screen_timeout_seconds`, 30 s
-by default (see [The screen](core2-ui.md#the-screen) on the Core2).
+(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default (see [The screen](core2-ui.md#the-screen) on the Core2).
 They're
 [device settings](control-api.md#devicesettingsget-and-devicesettingsset),
 in place of the ATOM's `led_*` settings the StickC had through firmware
@@ -185,29 +187,49 @@ in place of the ATOM's `led_*` settings the StickC had through firmware
 **The settings are changed from a management app** (or `ktbctl --device
 PORT device settings set screen_normal=dark`), not on the device. The
 System page's last row, **Screen**, shows them. The power button is the
-way to turn the screen off and on by hand.
+way to turn the screen dark and back on by hand.
 
 - **Brightness** is the AXP192's LDO2 voltage: full is about 3.1 V and
   dim 2.5 V, the lowest step short of off. The factory firmware runs at
   2.8 V. Neither is a setting.
 - **The timeout** runs from the last wake, and from the end of the
   start-up screen.
-- **The wake rule:** while the screen is off, a press of B only wakes
+- **The wake rule:** while the screen is dark, a press of B only wakes
   it, and doesn't change the page. Dimmed, B wakes it and goes to the
   next page, since the screen can be read. A press of A wakes it too, and
   A's double press and hold do what they do whatever the screen shows.
-- **The power button:** a short press turns the screen off at once, in
+- **The power button:** a short press turns the screen dark at once, in
   any mode, and the next short press, or A or B, wakes it.
-- **`breathe`** is `dark`, with the red LED breathing while the screen
-  is off, whatever turned it off, so the StickC can be told from one
-  that's off: the ATOM's breath, 8 s, starting bright, down to 15%, at a
-  peak of 8% of the LED's full (the Core2 breathes its green LED at
-  full). Otherwise the red LED is off.
 - **What wakes it on its own,** as on the Core2: a new error, the radio
   connecting or disconnecting, an app connecting or disconnecting, and
   `device.identify`.
 - **Installing over USB** lights it, even if the power button had
-  turned it off (see [Installing over USB](#installing-over-usb)).
+  turned it dark (see [Installing over USB](#installing-over-usb)).
+
+## The red LED
+
+So a StickC with its screen dark can be told from one that's off. Three
+[device settings](control-api.md#devicesettingsget-and-devicesettingsset),
+each on its own, changed from a management app and shown on the System
+page's last row:
+
+| Setting | Values | Default |
+|---|---|---|
+| `led_when` | `always`; `screen_dark`, while the screen is dark, whether the timeout or the power button did it (dimmed isn't dark); `never` | `screen_dark` |
+| `led_pattern` | `bright`, 8% of the LED's full; `dim`, 2%; `breathe`, the ATOM's breath, 8 s, starting bright, down to 15%, peaking at `bright` | `breathe` |
+| `led_activity_blink` | `true` or `false`: dark for a moment on each frame to or from the radio, while it's lit | `true` |
+
+- **A blink** is dark for 100 ms, then lit for at least 100 ms before the
+  next, so steady traffic flickers rather than holding it dark. A frame
+  in the lit gap blinks once the gap ends. A breath keeps its time under
+  a blink.
+- **Activity** is frames to and from the radio. Frames to and from the
+  apps are the same traffic, so they'd blink twice.
+- **Full is too bright:** half was, so `bright` is 8%.
+- **It's off** through the start-up and installing screens.
+
+The Core2 doesn't have these settings yet: its green LED is
+`screen_normal`'s `breathe` (see [core2-ui.md](core2-ui.md#the-screen)).
 
 ## Start-up
 
@@ -240,7 +262,7 @@ The device will restart when complete.
 ```
 
 The backlight comes on, even if the power button had turned the screen
-off. In download mode no firmware runs, and the ROM leaves the screen
+dark. In download mode no firmware runs, and the ROM leaves the screen
 and the AXP192 alone, so it stays through the whole install, until the
 new firmware's start-up screen replaces it. While it's up, B and the
 power button do nothing, and the pages stop updating.
@@ -287,6 +309,7 @@ have, and nothing on the screen stands in for it yet:
 
 ## To judge on the device
 
-- Battery life with the screen dim, dark and in `breathe`.
-- Whether LVGL should stop drawing while the screen is off, to save
+- Battery life with the screen dim and dark, and with the red LED's
+  patterns.
+- Whether LVGL should stop drawing while the screen is dark, to save
   power.

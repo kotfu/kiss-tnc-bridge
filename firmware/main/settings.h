@@ -21,6 +21,13 @@ enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 // green).
 enum class ScreenNormal : uint8_t { bright, dim, dark, breathe };
 
+// A board with a status LED (board::status_led: the StickC's red) has
+// these three, each on its own: when it's lit, how, and whether it goes
+// dark for a moment on each frame to or from the radio. Stored in NVS:
+// add new ones at the end.
+enum class LedWhen : uint8_t { always, screen_dark, never };
+enum class LedPattern : uint8_t { bright, dim, breathe };
+
 // Reads the settings from NVS, with defaults for any that aren't there.
 void load();
 
@@ -31,6 +38,9 @@ uint16_t led_wake_seconds();
 uint8_t led_brightness();
 ScreenNormal screen_normal();
 uint16_t screen_timeout_seconds();
+LedWhen led_when();
+LedPattern led_pattern();
+bool led_activity_blink();
 
 // Every setting, as device.settings.get returns them.
 cJSON *to_json();

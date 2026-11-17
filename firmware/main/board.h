@@ -25,6 +25,7 @@ constexpr bool screen = false;
 // The LED's settings (led_*), not the screen's.
 constexpr bool screen_settings = false;
 constexpr bool screen_breathe = false;
+constexpr bool status_led = false;
 
 #elif CONFIG_KTB_BOARD_STICKC_PLUS_SE
 
@@ -36,8 +37,7 @@ constexpr const char *name = "stickc-plus-se";
 // pull-up on the board; GPIO37 is input only and isn't a strapping pin.
 constexpr gpio_num_t button = GPIO_NUM_37;
 
-// No RGB LED: the screen stands in for it, and the red LED (GPIO10) is
-// kept off.
+// No RGB LED: the screen shows state (status_led is the red LED's).
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
 // Pairing is still the ATOM's, with button A, not a screen's.
@@ -47,10 +47,13 @@ constexpr bool screen = false;
 // page and changed from a management app (stickc_page.cpp).
 constexpr bool screen_settings = true;
 
-// screen_normal's breathe: dark, with the red LED (GPIO10) breathing
-// while the screen is off, so it can be told from a device that's off
-// (the Core2 breathes its green LED).
-constexpr bool screen_breathe = true;
+// No breathe in screen_normal: the red LED has its own settings.
+constexpr bool screen_breathe = false;
+
+// The red LED (GPIO10) and its settings, led_when, led_pattern and
+// led_activity_blink, so a StickC with its screen dark can be told from
+// one that's off (stickc_page.cpp).
+constexpr bool status_led = true;
 
 #elif CONFIG_KTB_BOARD_CORE2
 
@@ -71,6 +74,10 @@ constexpr bool screen_settings = true;
 // screen_normal's breathe: dark, with the green LED (the AXP192's GPIO1)
 // breathing while the screen is off.
 constexpr bool screen_breathe = true;
+
+// Not yet the StickC's LED settings: the green LED is screen_normal's
+// breathe.
+constexpr bool status_led = false;
 
 #else
 #error "A board in Kconfig.projbuild has no section in board.h"

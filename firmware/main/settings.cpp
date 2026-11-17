@@ -29,6 +29,9 @@ constexpr uint16_t default_wake_seconds = 30;
 constexpr uint8_t default_brightness = 50;
 constexpr ScreenNormal default_screen_normal = ScreenNormal::dim;
 constexpr uint16_t default_screen_timeout = 30;
+constexpr LedWhen default_led_when = LedWhen::screen_dark;
+constexpr LedPattern default_led_pattern = LedPattern::breathe;
+constexpr bool default_led_blink = true;
 
 // NVS keys
 constexpr const char *key_name = "public_name";
@@ -37,6 +40,9 @@ constexpr const char *key_wake = "led_wake_s";
 constexpr const char *key_brightness = "led_bright";
 constexpr const char *key_screen_normal = "screen_normal";
 constexpr const char *key_screen_timeout = "screen_tmo_s";
+constexpr const char *key_led_when = "led_when";
+constexpr const char *key_led_pattern = "led_pattern";
+constexpr const char *key_led_blink = "led_blink";
 
 std::mutex name_lock;
 std::string name;
@@ -45,6 +51,9 @@ std::atomic<uint16_t> wake_seconds{default_wake_seconds};
 std::atomic<uint8_t> brightness{default_brightness};
 std::atomic<ScreenNormal> screen{default_screen_normal};
 std::atomic<uint16_t> screen_timeout{default_screen_timeout};
+std::atomic<LedWhen> when{default_led_when};
+std::atomic<LedPattern> pattern{default_led_pattern};
+std::atomic<bool> blink{default_led_blink};
 
 const char *screen_normal_name(ScreenNormal v)
 {
@@ -66,6 +75,52 @@ bool parse_screen_normal(const char *s, ScreenNormal &out)
         out = ScreenNormal::dark;
     } else if (board::screen_breathe && strcmp(s, "breathe") == 0) {
         out = ScreenNormal::breathe;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+const char *led_when_name(LedWhen v)
+{
+    switch (v) {
+    case LedWhen::always: return "always";
+    case LedWhen::never: return "never";
+    default: return "screen_dark";
+    }
+}
+
+bool parse_led_when(const char *s, LedWhen &out)
+{
+    if (strcmp(s, "always") == 0) {
+        out = LedWhen::always;
+    } else if (strcmp(s, "screen_dark") == 0) {
+        out = LedWhen::screen_dark;
+    } else if (strcmp(s, "never") == 0) {
+        out = LedWhen::never;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+const char *led_pattern_name(LedPattern v)
+{
+    switch (v) {
+    case LedPattern::bright: return "bright";
+    case LedPattern::dim: return "dim";
+    default: return "breathe";
+    }
+}
+
+bool parse_led_pattern(const char *s, LedPattern &out)
+{
+    if (strcmp(s, "bright") == 0) {
+        out = LedPattern::bright;
+    } else if (strcmp(s, "dim") == 0) {
+        out = LedPattern::dim;
+    } else if (strcmp(s, "breathe") == 0) {
+        out = LedPattern::breathe;
     } else {
         return false;
     }
@@ -163,11 +218,24 @@ void load()
         if (nvs_get_u8(h, key_brightness, &u8) == ESP_OK && u8 <= 100) {
             brightness = u8;
         }
-        if (nvs_get_u8(h, key_screen_normal, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(board::screen_breathe ? ScreenNormal::breathe : ScreenNormal::dark)) {
-            screen = static_cast<ScreenNormal>(u8);
+        if (nvs_get_u8(h, key_screen_normal, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(ScreenNormal::breathe)) {
+            // breathe, saved on a board that no longer has it (the StickC's
+            // red LED has its own settings), is dark.
+            screen = !board::screen_breathe && u8 == static_cast<uint8_t>(ScreenNormal::breathe)
+                         ? ScreenNormal::dark
+                         : static_cast<ScreenNormal>(u8);
         }
         if (nvs_get_u16(h, key_screen_timeout, &u16) == ESP_OK && u16 >= wake_min && u16 <= wake_max) {
             screen_timeout = u16;
+        }
+        if (nvs_get_u8(h, key_led_when, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(LedWhen::never)) {
+            when = static_cast<LedWhen>(u8);
+        }
+        if (nvs_get_u8(h, key_led_pattern, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(LedPattern::breathe)) {
+            pattern = static_cast<LedPattern>(u8);
+        }
+        if (nvs_get_u8(h, key_led_blink, &u8) == ESP_OK && u8 <= 1) {
+            blink = u8 == 1;
         }
         nvs_close(h);
     }
@@ -178,6 +246,10 @@ void load()
     if constexpr (board::screen_settings) {
         ESP_LOGI(TAG, "public_name \"%s\", screen_normal %s, screen_timeout_seconds %u", loaded_name.c_str(),
                  screen_normal_name(screen), (unsigned)screen_timeout);
+        if constexpr (board::status_led) {
+            ESP_LOGI(TAG, "led_when %s, led_pattern %s, led_activity_blink %s", led_when_name(when),
+                     led_pattern_name(pattern), blink ? "true" : "false");
+        }
     } else {
         ESP_LOGI(TAG, "public_name \"%s\", led_normal %s, led_wake_seconds %u, led_brightness %u",
                  loaded_name.c_str(), led_normal_name(normal), (unsigned)wake_seconds,
@@ -196,6 +268,9 @@ uint16_t led_wake_seconds() { return wake_seconds; }
 uint8_t led_brightness() { return brightness; }
 ScreenNormal screen_normal() { return screen; }
 uint16_t screen_timeout_seconds() { return screen_timeout; }
+LedWhen led_when() { return when; }
+LedPattern led_pattern() { return pattern; }
+bool led_activity_blink() { return blink; }
 
 cJSON *to_json()
 {
@@ -204,6 +279,11 @@ cJSON *to_json()
     if constexpr (board::screen_settings) {
         cJSON_AddStringToObject(o, "screen_normal", screen_normal_name(screen));
         cJSON_AddNumberToObject(o, "screen_timeout_seconds", screen_timeout);
+        if constexpr (board::status_led) {
+            cJSON_AddStringToObject(o, "led_when", led_when_name(when));
+            cJSON_AddStringToObject(o, "led_pattern", led_pattern_name(pattern));
+            cJSON_AddBoolToObject(o, "led_activity_blink", blink);
+        }
     } else {
         cJSON_AddStringToObject(o, "led_normal", led_normal_name(normal));
         cJSON_AddNumberToObject(o, "led_wake_seconds", wake_seconds);
@@ -229,6 +309,9 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
     uint8_t new_brightness = brightness;
     ScreenNormal new_screen = screen;
     uint16_t new_screen_timeout = screen_timeout;
+    LedWhen new_when = when;
+    LedPattern new_pattern = pattern;
+    bool new_blink = blink;
 
     for (const cJSON *item = obj->child; item; item = item->next) {
         const char *key = item->string;
@@ -260,6 +343,22 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
                 return false;
             }
             new_screen_timeout = static_cast<uint16_t>(n);
+        } else if (board::status_led && strcmp(key, "led_when") == 0) {
+            if (!cJSON_IsString(item) || !parse_led_when(item->valuestring, new_when)) {
+                error = "led_when must be \"always\", \"screen_dark\" or \"never\"";
+                return false;
+            }
+        } else if (board::status_led && strcmp(key, "led_pattern") == 0) {
+            if (!cJSON_IsString(item) || !parse_led_pattern(item->valuestring, new_pattern)) {
+                error = "led_pattern must be \"bright\", \"dim\" or \"breathe\"";
+                return false;
+            }
+        } else if (board::status_led && strcmp(key, "led_activity_blink") == 0) {
+            if (!cJSON_IsBool(item)) {
+                error = "led_activity_blink must be true or false";
+                return false;
+            }
+            new_blink = cJSON_IsTrue(item);
         } else if (!board::screen_settings && strcmp(key, "led_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_led_normal(item->valuestring, new_normal)) {
                 error = "led_normal must be \"bright\", \"dim\", \"breathe\" or \"dark\"";
@@ -279,8 +378,10 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             new_brightness = static_cast<uint8_t>(n);
         } else {
             error = std::string("unknown setting: ") + key +
-                    (board::screen_settings ? " (known: public_name, screen_normal, screen_timeout_seconds)"
-                                   : " (known: public_name, led_normal, led_wake_seconds, led_brightness)");
+                    (board::status_led ? " (known: public_name, screen_normal, screen_timeout_seconds, led_when, "
+                                         "led_pattern, led_activity_blink)"
+                     : board::screen_settings ? " (known: public_name, screen_normal, screen_timeout_seconds)"
+                                              : " (known: public_name, led_normal, led_wake_seconds, led_brightness)");
             return false;
         }
     }
@@ -312,6 +413,15 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             err = nvs_set_u16(h, key_screen_timeout, new_screen_timeout);
         }
         if (err == ESP_OK) {
+            err = nvs_set_u8(h, key_led_when, static_cast<uint8_t>(new_when));
+        }
+        if (err == ESP_OK) {
+            err = nvs_set_u8(h, key_led_pattern, static_cast<uint8_t>(new_pattern));
+        }
+        if (err == ESP_OK) {
+            err = nvs_set_u8(h, key_led_blink, new_blink ? 1 : 0);
+        }
+        if (err == ESP_OK) {
             err = nvs_commit(h);
         }
         nvs_close(h);
@@ -330,6 +440,9 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
     brightness = new_brightness;
     screen = new_screen;
     screen_timeout = new_screen_timeout;
+    when = new_when;
+    pattern = new_pattern;
+    blink = new_blink;
     ESP_LOGI(TAG, "saved");
     return true;
 }

@@ -843,8 +843,10 @@ any that take effect only after `device.reboot`:
 The keys are provisional, from the roadmap's device settings and power
 saving tables. A board has the LED's keys or the screen's, not both: the
 ATOM Lite the `led_*` keys, the Core2 and the StickC Plus SE the
-`screen_*` keys (`device.settings.get` shows which). Firmware 1.4.0 and
-older gave the StickC the `led_*` keys, for the ATOM's UI it ran:
+`screen_*` keys (`device.settings.get` shows which). The StickC also has
+three for its red LED, `led_when`, `led_pattern` and
+`led_activity_blink`. Firmware 1.4.0 and older gave the StickC the
+ATOM's `led_*` keys, for the ATOM's UI it ran:
 
 | Key | Values |
 |---|---|
@@ -854,8 +856,11 @@ older gave the StickC the `led_*` keys, for the ATOM's UI it ran:
 | `led_brightness` | 0–100 |
 | `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
-| `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), `dark`, off until a touch, a button or the power button, or `breathe`, `dark` with an LED breathing while the screen is off (the Core2's green, the StickC's red) (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
+| `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), `dark`, off until a touch, a button or the power button, or on the Core2 `breathe`, `dark` with its green LED breathing while the screen is dark (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
 | `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch, a press or an event, on battery and USB alike |
+| `led_when` | The StickC's red LED: lit `always`, while the screen is dark (`screen_dark`, the default), whether the timeout or the power button did it, or `never` (see [stickc-ui.md](stickc-ui.md#the-red-led)) |
+| `led_pattern` | How it's lit: `bright`, `dim` or `breathe` (the default) |
+| `led_activity_blink` | `true` (the default) or `false`: whether it goes dark for a moment on each frame to or from the radio, while it's lit |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
