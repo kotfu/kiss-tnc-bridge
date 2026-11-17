@@ -4,7 +4,7 @@ The M5Stack StickC Plus SE has a 135×240 color screen, two buttons, a
 power button and a red LED (see the roadmap's
 [hardware notes](roadmap.md#m5stickc-plus-se), tried on a device). This
 page is what the StickC's own UI does: three pages to watch the bridge,
-the screen settings the Core2 has, and the ATOM Lite's button for what
+the Core2's screen and LED settings, and the ATOM Lite's button for what
 you do on the device. Everything else is done from a management app over
 the [control API](control-api.md), as on the ATOM Lite and the Core2.
 
@@ -178,15 +178,16 @@ measure).
 ## The screen
 
 The Core2's modes and timeout, with the same settings, `screen_normal`
-(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default (see [The screen](core2-ui.md#the-screen) on the Core2).
-They're
+(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default
+(see [The screen](core2-ui.md#the-screen) on the Core2). They're
 [device settings](control-api.md#devicesettingsget-and-devicesettingsset),
-in place of the ATOM's `led_*` settings the StickC had through firmware
-1.4.0.
+and with the [red LED's](#the-red-led) they replace the ATOM's `led_normal`,
+`led_wake_seconds` and `led_brightness`, which the StickC had through
+firmware 1.4.0.
 
 **The settings are changed from a management app** (or `ktbctl --device
 PORT device settings set screen_normal=dark`), not on the device. The
-System page's last row, **Screen**, shows them. The power button is the
+System page's **Screen** row shows them. The power button is the
 way to turn the screen dark and back on by hand.
 
 - **Brightness** is the AXP192's LDO2 voltage: full is about 3.1 V and
@@ -208,10 +209,10 @@ way to turn the screen dark and back on by hand.
 
 ## The red LED
 
-So a StickC with its screen dark can be told from one that's off. Three
+So a StickC with its screen dark can be told from one that's off. It's
+GPIO10, active low, dimmed by the ESP32's LED PWM. Three
 [device settings](control-api.md#devicesettingsget-and-devicesettingsset),
-each on its own, changed from a management app and shown on the System
-page's last row:
+each on its own, as the Core2's green LED has:
 
 | Setting | Values | Default |
 |---|---|---|
@@ -219,17 +220,24 @@ page's last row:
 | `led_pattern` | `bright`, 8% of the LED's full; `dim`, 2%; `breathe`, the ATOM's breath, 8 s, starting bright, down to 15%, peaking at `bright` | `breathe` |
 | `led_activity_blink` | `true` or `false`: dark for a moment on each frame to or from the radio, while it's lit | `true` |
 
+**The settings are changed from a management app** (or `ktbctl --device
+PORT device settings set led_when=always led_activity_blink=false`), not
+on the device, as the screen's are. The System page's **LED** row shows
+all three on one line: "Breathe, screen dark, blink", "Dim, always", or
+"Off" for `never`.
+
 - **A blink** is dark for 100 ms, then lit for at least 100 ms before the
   next, so steady traffic flickers rather than holding it dark. A frame
   in the lit gap blinks once the gap ends. A breath keeps its time under
   a blink.
 - **Activity** is frames to and from the radio. Frames to and from the
   apps are the same traffic, so they'd blink twice.
-- **Full is too bright:** half was, so `bright` is 8%.
+- **Full is too bright:** half was, so `bright` is 8%. The Core2's green
+  is much dimmer, so its `bright` is its full.
 - **It's off** through the start-up and installing screens.
 
-The Core2's green LED has the same settings, and they can be changed on
-the Core2 (see [The green LED](core2-ui.md#the-green-led)).
+The Core2 can change them on the device, with a preview, from its System
+page (see [The green LED](core2-ui.md#the-green-led)).
 
 ## Start-up
 
