@@ -286,6 +286,12 @@ Power read()
     if (p.charging && p.percent > 99) {
         p.percent = 99;
     }
+    // On external power with the charger stopped, it has finished: the
+    // battery is full, though it rests below the curve's top once the
+    // charge current stops (a StickC read 4.135 V, 98%, with 0 mA flowing).
+    if (p.external && p.battery && !p.charging) {
+        p.percent = 100;
+    }
     return p;
 }
 
