@@ -841,13 +841,26 @@ any that take effect only after `device.reboot`:
 ```
 
 The keys are provisional, from the roadmap's device settings and power
-saving tables. A board has the LED's keys or the screen's, not both: the
-ATOM Lite the `led_*` keys, the Core2 and the StickC Plus SE the
-`screen_*` keys (`device.settings.get` shows which). The Core2 and the
-StickC also have three for their status LED, the Core2's green and the
-StickC's red: `led_when`, `led_pattern` and `led_activity_blink`.
-Firmware 1.4.0 and older gave the StickC the
-ATOM's `led_*` keys, for the ATOM's UI it ran:
+saving tables. Besides `public_name`, a board has its UI's keys:
+
+| Board | Keys |
+|---|---|
+| ATOM Lite | Its RGB LED's: `led_normal`, `led_wake_seconds`, `led_brightness` |
+| Core2, StickC Plus SE | The screen's: `screen_normal`, `screen_timeout_seconds`. The status LED's (the Core2's green, the StickC's red): `led_when`, `led_pattern`, `led_activity_blink` |
+
+Both sets of LED keys start `led_`, so tell a board's UI from the keys
+`device.settings.get` returns (`led_normal` or `led_when`), not from the
+prefix. A key another board has fails as unknown, and the error lists
+the keys this board takes. Firmware 1.4.0 and older gave the StickC the
+ATOM's `led_*` keys, for the ATOM's UI it ran.
+
+`led_activity_blink` is a JSON boolean, not a string:
+
+```jsonc
+→ {"v":1,"id":8,"cmd":"device.settings.set","settings":{"led_when":"always","led_activity_blink":false}}
+```
+
+Every key:
 
 | Key | Values |
 |---|---|
@@ -860,8 +873,8 @@ ATOM's `led_*` keys, for the ATOM's UI it ran:
 | `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch, a button or the power button (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
 | `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch, a press or an event, on battery and USB alike |
 | `led_when` | The status LED: lit `always`, while the screen is dark (`screen_dark`, the default), whether the timeout or the power button did it, or `never` (see [core2-ui.md](core2-ui.md#the-green-led) and [stickc-ui.md](stickc-ui.md#the-red-led)) |
-| `led_pattern` | How it's lit: `bright`, `dim` or `breathe` (the default) |
-| `led_activity_blink` | `true` (the default) or `false`: whether it goes dark for a moment on each frame to or from the radio, while it's lit |
+| `led_pattern` | How it's lit: `bright`, `dim` or `breathe` (the default), which peaks at `bright`. Each board fixes its own levels: the Core2's green is full and 25%, the StickC's red 8% and 2% |
+| `led_activity_blink` | `true` (the default) or `false`: whether it goes dark for 100 ms on each frame to or from the radio, while it's lit |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
