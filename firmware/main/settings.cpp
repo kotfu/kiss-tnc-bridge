@@ -172,7 +172,7 @@ void load()
         std::lock_guard<std::mutex> g(name_lock);
         name = loaded_name;
     }
-    if constexpr (board::screen) {
+    if constexpr (board::screen_settings) {
         ESP_LOGI(TAG, "public_name \"%s\", screen_normal %s, screen_timeout_seconds %u", loaded_name.c_str(),
                  screen_normal_name(screen), (unsigned)screen_timeout);
     } else {
@@ -198,7 +198,7 @@ cJSON *to_json()
 {
     cJSON *o = cJSON_CreateObject();
     cJSON_AddStringToObject(o, "public_name", public_name().c_str());
-    if constexpr (board::screen) {
+    if constexpr (board::screen_settings) {
         cJSON_AddStringToObject(o, "screen_normal", screen_normal_name(screen));
         cJSON_AddNumberToObject(o, "screen_timeout_seconds", screen_timeout);
     } else {
@@ -245,29 +245,29 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             }
             new_name = item->valuestring;
             name_to_default = false;
-        } else if (board::screen && strcmp(key, "screen_normal") == 0) {
+        } else if (board::screen_settings && strcmp(key, "screen_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_screen_normal(item->valuestring, new_screen)) {
                 error = "screen_normal must be \"bright\", \"dim\" or \"dark\"";
                 return false;
             }
-        } else if (board::screen && strcmp(key, "screen_timeout_seconds") == 0) {
+        } else if (board::screen_settings && strcmp(key, "screen_timeout_seconds") == 0) {
             if (!whole_number(item, wake_min, wake_max, n)) {
                 error = "screen_timeout_seconds must be a whole number from 5 to 3600";
                 return false;
             }
             new_screen_timeout = static_cast<uint16_t>(n);
-        } else if (!board::screen && strcmp(key, "led_normal") == 0) {
+        } else if (!board::screen_settings && strcmp(key, "led_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_led_normal(item->valuestring, new_normal)) {
                 error = "led_normal must be \"bright\", \"dim\", \"breathe\" or \"dark\"";
                 return false;
             }
-        } else if (!board::screen && strcmp(key, "led_wake_seconds") == 0) {
+        } else if (!board::screen_settings && strcmp(key, "led_wake_seconds") == 0) {
             if (!whole_number(item, wake_min, wake_max, n)) {
                 error = "led_wake_seconds must be a whole number from 5 to 3600";
                 return false;
             }
             new_wake = static_cast<uint16_t>(n);
-        } else if (!board::screen && strcmp(key, "led_brightness") == 0) {
+        } else if (!board::screen_settings && strcmp(key, "led_brightness") == 0) {
             if (!whole_number(item, 0, 100, n)) {
                 error = "led_brightness must be a whole number from 0 to 100";
                 return false;
@@ -275,7 +275,7 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             new_brightness = static_cast<uint8_t>(n);
         } else {
             error = std::string("unknown setting: ") + key +
-                    (board::screen ? " (known: public_name, screen_normal, screen_timeout_seconds)"
+                    (board::screen_settings ? " (known: public_name, screen_normal, screen_timeout_seconds)"
                                    : " (known: public_name, led_normal, led_wake_seconds, led_brightness)");
             return false;
         }

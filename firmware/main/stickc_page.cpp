@@ -21,6 +21,7 @@
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
 #include "driver/spi_master.h"
+#include "errors.h"
 #include "esp_app_desc.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -50,6 +51,7 @@ constexpr gpio_num_t pin_rst = GPIO_NUM_18;
 constexpr gpio_num_t pin_cs = GPIO_NUM_5;
 constexpr gpio_num_t pin_red_led = GPIO_NUM_10; // active low
 constexpr gpio_num_t pin_b = GPIO_NUM_39;       // button B, active low, pulled up on the board
+constexpr gpio_num_t pin_a = GPIO_NUM_37;       // button A, the ATOM's button (ui.cpp)
 constexpr spi_host_device_t lcd_host = SPI2_HOST;
 
 // Landscape. The panel is 135x240 in the ST7789's 240x320 memory, at
@@ -63,6 +65,7 @@ constexpr int y_gap = 53;
 constexpr int strip_rows = 20;
 
 constexpr uint8_t brightness = 80; // fixed for this trial
+constexpr uint8_t dim_brightness = 1; // the lowest the backlight goes, short of off
 
 // ---- the look: the Core2's colors ----
 
@@ -85,11 +88,45 @@ constexpr int line_w = W - 2 * pad;
 constexpr int64_t light_ms = 300;
 
 bool ready = false;
-// The power button's short press turns the screen off and on (B also
-// turns it on). The backlight is on once init() has drawn the screen;
-// from then on tick() keeps it as screen_on says.
+// The screen's light follows the Core2's settings (docs/core2-ui.md, The
+// screen): screen_normal says what it does once screen_timeout_seconds
+// have passed since the last wake, and a short press of the power button
+// turns it off until the next press or button. The backlight is on once
+// init() has drawn the screen; from then on tick() sets it.
 std::atomic<bool> lit{false};
-std::atomic<bool> screen_on{true};
+std::atomic<bool> turned_off{false}; // by the power button
+std::atomic<int64_t> last_wake{0};  // a button, or something that wakes it
+uint8_t level = 0;                   // the backlight now: 0 is off
+
+void set_backlight(uint8_t b)
+{
+    level = b;
+    axp192::backlight(b);
+}
+
+bool screen_is_off() { return level == 0; }
+
+int64_t now_ms();
+
+void wake()
+{
+    last_wake = now_ms();
+    turned_off = false;
+}
+
+void update_light(int64_t now)
+{
+    if (turned_off) {
+        set_backlight(0);
+        return;
+    }
+    bool awake = now - last_wake < settings::screen_timeout_seconds() * 1000LL;
+    switch (settings::screen_normal()) {
+    case settings::ScreenNormal::bright: set_backlight(brightness); break;
+    case settings::ScreenNormal::dim: set_backlight(awake ? brightness : dim_brightness); break;
+    case settings::ScreenNormal::dark: set_backlight(awake ? brightness : 0); break;
+    }
+}
 
 // The start-up screen until main() has started everything, as the
 // Core2's: the step under way shows once it's taken this long.
@@ -184,7 +221,7 @@ struct {
 } tn;
 
 struct {
-    lv_obj_t *uptime, *last_run, *firmware;
+    lv_obj_t *uptime, *last_run, *firmware, *screen;
 } sy;
 
 struct Seen {
@@ -337,7 +374,7 @@ void build_tnc(lv_obj_t *p)
 }
 
 // Only what's worth seeing on the device: a management app reads the
-// rest. Under the rows, room for the screen's timeout (next round).
+// rest.
 lv_obj_t *system_row(lv_obj_t *p, const char *name, int y)
 {
     lv_obj_t *k = label(p, &lv_font_montserrat_14, c_dim, pad, y);
@@ -349,6 +386,7 @@ lv_obj_t *system_row(lv_obj_t *p, const char *name, int y)
 
 void build_system(lv_obj_t *p)
 {
+    sy.screen = system_row(p, "Screen", 107);
     sy.uptime = system_row(p, "Uptime", 27);
     sy.last_run = system_row(p, "Last run", 47);
     sy.firmware = system_row(p, "Firmware", 67);
@@ -363,8 +401,22 @@ void build_system(lv_obj_t *p)
     set_text(a, b);
 }
 
+// The screen's settings, as the Core2's System page says them. They're
+// changed from a management app.
+std::string screen_line()
+{
+    uint16_t t = settings::screen_timeout_seconds();
+    std::string after = t % 60 == 0 ? std::to_string(t / 60) + " min" : std::to_string(t) + " s";
+    switch (settings::screen_normal()) {
+    case settings::ScreenNormal::bright: return "Bright";
+    case settings::ScreenNormal::dark: return "Dark after " + after;
+    default: return "Dim after " + after;
+    }
+}
+
 void update_system(int64_t now)
 {
+    set_text(sy.screen, screen_line());
     set_text(sy.uptime, duration(static_cast<uint32_t>(now / 1000)));
     int64_t last = uptime::last_seconds();
     set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
@@ -537,10 +589,14 @@ void tick(lv_timer_t *)
     }
     int64_t now = now_ms();
     if (axp192::short_presses() > 0) {
-        screen_on = !screen_on;
+        if (screen_is_off()) {
+            wake();
+        } else {
+            turned_off = true;
+        }
     }
-    if (lit) {
-        axp192::backlight(screen_on ? brightness : 0);
+    if (lit && !is_started) {
+        set_backlight(turned_off ? 0 : brightness); // the start-up screen
     }
     if (now - power_read_at >= 1000) {
         power_read_at = now;
@@ -614,6 +670,19 @@ void tick(lv_timer_t *)
         set_light(pg.app_tx[i], now - s.tx_at < light_ms, c_amber);
     }
     app_seen = next;
+
+    // What wakes the screen on its own, as on the Core2: the radio
+    // connecting or dropping, an app coming or going, a new error.
+    static bool was_connected = false;
+    static size_t last_apps = 0, last_errors = 0;
+    size_t errs = errors::list().size();
+    if (connected != was_connected || apps.size() != last_apps || errs > last_errors) {
+        wake();
+    }
+    was_connected = connected;
+    last_apps = apps.size();
+    last_errors = errs;
+    update_light(now);
 }
 
 // The charging stripe, a pixel further each step, round again at the end.
@@ -632,23 +701,36 @@ void move_glint(lv_timer_t *)
 // reads, so a glitch on GPIO39 (an input-only pin with a known erratum)
 // isn't taken for one. It moves to the next page, or with the screen off
 // turns it on at the page it was on.
+//
+// A press while the screen is off only wakes it, so a press on a screen
+// you can't see doesn't change the page; dimmed, it's readable, so it
+// wakes it and moves on. A press of A wakes it too: the ATOM's UI acts on
+// A's double press and hold, and none of those needs the screen dark.
 void read_b(lv_timer_t *)
 {
-    static int down = 0;
+    static int down = 0, a_down = 0;
     if (!is_started || installing) {
         return; // the start-up screen has no pages
     }
     if (gpio_get_level(pin_b) == 0) {
         if (++down == 2) {
-            if (!screen_on) {
-                screen_on = true;
-                axp192::backlight(brightness);
-            } else {
+            bool was_off = screen_is_off();
+            wake();
+            if (!was_off) {
                 show_page((page + 1) % page_count);
             }
+            update_light(now_ms());
         }
     } else {
         down = 0;
+    }
+    if (gpio_get_level(pin_a) == 0) {
+        if (++a_down == 2) {
+            wake();
+            update_light(now_ms());
+        }
+    } else {
+        a_down = 0;
     }
 }
 
@@ -786,7 +868,7 @@ void init()
     lv_refr_now(display);
     lvgl_port_unlock();
     lit = true;
-    axp192::backlight(brightness);
+    set_backlight(brightness);
     ready = true;
     ESP_LOGI(TAG, "ready");
 }
@@ -797,7 +879,11 @@ void starting(const char *s)
     step = s;
 }
 
-void started() { is_started = true; }
+void started()
+{
+    last_wake = esp_timer_get_time() / 1000; // the timeout runs from the end of start-up
+    is_started = true;
+}
 
 // The Core2's installing screen, fitted to 135 px, drawn at once with the
 // backlight on, even if the power button had turned it off. The ROM
@@ -836,7 +922,7 @@ bool show_installing(const char *version, uint32_t timeout_ms)
         lv_obj_align(r, LV_ALIGN_TOP_MID, 0, 106);
         lv_screen_load(scr);
         lv_refr_now(display);
-        screen_on = true;
+        turned_off = false;
         axp192::backlight(brightness);
     }
     lvgl_port_unlock();

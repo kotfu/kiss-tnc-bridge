@@ -16,7 +16,9 @@ Status: draft, 12 November 2026, on hold. Firmware 1.3 shipped the
 StickC with the ATOM Lite's UI on its screen instead; the full design is
 [#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28), which starts
 from this draft. Anything marked provisional is to be judged on the
-device.
+device. #28 is now building it in landscape, page by page on the device,
+so most of this draft no longer matches what's built. [The
+screen](#the-screen) is up to date: it's what the firmware does.
 
 ## What's in 1.3
 
@@ -188,24 +190,34 @@ A is **Settings**, which opens a list:
 ## The screen
 
 The Core2's modes and timeout, with the same settings, `screen_normal`
-(`bright`, `dim`, `dark`) and `screen_timeout_seconds`
-(see [The screen](core2-ui.md#the-screen) on the Core2):
+(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default
+(see [The screen](core2-ui.md#the-screen) on the Core2). They're
+[device settings](control-api.md#devicesettingsget-and-devicesettingsset),
+in place of the ATOM's `led_*` settings the StickC had through firmware
+1.4.0.
 
-- **Brightness** is the AXP192's LDO2 voltage: full and dim are
-  provisional (about 3.0 V and 2.6 V), to judge on the device. The
-  factory firmware runs at 2.8 V.
-- **The wake rule:** while the screen is dark, a press of A or B only
-  wakes it. In dim it acts, since the screen can be read.
-- **The power button:** a short press turns the screen off at once, and
-  the next press of any button wakes it.
-- **What wakes it on its own,** as on the Core2: an error, the radio
-  connecting or disconnecting, an app connecting or disconnecting, and
-  `device.identify`.
+**The settings are changed from a management app** (or `ktbctl --device
+PORT device settings set screen_normal=dark`), not on the device. The
+System page's last row, **Screen**, shows them as the Core2 does: "Dim
+after 30 s", "Dark after 1 min", "Bright". The power button is the way to
+turn the screen off and on by hand.
 
-**Screen settings,** from System: a list of two rows, **Mode: Dim** and
-**After: 30 s**, and Back. A on a row steps through its values (bright,
-dim, dark; 15 s, 30 s, 1 min, 5 min), taking effect at once; "After" is
-greyed out for bright.
+- **Brightness** is the AXP192's LDO2 voltage: full is about 3.1 V and
+  dim 2.5 V, the lowest step short of off. The factory firmware runs at
+  2.8 V. Neither is a setting.
+- **The timeout** runs from the last wake, and from the end of the
+  start-up screen.
+- **The wake rule:** while the screen is off, a press of B only wakes
+  it, and doesn't change the page. Dimmed, B wakes it and goes to the
+  next page, since the screen can be read. A press of A wakes it too, and
+  A's double press and hold do what they do whatever the screen shows.
+- **The power button:** a short press turns the screen off at once, in
+  any mode, and the next short press, or A or B, wakes it.
+- **What wakes it on its own,** as on the Core2: a new error, the radio
+  connecting or disconnecting, and an app connecting or disconnecting.
+  `device.identify` doesn't yet.
+- **Installing over USB** lights it, even if the power button had
+  turned it off (see [`device.install_notice`](control-api.md#deviceinstall_notice)).
 
 ## The LED
 

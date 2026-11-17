@@ -22,6 +22,9 @@ constexpr gpio_num_t rgb_led = GPIO_NUM_27;
 // The UI is the LED and the button (docs/atom-lite-ui.md).
 constexpr bool screen = false;
 
+// The LED's settings (led_*), not the screen's.
+constexpr bool screen_settings = false;
+
 #elif CONFIG_KTB_BOARD_STICKC_PLUS_SE
 
 constexpr const char *name = "stickc-plus-se";
@@ -36,8 +39,12 @@ constexpr gpio_num_t button = GPIO_NUM_37;
 // kept off.
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
-// No screen UI yet: the ATOM's settings (led_*) apply, not the Core2's.
+// Pairing is still the ATOM's, with button A, not a screen's.
 constexpr bool screen = false;
+
+// The screen's settings (screen_*), as the Core2's, shown on the System
+// page and changed from a management app (stickc_page.cpp).
+constexpr bool screen_settings = true;
 
 #elif CONFIG_KTB_BOARD_CORE2
 
@@ -51,6 +58,9 @@ constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
 // The UI is the touch screen (docs/core2-ui.md, core2_ui.cpp).
 constexpr bool screen = true;
+
+// The screen's settings (screen_*), not the LED's.
+constexpr bool screen_settings = true;
 
 #else
 #error "A board in Kconfig.projbuild has no section in board.h"
