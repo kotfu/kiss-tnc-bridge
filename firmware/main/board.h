@@ -48,7 +48,8 @@ constexpr bool screen = false;
 constexpr bool screen_settings = true;
 
 // screen_normal's breathe: dark, with the red LED (GPIO10) breathing
-// while the screen is off, so it can be told from a device that's off.
+// while the screen is off, so it can be told from a device that's off
+// (the Core2 breathes its green LED).
 constexpr bool screen_breathe = true;
 
 #elif CONFIG_KTB_BOARD_CORE2
@@ -66,7 +67,10 @@ constexpr bool screen = true;
 
 // The screen's settings (screen_*), not the LED's.
 constexpr bool screen_settings = true;
-constexpr bool screen_breathe = false; // not built: its green LED stays off
+
+// screen_normal's breathe: dark, with the green LED (the AXP192's GPIO1)
+// breathing while the screen is off.
+constexpr bool screen_breathe = true;
 
 #else
 #error "A board in Kconfig.projbuild has no section in board.h"

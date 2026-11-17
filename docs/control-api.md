@@ -854,7 +854,7 @@ older gave the StickC the `led_*` keys, for the ATOM's UI it ran:
 | `led_brightness` | 0–100 |
 | `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
-| `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch, a button or the power button (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
+| `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), `dark`, off until a touch, a button or the power button, or `breathe`, `dark` with an LED breathing while the screen is off (the Core2's green, the StickC's red) (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
 | `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch, a press or an event, on battery and USB alike |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.

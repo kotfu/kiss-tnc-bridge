@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -734,6 +735,7 @@ std::string screen_line()
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: return "Bright";
     case settings::ScreenNormal::dark: return "Dark after " + after;
+    case settings::ScreenNormal::breathe: return "Breathe after " + after;
     default: return "Dim after " + after;
     }
 }
@@ -792,7 +794,7 @@ struct {
     lv_obj_t *rows[5], *row_name[5], *row_desc[5], *row_signal[5];
     lv_obj_t *paired, *paired_text;
     lv_obj_t *failed, *failed_why;
-    lv_obj_t *screen, *opts[3], *chips[4];
+    lv_obj_t *screen, *opts[4], *chips[4];
     lv_obj_t *power_off;
     lv_obj_t *forget, *forget_title, *forget_text;
     lv_obj_t *reset, *reset_circle, *reset_bar;
@@ -924,11 +926,14 @@ void build_flows()
 
     fl.screen = flow_screen();
     title(fl.screen, "Screen", 2);
-    static const char *names[3] = {"Bright", "Dim", "Dark"};
-    static const char *lines[3] = {"Always on", "Dims after the timeout; a touch brightens it",
-                                   "Off after the timeout; a touch wakes it"};
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *o = box(fl.screen, 10, 20 + i * 33, W - 20, 33);
+    // Four modes in rows of 30 px, so the timeout's chips fit above the
+    // soft keys.
+    static const char *names[4] = {"Bright", "Dim", "Dark", "Breathe"};
+    static const char *lines[4] = {"Always on", "Dims after the timeout; a touch brightens it",
+                                   "Off after the timeout; a touch wakes it",
+                                   "Dark, and the green LED breathes while it's off"};
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *o = box(fl.screen, 10, 20 + i * 30, W - 20, 30);
         lv_obj_set_style_border_side(o, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(o, 1, 0);
         lv_obj_set_style_border_color(o, c_line, 0);
@@ -936,24 +941,24 @@ void build_flows()
         lv_obj_add_event_cb(
             o,
             [](lv_event_t *e) {
-                static const char *vals[3] = {"bright", "dim", "dark"};
+                static const char *vals[4] = {"bright", "dim", "dark", "breathe"};
                 apply_setting("screen_normal", cJSON_CreateString(vals[(int)(intptr_t)lv_event_get_user_data(e)]));
                 update_screen_settings();
             },
             LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *dot = box(o, 0, 8, 16, 16);
+        lv_obj_t *dot = box(o, 0, 7, 16, 16);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(dot, 2, 0);
         fl.opts[i] = dot;
         lv_obj_t *n = label(o, &lv_font_montserrat_14, c_fg, names[i]);
-        lv_obj_set_pos(n, 26, 1);
+        lv_obj_set_pos(n, 26, 0);
         lv_obj_t *d = label(o, &lv_font_montserrat_12, c_dim, lines[i]);
-        lv_obj_set_pos(d, 26, 17);
+        lv_obj_set_pos(d, 26, 15);
     }
-    title(fl.screen, "Timeout", 124, &lv_font_montserrat_12, c_dim);
+    title(fl.screen, "Timeout", 143, &lv_font_montserrat_12, c_dim);
     static const char *chip_names[4] = {"15 s", "30 s", "1 min", "5 min"};
     for (int i = 0; i < 4; i++) {
-        lv_obj_t *c = box(fl.screen, 10 + i * 76, 140, 70, 30);
+        lv_obj_t *c = box(fl.screen, 10 + i * 76, 158, 70, 22);
         lv_obj_set_style_radius(c, 6, 0);
         lv_obj_set_style_border_width(c, 2, 0);
         lv_obj_set_clickable(c, true);
@@ -1067,8 +1072,8 @@ void fill_forget()
 
 void update_screen_settings()
 {
-    int mode = static_cast<int>(settings::screen_normal()); // bright, dim, dark
-    for (int i = 0; i < 3; i++) {
+    int mode = static_cast<int>(settings::screen_normal()); // bright, dim, dark, breathe
+    for (int i = 0; i < 4; i++) {
         bool on = i == mode;
         lv_obj_set_style_border_color(fl.opts[i], on ? c_blue : c_faint, 0);
         lv_obj_set_style_bg_color(fl.opts[i], c_blue, 0);
@@ -1281,6 +1286,7 @@ void power_off_now()
             lv_screen_load(black);
             lv_refr_now(core2::display());
             axp192::backlight(axp192::Backlight::off);
+            axp192::green_led(0);
             axp192::power_off();
         },
         1200, nullptr);
@@ -1407,10 +1413,37 @@ void update_light(int64_t now)
     case settings::ScreenNormal::bright: set_backlight(axp192::Backlight::full); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::dim); break;
     case settings::ScreenNormal::dark:
-    case settings::ScreenNormal::breathe: // not on the Core2 (board::screen_breathe)
+    case settings::ScreenNormal::breathe:
         set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::off);
         break;
     }
+}
+
+// In screen_normal breathe, the green LED breathes while the screen is
+// off, whatever turned it off, as the StickC's red: the ATOM's breath, 8 s
+// from bright down to 15%, at the LED's full: it's much dimmer than the
+// StickC's red, and 8% was hard to see.
+constexpr uint32_t breathe_ms = 8000;
+constexpr float breathe_low = 0.15f;
+constexpr float green_peak = 1.0f;
+
+void breathe_green(lv_timer_t *)
+{
+    static int64_t since = -1; // when the screen went off
+    bool on = is_started && !installing && settings::screen_normal() == settings::ScreenNormal::breathe &&
+              screen_is_off();
+    if (!on) {
+        since = -1;
+        axp192::green_led(0);
+        return;
+    }
+    int64_t now = now_ms();
+    if (since < 0) {
+        since = now;
+    }
+    float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
+    float level = breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
+    axp192::green_led(static_cast<uint8_t>(level * green_peak * 255 + 0.5f));
 }
 
 // ---- the timer ----
@@ -1616,6 +1649,7 @@ void start()
 
     wake();
     lv_timer_create(tick, tick_ms, nullptr);
+    lv_timer_create(breathe_green, 40, nullptr);
     lv_timer_create(splash_tick, 100, nullptr);
     core2::unlock();
 }

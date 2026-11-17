@@ -310,6 +310,7 @@ happening, and a timeout:
 | `bright` | Nothing: the screen stays at full brightness |
 | `dim` (the default) | The backlight drops low (provisional: 25%). A touch brings it back, and also does what it touched, since you can see it |
 | `dark` | The screen goes off. The first touch only wakes it, and the next one acts |
+| `breathe` | As `dark`, and the green LED breathes while the screen is off, so the Core2 can be told from one that's off |
 
 `screen_timeout_seconds` is how long the screen stays at full brightness
 after the last touch or wake: 30 by default, the same on battery and on
@@ -331,6 +332,13 @@ mode, and the next short press, or a touch, wakes it. In `bright` it then
 stays on. Holding it 6 s cuts the power in the AXP192, whatever the
 firmware is doing (see [The buttons](#the-buttons)).
 
+**The green LED** is the AXP192's GPIO1, on the chip's PWM. It's off,
+except in `breathe`: while the screen is off, whatever turned it off
+(the timeout or the power button), it breathes as the ATOM Lite's LED
+does in its `breathe`, 8 s a breath, starting bright, from full down to
+15%. It goes off when the screen wakes, and stays off during the splash,
+the installing screen and power off.
+
 **What wakes it on its own,** and restarts the timeout:
 
 - an error;
@@ -340,9 +348,10 @@ firmware is doing (see [The buttons](#the-buttons)).
 
 Frames don't wake it. A flow keeps it lit until the flow ends.
 
-**Screen settings,** from the Screen row on System: the three modes, each
+**Screen settings,** from the Screen row on System: the four modes, each
 with a line saying what it does, and the four timeouts, with the timeout
-greyed out for `bright`. A tap takes effect at once. **Back** (left)
+greyed out for `bright`. The modes' rows are 30 px and the timeouts 22 px
+tall, so all four modes fit above the soft keys. A tap takes effect at once. **Back** (left)
 returns to System.
 
 ## Boot

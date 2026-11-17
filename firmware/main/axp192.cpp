@@ -34,6 +34,7 @@ constexpr uint8_t REG_CHARGE_I = 0x7A;     // 13 bits, 0.5 mA
 constexpr uint8_t REG_DISCHARGE_I = 0x7C;  // 13 bits, 0.5 mA
 constexpr uint8_t REG_ADC_EN_1 = 0x82;
 constexpr uint8_t REG_GPIO1_CTRL = 0x92;   // the green power LED
+constexpr uint8_t REG_PWM1_DUTY_2 = 0x9a;  // GPIO1's PWM high time, of 0x99's 255
 constexpr uint8_t REG_GPIO2_CTRL = 0x93;   // the speaker amplifier's enable
 constexpr uint8_t REG_GPIO012_DATA = 0x94;
 constexpr uint8_t REG_GPIO34_CTRL = 0x95;  // GPIO4: the screen's reset
@@ -182,6 +183,15 @@ bool init(i2c_master_bus_handle_t bus)
     ESP_LOGI(TAG, "rails set: power 0x%02x, charge 0x%02x, outputs 0x%02x, GPIO0 0x%02x", read8(REG_POWER_STATUS),
              read8(REG_CHARGE_STATUS), read8(REG_OUTPUTS), read8(0x90));
     return true;
+}
+
+void green_led(uint8_t level)
+{
+    // The LED lights while GPIO1 is low: full high time is off (init).
+    static int shown = 0;
+    if (level != shown && write8(REG_PWM1_DUTY_2, static_cast<uint8_t>(255 - level))) {
+        shown = level;
+    }
 }
 
 void backlight(Backlight b)

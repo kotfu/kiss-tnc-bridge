@@ -24,6 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
+- `screen_normal` `breathe`, on the Core2 and the StickC Plus SE: the
+  screen goes dark after the timeout, and an LED breathes while it's off,
+  so the device can be told from one that's off. The Core2 breathes its
+  green LED, and has Breathe in its screen settings; the StickC breathes
+  its red LED ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 
 ### Changed
 

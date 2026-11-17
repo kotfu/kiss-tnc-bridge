@@ -190,7 +190,7 @@ A is **Settings**, which opens a list:
 ## The screen
 
 The Core2's modes and timeout, with the same settings, `screen_normal`
-(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default
+(`bright`, `dim`, `dark`, `breathe`) and `screen_timeout_seconds`, 30 s by default
 (see [The screen](core2-ui.md#the-screen) on the Core2). They're
 [device settings](control-api.md#devicesettingsget-and-devicesettingsset),
 in place of the ATOM's `led_*` settings the StickC had through firmware
@@ -213,6 +213,11 @@ turn the screen off and on by hand.
   A's double press and hold do what they do whatever the screen shows.
 - **The power button:** a short press turns the screen off at once, in
   any mode, and the next short press, or A or B, wakes it.
+- **`breathe`** is `dark`, with the red LED breathing while the screen
+  is off, whatever turned it off, so the StickC can be told from one
+  that's off: the ATOM's breath, 8 s, starting bright, down to 15%, at a
+  peak of 8% of the LED's full (the Core2 breathes its green LED at
+  full). Otherwise the red LED is off.
 - **What wakes it on its own,** as on the Core2: a new error, the radio
   connecting or disconnecting, an app connecting or disconnecting, and
   `device.identify`.
