@@ -1406,7 +1406,10 @@ void update_light(int64_t now)
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: set_backlight(axp192::Backlight::full); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::dim); break;
-    case settings::ScreenNormal::dark: set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::off); break;
+    case settings::ScreenNormal::dark:
+    case settings::ScreenNormal::breathe: // not on the Core2 (board::screen_breathe)
+        set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::off);
+        break;
     }
 }
 

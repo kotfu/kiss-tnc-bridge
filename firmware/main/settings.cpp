@@ -51,6 +51,7 @@ const char *screen_normal_name(ScreenNormal v)
     switch (v) {
     case ScreenNormal::bright: return "bright";
     case ScreenNormal::dark: return "dark";
+    case ScreenNormal::breathe: return "breathe";
     default: return "dim";
     }
 }
@@ -63,6 +64,8 @@ bool parse_screen_normal(const char *s, ScreenNormal &out)
         out = ScreenNormal::dim;
     } else if (strcmp(s, "dark") == 0) {
         out = ScreenNormal::dark;
+    } else if (board::screen_breathe && strcmp(s, "breathe") == 0) {
+        out = ScreenNormal::breathe;
     } else {
         return false;
     }
@@ -160,7 +163,7 @@ void load()
         if (nvs_get_u8(h, key_brightness, &u8) == ESP_OK && u8 <= 100) {
             brightness = u8;
         }
-        if (nvs_get_u8(h, key_screen_normal, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(ScreenNormal::dark)) {
+        if (nvs_get_u8(h, key_screen_normal, &u8) == ESP_OK && u8 <= static_cast<uint8_t>(board::screen_breathe ? ScreenNormal::breathe : ScreenNormal::dark)) {
             screen = static_cast<ScreenNormal>(u8);
         }
         if (nvs_get_u16(h, key_screen_timeout, &u16) == ESP_OK && u16 >= wake_min && u16 <= wake_max) {
@@ -247,7 +250,8 @@ bool apply(const cJSON *obj, std::string &error, std::vector<std::string> &reboo
             name_to_default = false;
         } else if (board::screen_settings && strcmp(key, "screen_normal") == 0) {
             if (!cJSON_IsString(item) || !parse_screen_normal(item->valuestring, new_screen)) {
-                error = "screen_normal must be \"bright\", \"dim\" or \"dark\"";
+                error = board::screen_breathe ? "screen_normal must be \"bright\", \"dim\", \"dark\" or \"breathe\""
+                                              : "screen_normal must be \"bright\", \"dim\" or \"dark\"";
                 return false;
             }
         } else if (board::screen_settings && strcmp(key, "screen_timeout_seconds") == 0) {

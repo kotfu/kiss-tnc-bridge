@@ -16,7 +16,9 @@ enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 
 // A board with a screen (board::screen) has these in place of the LED's
 // (docs/core2-ui.md, The screen). Stored in NVS: add new ones at the end.
-enum class ScreenNormal : uint8_t { bright, dim, dark };
+// breathe is dark with a light breathing while the screen is off, on a
+// board with one (board::screen_breathe).
+enum class ScreenNormal : uint8_t { bright, dim, dark, breathe };
 
 // Reads the settings from NVS, with defaults for any that aren't there.
 void load();

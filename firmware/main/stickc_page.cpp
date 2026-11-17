@@ -12,6 +12,7 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -20,6 +21,7 @@
 #include "axp192.h"
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
+#include "driver/ledc.h"
 #include "driver/spi_master.h"
 #include "errors.h"
 #include "esp_app_desc.h"
@@ -124,7 +126,8 @@ void update_light(int64_t now)
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: set_backlight(brightness); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? brightness : dim_brightness); break;
-    case settings::ScreenNormal::dark: set_backlight(awake ? brightness : 0); break;
+    case settings::ScreenNormal::dark:
+    case settings::ScreenNormal::breathe: set_backlight(awake ? brightness : 0); break;
     }
 }
 
@@ -410,6 +413,7 @@ std::string screen_line()
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: return "Bright";
     case settings::ScreenNormal::dark: return "Dark after " + after;
+    case settings::ScreenNormal::breathe: return "Breathe after " + after;
     default: return "Dim after " + after;
     }
 }
@@ -744,13 +748,73 @@ void start_b()
     gpio_config(&cfg);
 }
 
-void red_led_off()
+// ---- the red LED ----
+// In screen_normal breathe, the red LED breathes while the screen is off,
+// whatever turned it off, so the StickC can be told from one that's off.
+// The ATOM's breath: 8 s, starting bright, down to 15% (ui.cpp).
+constexpr uint32_t breathe_ms = 8000;
+constexpr float breathe_low = 0.15f;
+constexpr float red_peak = 0.08f; // of full: half was too bright
+constexpr uint32_t red_full = (1 << 10) - 1;
+bool red_ready = false;
+uint32_t red_duty = 1;
+
+void set_red(uint32_t duty)
 {
+    if (!red_ready || duty == red_duty) {
+        return;
+    }
+    red_duty = duty;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+}
+
+// Off, on PWM. Without PWM the pin is held high, which is off.
+void start_red_led()
+{
+    ledc_timer_config_t t = {};
+    t.speed_mode = LEDC_LOW_SPEED_MODE;
+    t.duty_resolution = LEDC_TIMER_10_BIT;
+    t.timer_num = LEDC_TIMER_0;
+    t.freq_hz = 5000;
+    t.clk_cfg = LEDC_AUTO_CLK;
+    ledc_channel_config_t c = {};
+    c.gpio_num = pin_red_led;
+    c.speed_mode = LEDC_LOW_SPEED_MODE;
+    c.channel = LEDC_CHANNEL_0;
+    c.timer_sel = LEDC_TIMER_0;
+    c.duty = 0;
+    c.flags.output_invert = 1; // active low
+    if (ledc_timer_config(&t) == ESP_OK && ledc_channel_config(&c) == ESP_OK) {
+        red_ready = true;
+        set_red(0);
+        return;
+    }
+    ESP_LOGE(TAG, "the red LED's PWM didn't start: it stays off");
     gpio_config_t cfg = {};
     cfg.pin_bit_mask = 1ULL << pin_red_led;
     cfg.mode = GPIO_MODE_OUTPUT;
     gpio_config(&cfg);
     gpio_set_level(pin_red_led, 1);
+}
+
+void breathe_red(lv_timer_t *)
+{
+    static int64_t since = -1; // when the screen went off
+    bool on = is_started && !installing && settings::screen_normal() == settings::ScreenNormal::breathe &&
+              screen_is_off();
+    if (!on) {
+        since = -1;
+        set_red(0);
+        return;
+    }
+    int64_t now = now_ms();
+    if (since < 0) {
+        since = now;
+    }
+    float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
+    float level = breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
+    set_red(static_cast<uint32_t>(level * red_peak * red_full));
 }
 
 bool start_power()
@@ -847,6 +911,7 @@ bool start_screen()
     start_b();
     lv_timer_create(read_b, 20, nullptr);
     lv_timer_create(move_glint, 150, nullptr);
+    lv_timer_create(breathe_red, 40, nullptr);
     lvgl_port_unlock();
     return true;
 }
@@ -858,7 +923,7 @@ void init()
     if (ready) {
         return;
     }
-    red_led_off();
+    start_red_led();
     if (!start_power() || !start_screen()) {
         ESP_LOGE(TAG, "the screen didn't start: the device runs without it");
         return;

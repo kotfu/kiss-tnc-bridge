@@ -16,7 +16,7 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."
-    PRIV_REQUIRES nvs_flash esp_driver_gpio esp_driver_rmt esp_driver_uart esp_driver_i2c
+    PRIV_REQUIRES nvs_flash esp_driver_gpio esp_driver_rmt esp_driver_uart esp_driver_i2c esp_driver_ledc
                   esp_driver_spi esp_lcd esp_timer app_update esp_app_format bootloader_support
                   mbedtls bt
 )
