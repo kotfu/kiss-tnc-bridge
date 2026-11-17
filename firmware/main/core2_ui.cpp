@@ -10,7 +10,6 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <map>
@@ -33,6 +32,7 @@
 #include "phones.h"
 #include "radio.h"
 #include "settings.h"
+#include "status_led.h"
 #include "storage.h"
 #include "uptime.h"
 
@@ -162,8 +162,11 @@ int64_t step_since = 0;
 // changes the light.
 bool installing = false;
 
+// Power off was chosen: the green LED goes off, and stays off.
+bool powering_off = false;
+
 enum class Page : uint8_t { bridge, tnc, system };
-enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, power_off, forget, reset };
+enum class Flow : uint8_t { none, pairing, paired, pair_failed, screen_settings, led_settings, power_off, forget, reset };
 Page page = Page::bridge;
 Flow flow = Flow::none;
 int64_t flow_since = 0;
@@ -672,10 +675,11 @@ void update_tnc(const radio::View &v, const std::vector<errors::Item> &errs)
 struct {
     lv_obj_t *errs;
     lv_obj_t *rows;
-    lv_obj_t *battery, *power, *uptime, *last_run, *firmware, *name, *bluetooth, *screen;
+    lv_obj_t *battery, *power, *uptime, *last_run, *firmware, *name, *bluetooth, *screen, *led;
 } sy;
 
 void open_screen_settings();
+void open_led_settings();
 
 void build_system(lv_obj_t *pg)
 {
@@ -693,7 +697,9 @@ void build_system(lv_obj_t *pg)
     lv_obj_set_style_pad_row(sy.errs, 6, 0);
     show(sy.errs, false);
 
-    auto row = [&](const char *key, bool tappable) {
+    // A row, or with open a button that opens a flow.
+    auto row = [&](const char *key, void (*open)()) {
+        bool tappable = open != nullptr;
         lv_obj_t *r = lv_obj_create(pg);
         lv_obj_remove_style_all(r);
         lv_obj_set_size(r, W - 20, 17);
@@ -707,7 +713,9 @@ void build_system(lv_obj_t *pg)
             lv_obj_set_style_border_width(r, 2, 0);
             lv_obj_set_style_border_color(r, c_faint, 0);
             lv_obj_set_clickable(r, true);
-            lv_obj_add_event_cb(r, [](lv_event_t *) { open_screen_settings(); }, LV_EVENT_CLICKED, nullptr);
+            lv_obj_add_event_cb(
+                r, [](lv_event_t *e) { reinterpret_cast<void (*)()>(lv_event_get_user_data(e))(); }, LV_EVENT_CLICKED,
+                reinterpret_cast<void *>(open));
             lv_obj_t *more = label(r, &lv_font_montserrat_20, c_fg, ">");
             lv_obj_align(more, LV_ALIGN_RIGHT_MID, -10, 0);
             x = 10;
@@ -718,14 +726,15 @@ void build_system(lv_obj_t *pg)
         lv_obj_align(v, LV_ALIGN_LEFT_MID, x + 72, 0);
         return v;
     };
-    sy.battery = row("Battery", false);
-    sy.power = row("Power", false);
-    sy.uptime = row("Uptime", false);
-    sy.last_run = row("Last run", false); // how long the last run lasted (#23)
-    sy.firmware = row("Firmware", false);
-    sy.name = row("Name", false);
-    sy.bluetooth = row("Bluetooth", false);
-    sy.screen = row("Screen", true);
+    sy.battery = row("Battery", nullptr);
+    sy.power = row("Power", nullptr);
+    sy.uptime = row("Uptime", nullptr);
+    sy.last_run = row("Last run", nullptr); // how long the last run lasted (#23)
+    sy.firmware = row("Firmware", nullptr);
+    sy.name = row("Name", nullptr);
+    sy.bluetooth = row("Bluetooth", nullptr);
+    sy.screen = row("Screen", open_screen_settings);
+    sy.led = row("LED", open_led_settings);
 }
 
 std::string screen_line()
@@ -735,7 +744,6 @@ std::string screen_line()
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: return "Bright";
     case settings::ScreenNormal::dark: return "Dark after " + after;
-    case settings::ScreenNormal::breathe: return "Breathe after " + after;
     default: return "Dim after " + after;
     }
 }
@@ -784,6 +792,7 @@ void update_system(const std::vector<errors::Item> &errs, int64_t now)
         set_text(sy.bluetooth, b);
     }
     set_text(sy.screen, screen_line());
+    set_text(sy.led, status_led::line());
 }
 
 // ---- flows ----
@@ -794,7 +803,8 @@ struct {
     lv_obj_t *rows[5], *row_name[5], *row_desc[5], *row_signal[5];
     lv_obj_t *paired, *paired_text;
     lv_obj_t *failed, *failed_why;
-    lv_obj_t *screen, *opts[4], *chips[4];
+    lv_obj_t *screen, *opts[3], *chips[4];
+    lv_obj_t *led, *led_when[3], *led_pattern[3], *led_blink[2];
     lv_obj_t *power_off;
     lv_obj_t *forget, *forget_title, *forget_text;
     lv_obj_t *reset, *reset_circle, *reset_bar;
@@ -856,7 +866,31 @@ void apply_setting(const char *key, cJSON *value)
 }
 
 void update_screen_settings();
+void update_led_settings();
 void choose_row(int i);
+
+// A chip to tap, 30 px tall, for one value of a setting: i is the
+// value's index, as the event's user data.
+lv_obj_t *chip(lv_obj_t *parent, int x, int y, int w, const char *text, lv_event_cb_t cb, int i)
+{
+    lv_obj_t *c = box(parent, x, y, w, 30);
+    lv_obj_set_style_radius(c, 6, 0);
+    lv_obj_set_style_border_width(c, 2, 0);
+    lv_obj_set_clickable(c, true);
+    lv_obj_add_event_cb(c, cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    lv_obj_t *l = label(c, &lv_font_montserrat_12, c_dim, text);
+    lv_obj_center(l);
+    return c;
+}
+
+// A chip shows whether it's the value set; faded, it has no effect now.
+void set_chip(lv_obj_t *c, bool on, bool faded = false)
+{
+    lv_obj_set_style_border_color(c, on ? c_blue : c_faint, 0);
+    lv_obj_set_style_bg_color(c, lv_color_hex(0x0d2a44), 0);
+    lv_obj_set_style_bg_opa(c, on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_obj_set_style_opa(c, faded ? LV_OPA_40 : LV_OPA_COVER, 0);
+}
 
 void build_flows()
 {
@@ -926,14 +960,11 @@ void build_flows()
 
     fl.screen = flow_screen();
     title(fl.screen, "Screen", 2);
-    // Four modes in rows of 30 px, so the timeout's chips fit above the
-    // soft keys.
-    static const char *names[4] = {"Bright", "Dim", "Dark", "Breathe"};
-    static const char *lines[4] = {"Always on", "Dims after the timeout; a touch brightens it",
-                                   "Off after the timeout; a touch wakes it",
-                                   "Dark, and the green LED breathes while it's off"};
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *o = box(fl.screen, 10, 20 + i * 30, W - 20, 30);
+    static const char *names[3] = {"Bright", "Dim", "Dark"};
+    static const char *lines[3] = {"Always on", "Dims after the timeout; a touch brightens it",
+                                   "Dark after the timeout; a touch wakes it"};
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *o = box(fl.screen, 10, 20 + i * 33, W - 20, 33);
         lv_obj_set_style_border_side(o, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_set_style_border_width(o, 1, 0);
         lv_obj_set_style_border_color(o, c_line, 0);
@@ -941,38 +972,59 @@ void build_flows()
         lv_obj_add_event_cb(
             o,
             [](lv_event_t *e) {
-                static const char *vals[4] = {"bright", "dim", "dark", "breathe"};
+                static const char *vals[3] = {"bright", "dim", "dark"};
                 apply_setting("screen_normal", cJSON_CreateString(vals[(int)(intptr_t)lv_event_get_user_data(e)]));
                 update_screen_settings();
             },
             LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *dot = box(o, 0, 7, 16, 16);
+        lv_obj_t *dot = box(o, 0, 8, 16, 16);
         lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
         lv_obj_set_style_border_width(dot, 2, 0);
         fl.opts[i] = dot;
         lv_obj_t *n = label(o, &lv_font_montserrat_14, c_fg, names[i]);
-        lv_obj_set_pos(n, 26, 0);
+        lv_obj_set_pos(n, 26, 1);
         lv_obj_t *d = label(o, &lv_font_montserrat_12, c_dim, lines[i]);
-        lv_obj_set_pos(d, 26, 15);
+        lv_obj_set_pos(d, 26, 17);
     }
-    title(fl.screen, "Timeout", 143, &lv_font_montserrat_12, c_dim);
+    title(fl.screen, "Timeout", 124, &lv_font_montserrat_12, c_dim);
     static const char *chip_names[4] = {"15 s", "30 s", "1 min", "5 min"};
     for (int i = 0; i < 4; i++) {
-        lv_obj_t *c = box(fl.screen, 10 + i * 76, 158, 70, 22);
-        lv_obj_set_style_radius(c, 6, 0);
-        lv_obj_set_style_border_width(c, 2, 0);
-        lv_obj_set_clickable(c, true);
-        lv_obj_add_event_cb(
-            c,
-            [](lv_event_t *e) {
-                apply_setting("screen_timeout_seconds",
-                              cJSON_CreateNumber(timeouts[(int)(intptr_t)lv_event_get_user_data(e)]));
-                update_screen_settings();
-            },
-            LV_EVENT_CLICKED, (void *)(intptr_t)i);
-        lv_obj_t *l = label(c, &lv_font_montserrat_12, c_dim, chip_names[i]);
-        lv_obj_center(l);
-        fl.chips[i] = c;
+        fl.chips[i] = chip(fl.screen, 10 + i * 76, 140, 70, chip_names[i], [](lv_event_t *e) {
+            apply_setting("screen_timeout_seconds", cJSON_CreateNumber(timeouts[(int)(intptr_t)lv_event_get_user_data(e)]));
+            update_screen_settings();
+        }, i);
+    }
+
+    // The green LED's three settings, a row of chips each. While this is
+    // open the LED shows what they make, as if the screen were dark.
+    fl.led = flow_screen();
+    title(fl.led, "LED", 2);
+    constexpr int led_chip_w = 96;
+    title(fl.led, "When", 20, &lv_font_montserrat_12, c_dim);
+    static const char *when_names[3] = {"Always", "Screen dark", "Never"};
+    for (int i = 0; i < 3; i++) {
+        fl.led_when[i] = chip(fl.led, 10 + i * (led_chip_w + 6), 35, led_chip_w, when_names[i], [](lv_event_t *e) {
+            static const char *vals[3] = {"always", "screen_dark", "never"};
+            apply_setting("led_when", cJSON_CreateString(vals[(int)(intptr_t)lv_event_get_user_data(e)]));
+            update_led_settings();
+        }, i);
+    }
+    title(fl.led, "Pattern", 72, &lv_font_montserrat_12, c_dim);
+    static const char *pattern_names[3] = {"Bright", "Dim", "Breathe"};
+    for (int i = 0; i < 3; i++) {
+        fl.led_pattern[i] = chip(fl.led, 10 + i * (led_chip_w + 6), 87, led_chip_w, pattern_names[i], [](lv_event_t *e) {
+            static const char *vals[3] = {"bright", "dim", "breathe"};
+            apply_setting("led_pattern", cJSON_CreateString(vals[(int)(intptr_t)lv_event_get_user_data(e)]));
+            update_led_settings();
+        }, i);
+    }
+    title(fl.led, "Blink on activity", 124, &lv_font_montserrat_12, c_dim);
+    static const char *blink_names[2] = {"On", "Off"};
+    for (int i = 0; i < 2; i++) {
+        fl.led_blink[i] = chip(fl.led, 10 + i * (led_chip_w + 6), 139, led_chip_w, blink_names[i], [](lv_event_t *e) {
+            apply_setting("led_activity_blink", cJSON_CreateBool((int)(intptr_t)lv_event_get_user_data(e) == 0));
+            update_led_settings();
+        }, i);
     }
 
     fl.power_off = flow_screen();
@@ -1072,8 +1124,8 @@ void fill_forget()
 
 void update_screen_settings()
 {
-    int mode = static_cast<int>(settings::screen_normal()); // bright, dim, dark, breathe
-    for (int i = 0; i < 4; i++) {
+    int mode = static_cast<int>(settings::screen_normal()); // bright, dim, dark
+    for (int i = 0; i < 3; i++) {
         bool on = i == mode;
         lv_obj_set_style_border_color(fl.opts[i], on ? c_blue : c_faint, 0);
         lv_obj_set_style_bg_color(fl.opts[i], c_blue, 0);
@@ -1082,13 +1134,22 @@ void update_screen_settings()
     uint16_t t = settings::screen_timeout_seconds();
     bool bright = settings::screen_normal() == settings::ScreenNormal::bright;
     for (int i = 0; i < 4; i++) {
-        bool on = timeouts[i] == t;
-        lv_obj_set_style_border_color(fl.chips[i], on ? c_blue : c_faint, 0);
-        lv_obj_set_style_bg_color(fl.chips[i], lv_color_hex(0x0d2a44), 0);
-        lv_obj_set_style_bg_opa(fl.chips[i], on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
-        lv_obj_set_style_opa(fl.chips[i], bright ? LV_OPA_40 : LV_OPA_COVER, 0);
+        set_chip(fl.chips[i], timeouts[i] == t, bright);
     }
     update_tabs();
+}
+
+void update_led_settings()
+{
+    int when = static_cast<int>(settings::led_when()); // always, screen_dark, never
+    int pattern = static_cast<int>(settings::led_pattern()); // bright, dim, breathe
+    bool never = settings::led_when() == settings::LedWhen::never;
+    for (int i = 0; i < 3; i++) {
+        set_chip(fl.led_when[i], i == when);
+        set_chip(fl.led_pattern[i], i == pattern, never);
+    }
+    set_chip(fl.led_blink[0], settings::led_activity_blink(), never);
+    set_chip(fl.led_blink[1], !settings::led_activity_blink(), never);
 }
 
 void page_keys();
@@ -1213,6 +1274,7 @@ void set_flow(Flow f)
     show(fl.paired, f == Flow::paired);
     show(fl.failed, f == Flow::pair_failed);
     show(fl.screen, f == Flow::screen_settings);
+    show(fl.led, f == Flow::led_settings);
     show(fl.power_off, f == Flow::power_off);
     show(fl.forget, f == Flow::forget);
     show(fl.reset, f == Flow::reset);
@@ -1241,6 +1303,10 @@ void set_flow(Flow f)
         set_keys({"Back", 0, [] { set_flow(Flow::none); }});
         update_screen_settings();
         break;
+    case Flow::led_settings:
+        set_keys({"Back", 0, [] { set_flow(Flow::none); }});
+        update_led_settings();
+        break;
     case Flow::power_off:
         set_keys({"Cancel", 0, [] { set_flow(Flow::none); }}, {}, {"Power off", 3, [] { power_off_now(); }});
         break;
@@ -1261,11 +1327,13 @@ void set_flow(Flow f)
 }
 
 void open_screen_settings() { set_flow(Flow::screen_settings); }
+void open_led_settings() { set_flow(Flow::led_settings); }
 
 // "Powering off" with a spinner for a moment, then black with the
 // backlight off, so nothing lingers while the power falls.
 void power_off_now()
 {
+    powering_off = true;
     set_keys(); // nothing more to press
     lv_obj_t *scr = lv_obj_create(nullptr);
     fill(scr, c_bg);
@@ -1412,38 +1480,22 @@ void update_light(int64_t now)
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: set_backlight(axp192::Backlight::full); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::dim); break;
-    case settings::ScreenNormal::dark:
-    case settings::ScreenNormal::breathe:
-        set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::off);
-        break;
+    case settings::ScreenNormal::dark: set_backlight(awake ? axp192::Backlight::full : axp192::Backlight::off); break;
     }
 }
 
-// In screen_normal breathe, the green LED breathes while the screen is
-// off, whatever turned it off, as the StickC's red: the ATOM's breath, 8 s
-// from bright down to 15%, at the LED's full: it's much dimmer than the
-// StickC's red, and 8% was hard to see.
-constexpr uint32_t breathe_ms = 8000;
-constexpr float breathe_low = 0.15f;
-constexpr float green_peak = 1.0f;
+// The green LED, from its settings (status_led.cpp), as the StickC's
+// red. Bright is the LED's full: it's much dimmer than the StickC's red,
+// and 8% was hard to see. While its settings are open it shows what they
+// make, as if the screen were dark.
+constexpr status_led::Levels green_levels{1.0f, 0.25f};
 
-void breathe_green(lv_timer_t *)
+void update_green(lv_timer_t *)
 {
-    static int64_t since = -1; // when the screen went off
-    bool on = is_started && !installing && settings::screen_normal() == settings::ScreenNormal::breathe &&
-              screen_is_off();
-    if (!on) {
-        since = -1;
-        axp192::green_led(0);
-        return;
-    }
-    int64_t now = now_ms();
-    if (since < 0) {
-        since = now;
-    }
-    float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
-    float level = breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
-    axp192::green_led(static_cast<uint8_t>(level * green_peak * 255 + 0.5f));
+    bool preview = flow == Flow::led_settings;
+    float level =
+        status_led::level(now_ms(), is_started && !installing && !powering_off, screen_is_off() || preview, green_levels);
+    axp192::green_led(static_cast<uint8_t>(level * 255 + 0.5f));
 }
 
 // ---- the timer ----
@@ -1649,7 +1701,7 @@ void start()
 
     wake();
     lv_timer_create(tick, tick_ms, nullptr);
-    lv_timer_create(breathe_green, 40, nullptr);
+    lv_timer_create(update_green, 40, nullptr);
     lv_timer_create(splash_tick, 100, nullptr);
     core2::unlock();
 }

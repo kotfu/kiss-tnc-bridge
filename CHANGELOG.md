@@ -24,16 +24,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
-- `screen_normal` `breathe`, on the Core2: the screen goes dark after
-  the timeout, and the green LED breathes while it's dark, so the Core2
-  can be told from one that's off. Breathe is in its screen settings
-  ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
-- The StickC Plus SE's red LED, with three settings: `led_when`
-  (`always`, `screen_dark` or `never`), `led_pattern` (`bright`, `dim`
-  or `breathe`) and `led_activity_blink`, a moment dark on each frame to
-  or from the radio. By default it breathes while the screen is dark, and
-  blinks, so the StickC can be told from one that's off. Its System page
-  shows them in place of the device's Bluetooth address
+- A status LED on the Core2 (its green) and the StickC Plus SE (its
+  red), with three settings: `led_when` (`always`, `screen_dark` or
+  `never`), `led_pattern` (`bright`, `dim` or `breathe`) and
+  `led_activity_blink`, a moment dark on each frame to or from the radio.
+  By default it breathes while the screen is dark, and blinks, so the
+  device can be told from one that's off. The System page shows them; on
+  the Core2, tap the LED row to change them, and the LED shows what they
+  make while they're open. The StickC's System page shows them in place
+  of the device's Bluetooth address
   ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 
 ### Changed

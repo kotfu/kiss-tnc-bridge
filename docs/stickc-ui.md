@@ -228,8 +228,8 @@ page's last row:
 - **Full is too bright:** half was, so `bright` is 8%.
 - **It's off** through the start-up and installing screens.
 
-The Core2 doesn't have these settings yet: its green LED is
-`screen_normal`'s `breathe` (see [core2-ui.md](core2-ui.md#the-screen)).
+The Core2's green LED has the same settings, and they can be changed on
+the Core2 (see [The green LED](core2-ui.md#the-green-led)).
 
 ## Start-up
 

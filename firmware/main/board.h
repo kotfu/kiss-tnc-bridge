@@ -24,7 +24,6 @@ constexpr bool screen = false;
 
 // The LED's settings (led_*), not the screen's.
 constexpr bool screen_settings = false;
-constexpr bool screen_breathe = false;
 constexpr bool status_led = false;
 
 #elif CONFIG_KTB_BOARD_STICKC_PLUS_SE
@@ -47,9 +46,6 @@ constexpr bool screen = false;
 // page and changed from a management app (stickc_page.cpp).
 constexpr bool screen_settings = true;
 
-// No breathe in screen_normal: the red LED has its own settings.
-constexpr bool screen_breathe = false;
-
 // The red LED (GPIO10) and its settings, led_when, led_pattern and
 // led_activity_blink, so a StickC with its screen dark can be told from
 // one that's off (stickc_page.cpp).
@@ -71,13 +67,9 @@ constexpr bool screen = true;
 // The screen's settings (screen_*), not the LED's.
 constexpr bool screen_settings = true;
 
-// screen_normal's breathe: dark, with the green LED (the AXP192's GPIO1)
-// breathing while the screen is off.
-constexpr bool screen_breathe = true;
-
-// Not yet the StickC's LED settings: the green LED is screen_normal's
-// breathe.
-constexpr bool status_led = false;
+// The green LED (the AXP192's GPIO1) and its settings, as the StickC's
+// red (core2_ui.cpp).
+constexpr bool status_led = true;
 
 #else
 #error "A board in Kconfig.projbuild has no section in board.h"

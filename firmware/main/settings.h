@@ -14,14 +14,13 @@ namespace ktb::settings {
 // The values are stored in NVS: add new ones at the end.
 enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 
-// A board with a screen (board::screen) has these in place of the LED's
-// (docs/core2-ui.md, The screen). Stored in NVS: add new ones at the end.
-// breathe is dark with an LED breathing while the screen is off, on a
-// board with one (board::screen_breathe: the StickC's red, the Core2's
-// green).
-enum class ScreenNormal : uint8_t { bright, dim, dark, breathe };
+// A board with a screen (board::screen_settings) has these in place of
+// the LED's (docs/core2-ui.md, The screen). Stored in NVS: add new ones
+// at the end.
+enum class ScreenNormal : uint8_t { bright, dim, dark };
 
-// A board with a status LED (board::status_led: the StickC's red) has
+// A board with a status LED (board::status_led: the StickC's red, the
+// Core2's green) has
 // these three, each on its own: when it's lit, how, and whether it goes
 // dark for a moment on each frame to or from the radio. Stored in NVS:
 // add new ones at the end.

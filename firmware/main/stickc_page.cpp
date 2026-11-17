@@ -12,7 +12,6 @@
 #include <atomic>
 #include <cctype>
 #include <cstdio>
-#include <cmath>
 #include <cstring>
 #include <map>
 #include <string>
@@ -34,6 +33,7 @@
 #include "led.h"
 #include "phones.h"
 #include "radio.h"
+#include "status_led.h"
 #include "settings.h"
 #include "uptime.h"
 
@@ -125,8 +125,7 @@ void update_light(int64_t now)
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: set_backlight(brightness); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? brightness : dim_brightness); break;
-    case settings::ScreenNormal::dark:
-    case settings::ScreenNormal::breathe: set_backlight(awake ? brightness : 0); break;
+    case settings::ScreenNormal::dark: set_backlight(awake ? brightness : 0); break;
     }
 }
 
@@ -409,30 +408,10 @@ std::string screen_line()
     }
 }
 
-// The red LED's three settings on one line: "Breathe, screen dark,
-// blink", "Dim, always", "Off".
-std::string led_line()
-{
-    if (settings::led_when() == settings::LedWhen::never) {
-        return "Off";
-    }
-    std::string line;
-    switch (settings::led_pattern()) {
-    case settings::LedPattern::bright: line = "Bright"; break;
-    case settings::LedPattern::dim: line = "Dim"; break;
-    default: line = "Breathe"; break;
-    }
-    line += settings::led_when() == settings::LedWhen::always ? ", always" : ", screen dark";
-    if (settings::led_activity_blink()) {
-        line += ", blink";
-    }
-    return line;
-}
-
 void update_system(int64_t now)
 {
     set_text(sy.screen, screen_line());
-    set_text(sy.led, led_line());
+    set_text(sy.led, status_led::line());
     set_text(sy.uptime, duration(static_cast<uint32_t>(now / 1000)));
     int64_t last = uptime::last_seconds();
     set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
@@ -761,21 +740,10 @@ void start_b()
 }
 
 // ---- the red LED ----
-// Its settings, each on its own: led_when (always, while the screen is
-// dark, whether the timeout or the power button did it, or never),
-// led_pattern (bright, dim or breathe) and led_activity_blink, so the
-// StickC can be told from one that's off. The ATOM's breath: 8 s, starting bright, down to 15%
-// (ui.cpp), peaking at bright.
-constexpr uint32_t breathe_ms = 8000;
-constexpr float breathe_low = 0.15f;
-constexpr float red_bright = 0.08f; // of full: half was too bright
-constexpr float red_dim = 0.02f;
+// Its settings, as the Core2's green (status_led.cpp), so the StickC can
+// be told from one that's off. Full is too bright: half was.
+constexpr status_led::Levels red_levels{0.08f, 0.02f};
 constexpr uint32_t red_full = (1 << 10) - 1;
-// A blink: dark this long for a frame to or from the radio, then lit at
-// least as long before the next, so steady traffic flickers rather than
-// holding it dark. A frame in the lit gap blinks once the gap ends.
-constexpr int64_t blink_dark_ms = 100;
-constexpr int64_t blink_lit_ms = 100;
 bool red_ready = false;
 uint32_t red_duty = 1;
 
@@ -818,63 +786,10 @@ void start_red_led()
     gpio_set_level(pin_red_led, 1);
 }
 
-bool red_lit()
-{
-    if (!is_started || installing) {
-        return false;
-    }
-    switch (settings::led_when()) {
-    case settings::LedWhen::always: return true;
-    case settings::LedWhen::screen_dark: return screen_is_dark();
-    default: return false;
-    }
-}
-
 void update_red(lv_timer_t *)
 {
-    static int64_t since = -1;     // when it was lit, for the breath
-    static uint32_t frames = 0;    // radio::frames() last seen
-    static bool pending = false;   // a frame seen, not yet blinked for
-    static int64_t dark_until = 0; // a blink, until then
-    static int64_t next_blink = 0; // the earliest the next blink can start
-    int64_t now = now_ms();
-    uint32_t f = radio::frames();
-    if (f != frames) {
-        frames = f;
-        pending = true;
-    }
-    if (!red_lit()) {
-        since = -1;
-        pending = false;
-        dark_until = 0;
-        set_red(0);
-        return;
-    }
-    if (since < 0) {
-        since = now;
-    }
-    if (!settings::led_activity_blink()) {
-        pending = false;
-    } else if (pending && now >= next_blink) {
-        pending = false;
-        dark_until = now + blink_dark_ms;
-        next_blink = dark_until + blink_lit_ms;
-    }
-    if (now < dark_until) {
-        set_red(0);
-        return;
-    }
-    float level = red_bright;
-    switch (settings::led_pattern()) {
-    case settings::LedPattern::bright: break;
-    case settings::LedPattern::dim: level = red_dim; break;
-    case settings::LedPattern::breathe: {
-        float phase = static_cast<float>((now - since) % breathe_ms) / breathe_ms;
-        level *= breathe_low + (1 - breathe_low) * (0.5f + 0.5f * cosf(2 * static_cast<float>(M_PI) * phase));
-        break;
-    }
-    }
-    set_red(static_cast<uint32_t>(level * red_full));
+    float level = status_led::level(now_ms(), is_started && !installing, screen_is_dark(), red_levels);
+    set_red(static_cast<uint32_t>(level * red_full + 0.5f));
 }
 
 bool start_power()

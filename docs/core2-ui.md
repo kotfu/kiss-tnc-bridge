@@ -36,8 +36,8 @@ to watch it and set it up:
   selecting a BLE TNC (from 1.4, any on the BLE KISS service, as well as
   a TD-H9).
 - **System page:** battery, power, uptime, firmware, the name and
-  Bluetooth address, errors, the screen settings, reset (from 1.4) and
-  power off.
+  Bluetooth address, errors, the screen and LED settings, reset (from
+  1.4) and power off.
 - **The screen's modes** and its timeout, the Core2's version of the
   ATOM's `led_normal`.
 - **Reset** with a gesture at power-on, which never worked (see
@@ -102,7 +102,7 @@ measured on a Core2 (provisional). Long presses are kept for later: in
 
 ### Flows
 
-Pairing, the screen settings and power off are **flows**: a few screens
+Pairing, the screen and LED settings and power off are **flows**: a few screens
 that follow from one action. While one runs, the tabs are dimmed and
 don't respond, so a half-answered question can't get lost behind
 another tab, and the left key is always the way out. A flow keeps the
@@ -293,6 +293,7 @@ before a BLE TNC is forgotten when the BLE TNC is selected.
 | Name | The name KISS TNC apps see (`public_name`) |
 | Bluetooth | The device's Bluetooth address |
 | Screen | The [screen mode](#the-screen) and timeout, "Dim after 30 s", with ›: tap it for the screen settings |
+| LED | The [green LED's settings](#the-green-led), all three on one line, "Breathe, screen dark, blink", with ›: tap it for the LED settings |
 
 Errors, when there are any, come first, each with its whole message
 (see [Errors](#errors)), and the rows scroll below them.
@@ -309,8 +310,7 @@ happening, and a timeout:
 |---|---|
 | `bright` | Nothing: the screen stays at full brightness |
 | `dim` (the default) | The backlight drops low (provisional: 25%). A touch brings it back, and also does what it touched, since you can see it |
-| `dark` | The screen goes off. The first touch only wakes it, and the next one acts |
-| `breathe` | As `dark`, and the green LED breathes while the screen is off, so the Core2 can be told from one that's off |
+| `dark` | The screen goes dark. The first touch only wakes it, and the next one acts |
 
 `screen_timeout_seconds` is how long the screen stays at full brightness
 after the last touch or wake: 30 by default, the same on battery and on
@@ -319,8 +319,6 @@ the control API takes any number of seconds (provisional range). Both
 are device settings, beside `led_normal` and `led_wake_seconds` in
 [`device.settings`](control-api.md#devicesettingsget-and-devicesettingsset);
 a Core2 and a StickC Plus SE have these and an ATOM Lite has the LED's.
-The StickC's `screen_normal` has no `breathe`: its red LED has its own
-settings (see [The red LED](stickc-ui.md#the-red-led)).
 Brightness itself is fixed in 1.2.
 
 **The wake rule:** while the screen is dark, a touch anywhere, the
@@ -329,17 +327,10 @@ the finger stays down. That keeps a tap on a screen you can't see from
 pressing anything. Dim needs no such rule, since the screen is still
 readable.
 
-**The power button:** a short press turns the screen off at once, in any
+**The power button:** a short press turns the screen dark at once, in any
 mode, and the next short press, or a touch, wakes it. In `bright` it then
 stays on. Holding it 6 s cuts the power in the AXP192, whatever the
 firmware is doing (see [The buttons](#the-buttons)).
-
-**The green LED** is the AXP192's GPIO1, on the chip's PWM. It's off,
-except in `breathe`: while the screen is off, whatever turned it off
-(the timeout or the power button), it breathes as the ATOM Lite's LED
-does in its `breathe`, 8 s a breath, starting bright, from full down to
-15%. It goes off when the screen wakes, and stays off during the splash,
-the installing screen and power off.
 
 **What wakes it on its own,** and restarts the timeout:
 
@@ -350,11 +341,44 @@ the installing screen and power off.
 
 Frames don't wake it. A flow keeps it lit until the flow ends.
 
-**Screen settings,** from the Screen row on System: the four modes, each
-with a line saying what it does, and the four timeouts, with the timeout
-greyed out for `bright`. The modes' rows are 30 px and the timeouts 22 px
-tall, so all four modes fit above the soft keys. A tap takes effect at once. **Back** (left)
-returns to System.
+**Screen settings,** from the Screen row on System: the three modes,
+each with a line saying what it does, and the four timeouts, with the
+timeout greyed out for `bright`. A tap takes effect at once. **Back**
+(left) returns to System.
+
+## The green LED
+
+So a Core2 with its screen dark can be told from one that's off. It's
+the AXP192's GPIO1, on the chip's PWM, with the StickC's three settings
+(see [The red LED](stickc-ui.md#the-red-led)), device settings beside
+the screen's:
+
+| Setting | Values | Default |
+|---|---|---|
+| `led_when` | `always`; `screen_dark`, while the screen is dark, whether the timeout or the power button did it (dimmed isn't dark); `never` | `screen_dark` |
+| `led_pattern` | `bright`, the LED's full (it's much dimmer than the StickC's red); `dim`, 25% (provisional); `breathe`, the ATOM's breath, 8 s, starting bright, down to 15% | `breathe` |
+| `led_activity_blink` | `true` or `false`: dark for 100 ms on each frame to or from the radio, then lit at least 100 ms before the next | `true` |
+
+It stays off during the splash, the installing screen and power off.
+
+**LED settings,** from the LED row on System, a row of chips for each,
+30 px tall:
+
+```
+LED
+When
+ [ Always ] [ Screen dark ] [ Never ]
+Pattern
+ [ Bright ] [   Dim   ] [ Breathe ]
+Blink on activity
+ [   On   ] [   Off   ]
+```
+
+With `Never`, Pattern and Blink are greyed out. A tap takes effect at
+once. **While the LED settings are open, the LED shows what they make**,
+as if the screen were dark, so you can see what you pick; with `Never` it
+stays off. **Back** (left) returns to System, and the LED goes back to
+following the screen.
 
 ## Boot
 
