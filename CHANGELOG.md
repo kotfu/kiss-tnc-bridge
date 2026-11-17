@@ -24,24 +24,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#23](https://github.com/kotfu/kiss-tnc-bridge/issues/23)).
 - The control API's schema has the devices' `device.install_notice`,
   which the daemon refuses with `not_supported`.
-- A status LED on the Core2 (its green) and the StickC Plus SE (its
-  red), with three settings: `led_when` (`always`, `screen_dark` or
-  `never`), `led_pattern` (`bright`, `dim` or `breathe`) and
-  `led_activity_blink`, a moment dark on each frame to or from the radio.
-  By default it breathes while the screen is dark, and blinks, so the
-  device can be told from one that's off. The System page shows them; on
-  the Core2, tap the LED row to change them, and the LED shows what they
-  make while they're open. The StickC's System page shows them in place
-  of the device's Bluetooth address
+- A status LED on the Core2 (its green LED) and the StickC Plus SE (its
+  red), so a device with its screen dark can be told from one that's
+  off. Three settings: `led_when` (`always`, `screen_dark` or `never`),
+  `led_pattern` (`bright`, `dim` or `breathe`) and `led_activity_blink`
+  (`true` or `false`), dark for 100 ms on each frame to or from the
+  radio. By default it breathes while the screen is dark, and blinks.
+  The System page shows them on one line. On the Core2, tap the LED row
+  to change them, and the LED shows what they make while they're open;
+  on the StickC, they're changed from a management app or `ktbctl device
+  settings set`
   ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 
 ### Changed
 
 - The StickC Plus SE has the Core2's screen settings, `screen_normal`
-  and `screen_timeout_seconds`, in place of the ATOM's `led_normal`,
-  `led_wake_seconds` and `led_brightness`: the screen dims or goes dark
-  after the timeout, and its System page shows the setting. They're
-  changed from a management app or `ktbctl device settings set`
+  and `screen_timeout_seconds`, and the status LED's, in place of the
+  ATOM's `led_normal`, `led_wake_seconds` and `led_brightness`: the
+  screen dims or goes dark after the timeout, and its System page shows
+  the settings. They're changed from a management app or `ktbctl device
+  settings set`. Both sets of LED settings start `led_`, so a management
+  app tells them apart by the keys `device.settings.get` returns,
+  `led_normal` or `led_when`
   ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 
 ## 1.3.0 (14 November 2026)
