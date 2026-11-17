@@ -39,4 +39,7 @@ void show(Rgb color, uint8_t brightness, float level = 1.0f);
 void starting(const char *step);
 void started();
 
+// The StickC's installing screen, as the Core2's (ui::show_installing()).
+bool show_installing(const char *version, uint32_t timeout_ms);
+
 } // namespace ktb::led

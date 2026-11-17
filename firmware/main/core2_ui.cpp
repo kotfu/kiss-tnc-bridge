@@ -55,7 +55,9 @@ const lv_color_t c_red = lv_color_hex(0xff5252);
 const lv_color_t c_blue = lv_color_hex(0x2196f3);
 const lv_color_t c_banner = lv_color_hex(0x3a1214);
 const lv_color_t c_banner_text = lv_color_hex(0xffb4b4);
-const lv_color_t c_glint = lv_color_hex(0xb8f5d2);
+// The charging stripe: a gap of black through the green. A light green
+// one hardly showed on the Core2 and not at all on the StickC.
+const lv_color_t c_glint = lv_color_hex(0x000000);
 
 constexpr int W = core2::width;
 constexpr int H = core2::height;

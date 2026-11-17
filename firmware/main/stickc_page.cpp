@@ -75,7 +75,9 @@ const lv_color_t c_green = lv_color_hex(0x3ddc84);
 const lv_color_t c_amber = lv_color_hex(0xffb300);
 const lv_color_t c_red = lv_color_hex(0xff5252);
 const lv_color_t c_blue = lv_color_hex(0x6aa9ff);
-const lv_color_t c_glint = lv_color_hex(0xb8f5d2);
+// The charging stripe: a gap of black through the green. A light green
+// one hardly showed on the Core2 and not at all on the StickC.
+const lv_color_t c_glint = lv_color_hex(0x000000);
 
 constexpr int bar_h = 20;
 constexpr int pad = 6;
@@ -99,6 +101,9 @@ lv_display_t *display = nullptr;
 lv_obj_t *main_scr = nullptr;
 lv_obj_t *splash_scr = nullptr;
 lv_obj_t *splash_status = nullptr;
+// device.install_notice: the installing screen is up, and stays until the
+// device restarts. Nothing else draws or reads the buttons.
+std::atomic<bool> installing{false};
 
 lv_obj_t *box(lv_obj_t *parent, int x, int y, int w, int h)
 {
@@ -247,7 +252,7 @@ void build_chrome(lv_obj_t *scr)
     fill(nub, c_dim);
     pg.batt_level = box(outline, 1, 1, 0, 5);
     fill(pg.batt_level, c_dim, 1);
-    // While charging, a light stripe moves through the level, as on the
+    // While charging, a dark stripe moves through the level, as on the
     // Core2 (docs/core2-ui.md, The battery).
     pg.batt_glint = box(pg.batt_level, 0, 0, 2, 5);
     fill(pg.batt_glint, c_glint);
@@ -383,6 +388,10 @@ void tick(lv_timer_t *);
 
 void splash_tick(lv_timer_t *t)
 {
+    if (installing) {
+        lv_timer_delete(t);
+        return;
+    }
     if (is_started) {
         tick(nullptr); // the pages filled in before they show
         lv_screen_load(main_scr);
@@ -523,6 +532,9 @@ void update_tnc(const radio::View &v)
 
 void tick(lv_timer_t *)
 {
+    if (installing) {
+        return;
+    }
     int64_t now = now_ms();
     if (axp192::short_presses() > 0) {
         screen_on = !screen_on;
@@ -623,7 +635,7 @@ void move_glint(lv_timer_t *)
 void read_b(lv_timer_t *)
 {
     static int down = 0;
-    if (!is_started) {
+    if (!is_started || installing) {
         return; // the start-up screen has no pages
     }
     if (gpio_get_level(pin_b) == 0) {
@@ -786,6 +798,50 @@ void starting(const char *s)
 }
 
 void started() { is_started = true; }
+
+// The Core2's installing screen, fitted to 135 px, drawn at once with the
+// backlight on, even if the power button had turned it off. The ROM
+// leaves the screen and the AXP192 alone, so it stays until the new
+// firmware starts. Static: once the ROM runs, nothing moves.
+bool show_installing(const char *version, uint32_t timeout_ms)
+{
+    if (!ready) {
+        return true; // no screen to show it on
+    }
+    if (!lvgl_port_lock(timeout_ms)) {
+        return false;
+    }
+    if (!installing) {
+        installing = true;
+        std::string doing = "Installing firmware";
+        if (version != nullptr && *version != '\0') {
+            doing += std::string(" v") + version;
+        }
+        doing += "...";
+        lv_obj_t *scr = lv_obj_create(nullptr);
+        fill(scr, c_bg);
+        lv_obj_set_scrollable(scr, false);
+        lv_obj_t *t = label(scr, &lv_font_montserrat_20, c_fg, 0, 0);
+        lv_label_set_text(t, "kiss-tnc-bridge");
+        lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 14);
+        // Two lines if the version is long.
+        lv_obj_t *d = label(scr, &lv_font_montserrat_14, c_fg, 0, 0);
+        lv_obj_set_width(d, line_w);
+        lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(d, LV_LABEL_LONG_MODE_WRAP);
+        lv_label_set_text(d, doing.c_str());
+        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 50);
+        lv_obj_t *r = label(scr, &lv_font_montserrat_12, c_dim, 0, 0);
+        lv_label_set_text(r, "The device will restart when complete.");
+        lv_obj_align(r, LV_ALIGN_TOP_MID, 0, 106);
+        lv_screen_load(scr);
+        lv_refr_now(display);
+        screen_on = true;
+        axp192::backlight(brightness);
+    }
+    lvgl_port_unlock();
+    return true;
+}
 
 // The ATOM's LED states and events aren't shown in this trial: the pages
 // are, lit from init().

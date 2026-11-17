@@ -547,8 +547,12 @@ void wait_idle(uint32_t timeout_ms)
 
 void set_updating(bool on) { updating_on = on; }
 
-bool show_installing(const char *, uint32_t timeout_ms)
+bool show_installing(const char *version, uint32_t timeout_ms)
 {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    return led::show_installing(version, timeout_ms);
+#endif
+    (void)version;
     installing_on = true;
     int64_t end = now_ms() + timeout_ms;
     while (!installing_shown && now_ms() < end) {
