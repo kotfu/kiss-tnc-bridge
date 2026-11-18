@@ -1,9 +1,11 @@
-// The StickC Plus SE's first screens of their own (issue #28): the Bridge,
-// TNC and System pages in landscape, layout B in docs/stickc-mockups, with B
-// moving between them. A trial build, to judge on the device: the ATOM's
-// UI (ui.cpp) still runs button A and calls led::show(), which only keeps
-// the backlight on, and LVGL draws the pages from what the radio and the
-// phones report.
+// The StickC Plus SE's own UI (docs/stickc-ui.md, issue #28): the Bridge,
+// TNC and System pages in landscape, and Errors while there's one, with B
+// moving between them; the pairing screen; the start-up, installing and
+// reset screens; the power button; and the red LED (status_led.cpp). The
+// ATOM's UI (ui.cpp) still runs button A, and passes this page what it
+// can't show on an LED: the start-up steps, A's presses on the pairing
+// screen, pairing's result and reset. LVGL draws the pages from what the
+// radio and the phones report.
 //
 // Landscape, with USB to the right. Pins and panel settings are the ones
 // tried in spikes/stickc-plus-se.
@@ -65,7 +67,7 @@ constexpr int x_gap = 40;
 constexpr int y_gap = 53;
 constexpr int strip_rows = 20;
 
-constexpr uint8_t brightness = 80; // fixed for this trial
+constexpr uint8_t brightness = 80; // about 3.1 V on LDO2: not a setting
 constexpr uint8_t dim_brightness = 1; // the lowest the backlight goes, short of off
 
 // ---- the look: the Core2's colors ----
@@ -1549,8 +1551,8 @@ void show_reset_done()
     lvgl_port_unlock();
 }
 
-// The ATOM's LED states and events aren't shown in this trial: the pages
-// are, lit from init().
+// The ATOM's LED states and events have no LED here: the pages show the
+// state, lit from init().
 void show(Rgb, uint8_t, float) {}
 
 } // namespace ktb::led

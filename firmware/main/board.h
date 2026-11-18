@@ -33,10 +33,10 @@ constexpr bool pair_on_screen = false;
 
 constexpr const char *name = "stickc-plus-se";
 
-// Until its own UI is designed it runs the ATOM's:
-// button A (the large button on the face) is the ATOM's button, and the
-// whole screen is its LED (stickc_screen.cpp). A is active low with a
-// pull-up on the board; GPIO37 is input only and isn't a strapping pin.
+// Button A (the large button on the face) is the ATOM's button, run by
+// the ATOM's UI (ui.cpp); the screen is its own (stickc_page.cpp). A is
+// active low with a pull-up on the board; GPIO37 is input only and isn't
+// a strapping pin.
 constexpr gpio_num_t button = GPIO_NUM_37;
 
 // No RGB LED: the screen shows state (status_led is the red LED's).

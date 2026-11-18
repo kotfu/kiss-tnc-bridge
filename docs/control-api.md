@@ -851,8 +851,8 @@ saving tables. Besides `public_name`, a board has its UI's keys:
 Both sets of LED keys start `led_`, so tell a board's UI from the keys
 `device.settings.get` returns (`led_normal` or `led_when`), not from the
 prefix. A key another board has fails as unknown, and the error lists
-the keys this board takes. Firmware 1.4.0 and older gave the StickC the
-ATOM's `led_*` keys, for the ATOM's UI it ran.
+the keys this board takes. Firmware 1.3.0 gave the StickC the ATOM's
+`led_*` keys, for the ATOM's UI it ran.
 
 `led_activity_blink` is a JSON boolean, not a string:
 
@@ -914,8 +914,8 @@ state and in every `led_normal` mode, dark included (see
 [atom-lite-ui.md](atom-lite-ui.md#states)), and the version isn't shown.
 The Core2 and the StickC Plus SE show "Installing firmware v1.4.0..."
 with the backlight on, even if the power button had turned it off (see
-[core2-ui.md](core2-ui.md#installing-over-usb)). Firmware 1.4.0 and older
-on the StickC showed the ATOM's steady white.
+[core2-ui.md](core2-ui.md#installing-over-usb)). The StickC's firmware
+1.3.0 had no install notice.
 
 - **It lasts until the device restarts.** There's no way to take it back
   and no time limit: a sender that decides not to install resets the

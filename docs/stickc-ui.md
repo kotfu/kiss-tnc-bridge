@@ -13,13 +13,12 @@ It's drawn with LVGL, as the Core2's is ([core2-ui.md](core2-ui.md)).
 Where this page says "as on the Core2", the Core2's page has the detail,
 and the StickC does the same.
 
-Status: being built in
-[#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28), page by page
-on the device, 16 November 2026. Firmware 1.3 and 1.4 ran the ATOM
-Lite's UI on the StickC, the whole screen standing in for the ATOM's
-LED. The [mockups](stickc-mockups/index.html) are where the layout
-started; where they and this page differ, this page wins. A polish
-round comes before it's done.
+Status: built in
+[#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28) for firmware
+1.4, page by page on the device, 16 and 17 November 2026. Firmware 1.3
+ran the ATOM Lite's UI on the StickC, the whole screen standing in for
+the ATOM's LED. The [mockups](stickc-mockups/index.html) are where the
+layout started; where they and this page differ, this page wins.
 
 ## The device
 
@@ -254,9 +253,9 @@ The Core2's modes and timeout, with the same settings, `screen_normal`
 (`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default
 (see [The screen](core2-ui.md#the-screen) on the Core2). They're
 [device settings](control-api.md#devicesettingsget-and-devicesettingsset),
-and with the [red LED's](#the-red-led) they replace the ATOM's `led_normal`,
-`led_wake_seconds` and `led_brightness`, which the StickC had through
-firmware 1.4.0.
+and with the [red LED's](#the-red-led) they replace the ATOM's
+`led_normal`, `led_wake_seconds` and `led_brightness`, which the StickC
+had in firmware 1.3.
 
 **The settings are changed from a management app** (or `ktbctl --device
 PORT device settings set screen_normal=dark`), not on the device. The

@@ -47,17 +47,19 @@ authorized over BLE.
 | `main/console.*` | The USB serial port, shared by the log and the control API, one whole line at a time |
 | `main/control.*` | The control API: framing, replies now and later, events, and the device and auth commands |
 | `main/control_radio.cpp` | `status`, `subscribe`, `tnc.*`, `bluetooth.*` and `port.*` |
-| `main/settings.*` | `public_name`, `led_normal`, `led_wake_seconds`, `led_brightness` in NVS |
+| `main/settings.*` | `public_name`, and the board's UI settings, in NVS: the ATOM's `led_*`, or the screen's `screen_*` and the status LED's `led_when`, `led_pattern` and `led_activity_blink` |
 | `main/auth.*` | The X25519 device key, the authorization code, authorization mode |
 | `main/ui.*`, `main/led.*` | Gestures, LED states and events, dark mode |
-| `main/stickc_screen.cpp` | The StickC Plus SE's screen as the ATOM's LED, filled with its color |
+| `main/stickc_page.cpp` | The StickC Plus SE's screen: its pages, pairing, the start-up, installing and reset screens, the power button and the red LED |
+| `main/core2_ui.cpp`, `main/core2_hw.*` | The Core2's touchscreen UI, and its screen and touch |
+| `main/status_led.*` | The status LED's settings (the StickC's red, the Core2's green): when it's lit, its pattern, and a blink for each frame |
 | `main/axp192.*` | The AXP192 power chip on the Core2 and the StickC Plus SE: rails, backlight, battery, power button |
 | `main/radio.*` | The radio: one task for the SPP link, KISS init, reconnecting, scanning and pairing |
 | `main/kiss.*` | KISS framing, and AX.25 decoding for frame events |
 | `main/phones.*` | The BLE KISS service, advertising, and phones' sessions |
 | `main/activity.*` | The control API's activity events |
 | `main/storage.*` | NVS, and what reset clears |
-| `main/errors.*` | The errors the LED shows red and `device.info` lists |
+| `main/errors.*` | The errors the ATOM's LED shows red, the screens show, and `device.info` lists |
 | `main/firmware.*` | The running image, rollback and the self-test deadline |
 | `tools/ktbdev.py` | Development-only commands over USB: `debug.*`, the LED demo and the raw log. Everything else is `ktbctl` |
 | `tools/package.py` | Names a build's images for a release and writes the web installer's manifest |
@@ -192,13 +194,13 @@ StickC Plus SE share the 4 MB flash layout; the Core2 has its own.
 | Board | `<board>` | Chip | Flash | PSRAM | State |
 |---|---|---|---|---|---|
 | M5Stack ATOM Lite | `atom-lite` | ESP32-PICO-D4 | 4 MB | — | The LED and button UI |
-| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | The ATOM's UI until it has its own: the whole screen is the LED, button A the button |
+| M5Stack StickC Plus SE | `stickc-plus-se` | ESP32-PICO-D4 | 4 MB | — | Its own UI from 1.4 ([stickc-ui.md](../docs/stickc-ui.md)); in 1.3, the ATOM's |
 | M5Stack Core2 v1.3 | `core2-v1.3` | ESP32-D0WDQ6-V3 | 16 MB | 8 MB | The touchscreen UI for 1.2 ([core2-ui.md](../docs/core2-ui.md)), in progress |
 
-The StickC Plus SE runs the ATOM Lite's UI ([atom-lite-ui.md](../docs/atom-lite-ui.md))
-until its own is designed: the whole screen shows the LED's colors and
-patterns, `led_brightness` sets the backlight, and button A is the
-ATOM's button. On a device it installs with `ktbctl device flash`, is
+The StickC Plus SE has its own UI from 1.4
+([stickc-ui.md](../docs/stickc-ui.md)): pages on its screen, B moving
+between them, and button A still the ATOM's button. In 1.3 it ran the
+ATOM Lite's UI, the whole screen showing the LED's colors. On a device it installs with `ktbctl device flash`, is
 managed with `ktbctl` over USB, and bridges a TD-H9 to a BLE KISS app. The Core2 has been tried on a device: its
 AXP192 power chip, screen and touch are set up as M5Stack's own code
 does, and it bridges a TH-D75.

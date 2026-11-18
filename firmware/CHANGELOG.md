@@ -12,19 +12,42 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- The StickC Plus SE's own UI ([stickc-ui.md](../docs/stickc-ui.md)), in
+  landscape with LVGL, in place of the ATOM Lite's, whose whole screen
+  was the LED: Bridge, TNC and System pages, B moving between them; the
+  battery and its charge; the power button turning the screen dark and
+  waking it; a start-up screen and an installing screen like the Core2's;
+  and, while there's an error, a red mark in the top bar and an Errors
+  page with each error's whole message. A is still the ATOM's button. Its
+  double press opens a pairing screen: the radios found as a list, B
+  moving and A choosing, then a Kenwood's number to answer with A or B,
+  and the result. Reset, holding A at power-on, shows its warning with a
+  bar, and "Settings cleared". `device.identify` wakes the screen
+  ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
+- A status LED on the Core2 (its green LED) and the StickC Plus SE (its
+  red), so a device with its screen dark can be told from one that's
+  off. Three settings: `led_when` (`always`, `screen_dark` or `never`),
+  `led_pattern` (`bright`, `dim` or `breathe`) and `led_activity_blink`
+  (`true` or `false`), dark for 100 ms on each frame to or from the
+  radio. By default it breathes while the screen is dark, and blinks.
+  The System page shows them on one line. On the Core2, tap the LED row
+  to change them, and the LED shows what they make while they're open;
+  on the StickC, they're changed from a management app or `ktbctl device
+  settings set`
+  ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
+
 - `device.install_notice`, announced by the `install-notice` capability:
   sent over USB just before a USB install, it shows that the device is
   being installed until it restarts, which the install keeps through the
   ROM download mode. The ATOM Lite's LED is steady white, over every
-  other state and in every `led_normal` mode, and so is the StickC Plus
-  SE's screen. The Core2's screen says "Installing firmware v1.4.0...",
-  with the version the sender gives in `version`, and that the device
-  will restart when complete.
+  other state and in every `led_normal` mode. The Core2's and the StickC
+  Plus SE's screens say "Installing firmware v1.4.0...", with the version
+  the sender gives in `version`, and that the device will restart when
+  complete.
 - `device.settings.set` takes `"public_name": null` to go back to the
   default name, `KTB-` and the last two bytes of the Bluetooth address,
   which the BLE name follows at once
   ([#25](https://github.com/kotfu/kiss-tnc-bridge/issues/25)).
-
 - `last_uptime` in `device.info`: how long the last run lasted, to the
   minute, for battery tests. The device saves its uptime once a minute,
   and a run shorter than that leaves it as it was, so a dying battery's
@@ -37,9 +60,9 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as the TNC puts frames back together. A scan or search knows one by
   the service in its advertisement, not its name; another bridge, which
   advertises it beside its management service, isn't taken for one. The
-  ATOM Lite's and StickC Plus SE's double press selects the first one it
-  hears, like a TD-H9, and the Core2 lists them as "BLE KISS TNC"
-  ([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)).
+  ATOM Lite's double press selects the first one it hears, like a TD-H9,
+  the Core2 lists them as "BLE KISS TNC", and the StickC Plus SE as "BLE
+  TNC" ([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)).
 
 ### Changed
 
@@ -48,12 +71,23 @@ and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either; `th-d74` and `th-d75` still take only `spp.address`, and
   `td-h9` only `ble.address`
   ([#37](https://github.com/kotfu/kiss-tnc-bridge/issues/37)).
-- The ATOM Lite's and StickC Plus SE's double press pairs any radio or
-  TNC in pairing mode that offers a serial port (SPP), as model
-  `generic`, when no Kenwood or BLE TNC turns up first, instead of only a
-  TH-D74 or TH-D75: one whose answer to the scan lists SPP, or else one
-  an SDP lookup finds it on, strongest signal first
-  ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)).
+- The ATOM Lite's double press pairs any radio or TNC in pairing mode
+  that offers a serial port (SPP), as model `generic`, when no Kenwood or
+  BLE TNC turns up first, instead of only a TH-D74 or TH-D75: one whose
+  answer to the scan lists SPP, or else one an SDP lookup finds it on,
+  strongest signal first
+  ([#33](https://github.com/kotfu/kiss-tnc-bridge/issues/33)). The
+  StickC Plus SE lists only the radios it knows, as the Core2 does: a
+  management app pairs anything else.
+- The StickC Plus SE has the Core2's screen settings, `screen_normal`
+  and `screen_timeout_seconds`, and the status LED's, in place of the
+  ATOM's `led_normal`, `led_wake_seconds` and `led_brightness`: the
+  screen dims or goes dark after the timeout, and its System page shows
+  the settings. They're changed from a management app or `ktbctl device
+  settings set`. Both sets of LED settings start `led_`, so a management
+  app tells them apart by the keys `device.settings.get` returns,
+  `led_normal` or `led_when`
+  ([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 - The Core2's radio pill says **Waiting** for a BLE TNC that's out of
   reach, instead of "Waiting for it", **Down** when a management app has
   taken the link down, instead of "Held", and **Retrying in 8s**, without

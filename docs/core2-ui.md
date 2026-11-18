@@ -39,7 +39,7 @@ to watch it and set it up:
   Bluetooth address, errors, the screen and LED settings, reset (from
   1.4) and power off.
 - **The screen's modes** and its timeout, the Core2's version of the
-  ATOM's `led_normal`, and later the green LED's settings (see
+  ATOM's `led_normal`, and from 1.4 the green LED's settings (see
   [The green LED](#the-green-led)).
 - **Reset** with a gesture at power-on, which never worked (see
   [Reset](#reset)); from 1.4 it's on the System page.
