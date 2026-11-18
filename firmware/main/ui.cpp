@@ -219,6 +219,7 @@ enum class Press : uint8_t {
     ignored,     // installing, updating, or already used (a wake, the second of a double)
     candidate,   // could become a long press, or the first of a double
     cancel_pair, // a press while pairing: cancels it when let go
+    page,        // the StickC's pairing screen's: passed on when let go
     end_authorizing, // a press in authorization mode: ends it when let go
 };
 
@@ -308,6 +309,13 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
             press = Press::ignored;
             return;
         }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+        if (led::takes_a()) {
+            press = Press::page;
+            last_click_up = -10000;
+            return;
+        }
+#endif
         // Every press restarts the wake timer.
         bool was_dark = dark;
         awake_until = now + wake_ms;
@@ -324,6 +332,9 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
             ESP_LOGI(TAG, "double press: pair");
             press = Press::ignored;
             last_click_up = -10000;
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+            led::pairing_started();
+#endif
             radio::start_pairing();
         } else {
             press = Press::candidate;
@@ -346,6 +357,11 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
         ESP_LOGI(TAG, "press: cancel pairing");
         radio::cancel_pairing();
         break;
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    case Press::page:
+        led::press_a();
+        break;
+#endif
     case Press::end_authorizing:
         ESP_LOGI(TAG, "press: end authorization mode");
         auth::mode_end();
@@ -530,6 +546,8 @@ void post(Event e)
 #if CONFIG_KTB_BOARD_STICKC_PLUS_SE
     if (e == Event::identify) {
         led::wake(); // and the ATOM's sequence runs as before
+    } else if (e == Event::pairing_succeeded || e == Event::pairing_failed) {
+        led::pairing_result(e == Event::pairing_succeeded);
     }
 #endif
     if (!queue) {

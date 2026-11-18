@@ -49,18 +49,19 @@ firmware is doing.
 
 | Action | Gesture |
 |---|---|
-| Pair a Kenwood or select a BLE TNC | Double press |
-| Cancel pairing | A press, while pairing |
+| Pair a Kenwood or select a BLE TNC | Double press, which opens the [pairing screen](#pairing) |
 | Start authorization mode | Hold 3 s |
 | End authorization mode | A press, in authorization mode |
 | Reset | Hold A while turning the StickC on (see [Reset](#reset)) |
 
 A press of A also wakes the screen, and a double press or a hold does
-what it does whatever the screen shows.
+what it does whatever the screen shows. On the pairing screen, A does
+what its word at the bottom right says (see [Pairing](#pairing)).
 
 **B moves to the next page:** Bridge, TNC, System, and round to Bridge.
 While the screen is dark, a press of B only wakes it, on the page it was
-on (see [The screen](#the-screen)). B is read every 20 ms, and a press
+on (see [The screen](#the-screen)). On the pairing screen, B does what
+its word at the top left says. B is read every 20 ms, and a press
 counts once it's been down for two reads: GPIO39 has a known erratum
 that can glitch it.
 
@@ -137,6 +138,73 @@ Connected for 2h 14m
 - **Its state and how long,** as on the Bridge page.
 - **Under the rule,** one line: "Press A twice to choose another TNC.",
   or with no radio "Press A twice to choose a TNC."
+
+## Pairing
+
+A's double press opens the pairing screen over the pages, at once, from
+any page. It's the Core2's pairing (see
+[TNC page and pairing](core2-ui.md#tnc-page-and-pairing)), with B and A
+in place of taps:
+
+- **The top bar:** at the left, beside B, what B does ("▲ Next", "▲ No",
+  "▲ Cancel"), then "Pairing" and the time left. The battery stays at the
+  right.
+- **The bottom row:** at the right, beside A, what A does ("Choose ▶",
+  "Yes ▶", "OK ▶").
+- **The screen stays lit** until the pairing screen closes. If the power
+  button turns it dark, a press of A or B only wakes it.
+
+**1. The radios found,** for up to 60 s. The device looks for radios as
+the Core2 does, and lists each one as it's found, with its name, its
+make ("Kenwood", "BLE TNC") and its signal ("-62 dBm"). **Cancel** is
+always the last row.
+
+```
+▲ Next  Pairing  47 s     100% [■■]
+------------------------------------
+▌TH-D75          Kenwood    -62 dBm▐
+ Ailunce HA2     BLE TNC    -71 dBm
+ Cancel
+             2/2 TNCs      Choose ▶
+```
+
+- **B** moves the highlight to the next row, and round to the first
+  after Cancel. **A** chooses the highlighted radio, or Cancel.
+- **The highlight** is on the first radio found until B moves it; then
+  it stays on that radio as others are found.
+- **Four rows** show, and the list scrolls to keep the highlight on the
+  screen.
+- **The count,** in the middle of the bottom row, is the highlighted
+  radio and how many are found, "2/5 TNCs", so a list longer than the
+  screen shows how long it is. On Cancel it's only how many, "5 TNCs".
+- **Only radios are listed.** Devices that aren't radios aren't counted
+  or mentioned, unlike on the Core2: the screen is cramped, and it doesn't
+  help. A management app pairs anything else.
+
+**2. Connecting...,** in the middle, once a radio is chosen, while the
+search stops and the device connects. **B: Cancel.** A BLE TNC goes
+straight to the result.
+
+**3. A Kenwood's number,** in blue at 20 px in the middle, "481 207",
+and under it "Does TH-D75 show this number?" **A: Yes**, **B: No**. The
+device waits for the answer, as the Core2 does. If the radio still knows
+the device, there's no number, and it goes on to the result.
+
+**4. Press OK on the radio,** in the middle, and that the radio gives
+about 30 s. **B: Cancel.**
+
+**5. The result,** until A or B:
+
+| Result | Shows | A | B |
+|---|---|---|---|
+| A Kenwood paired | Its name, then "Paired" in green | OK: the pages | Nothing |
+| A BLE TNC selected | Its name, then "Selected" in green | OK: the pages | Nothing |
+| It didn't pair | "Didn't pair" in amber, and why, as on the Core2: "No radio was chosen in time." | Try again: a new search | Back: the pages |
+
+Cancelling, with the Cancel row or B, goes straight back to the pages,
+with the radio the device had. A pairing a management app starts doesn't
+open the pairing screen: the Bridge page's state says "Pairing", and the
+management app shows the rest.
 
 ## System page
 
@@ -294,7 +362,6 @@ have, and nothing on the screen stands in for it yet:
 
 | What | On the screen now |
 |---|---|
-| Pairing | The Bridge page's state says "Pairing"; there's no list of radios, pairing number or result |
 | Authorization mode | Nothing: the authorization code is over USB (`ktbctl auth code`) or from an authorized management app |
 | Reset's warning, and reset done | Nothing: the start-up screen stays up |
 | Errors | Only the screen waking: a management app or `ktbctl device info` shows them |
@@ -304,6 +371,8 @@ have, and nothing on the screen stands in for it yet:
 | Action | Instead |
 |---|---|
 | Change the name, or any setting | A management app, or `ktbctl --device` over USB |
+| Forget the radio | A management app; pairing or selecting a new one replaces it |
+| Pair anything that isn't listed as a radio | A management app |
 | Brightness | Fixed |
 | Power off | Hold the power button 6 s |
 | Sound | The buzzer is too quiet to use |
@@ -312,8 +381,7 @@ have, and nothing on the screen stands in for it yet:
 
 ## To decide
 
-- What the screen shows for pairing, authorization mode, reset and
-  errors.
+- What the screen shows for authorization mode, reset and errors.
 
 ## To judge on the device
 

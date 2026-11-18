@@ -26,6 +26,9 @@ constexpr bool screen = false;
 constexpr bool screen_settings = false;
 constexpr bool status_led = false;
 
+// Pairing takes the first radio found and accepts its number.
+constexpr bool pair_on_screen = false;
+
 #elif CONFIG_KTB_BOARD_STICKC_PLUS_SE
 
 constexpr const char *name = "stickc-plus-se";
@@ -39,8 +42,13 @@ constexpr gpio_num_t button = GPIO_NUM_37;
 // No RGB LED: the screen shows state (status_led is the red LED's).
 constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
-// Pairing is still the ATOM's, with button A, not a screen's.
+// Pairing starts with button A's double press, as on the ATOM, not on a
+// TNC page.
 constexpr bool screen = false;
+
+// The screen lists the radios found and shows a Kenwood's number: B moves,
+// A chooses and answers (stickc_page.cpp).
+constexpr bool pair_on_screen = true;
 
 // The screen's settings (screen_*), as the Core2's, shown on the System
 // page and changed from a management app (stickc_page.cpp).
@@ -63,6 +71,9 @@ constexpr gpio_num_t rgb_led = GPIO_NUM_NC;
 
 // The UI is the touch screen (docs/core2-ui.md, core2_ui.cpp).
 constexpr bool screen = true;
+
+// The screen lists the radios found and shows a Kenwood's number.
+constexpr bool pair_on_screen = true;
 
 // The screen's settings (screen_*), not the LED's.
 constexpr bool screen_settings = true;

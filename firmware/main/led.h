@@ -46,4 +46,16 @@ bool show_installing(const char *version, uint32_t timeout_ms);
 // the Core2. Safe from any task.
 void wake();
 
+// The StickC's pairing screen: while it's up (pairing, or its result
+// until A says OK) A's presses are its, not the ATOM's, and press_a()
+// passes each one on when it's let go. Safe from any task.
+bool takes_a();
+void press_a();
+
+// A's double press started a pairing (before radio::start_pairing()), and
+// how a pairing ended (ui::post's pairing events): the screen shows only
+// the pairings A started, and their results. Safe from any task.
+void pairing_started();
+void pairing_result(bool ok);
+
 } // namespace ktb::led

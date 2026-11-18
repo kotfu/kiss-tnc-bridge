@@ -97,6 +97,7 @@ bool ready = false;
 std::atomic<bool> lit{false};
 std::atomic<bool> turned_off{false}; // by the power button
 std::atomic<int64_t> last_wake{0};  // a button, or something that wakes it
+std::atomic<bool> pair_up{false};   // the pairing screen is showing
 uint8_t level = 0;                   // the backlight now: 0 is off
 
 void set_backlight(uint8_t b)
@@ -121,7 +122,8 @@ void update_light(int64_t now)
         set_backlight(0);
         return;
     }
-    bool awake = now - last_wake < settings::screen_timeout_seconds() * 1000LL;
+    // Pairing keeps it lit, as a flow does on the Core2.
+    bool awake = pair_up || now - last_wake < settings::screen_timeout_seconds() * 1000LL;
     switch (settings::screen_normal()) {
     case settings::ScreenNormal::bright: set_backlight(brightness); break;
     case settings::ScreenNormal::dim: set_backlight(awake ? brightness : dim_brightness); break;
@@ -417,6 +419,16 @@ void update_system(int64_t now)
     set_text(sy.last_run, last >= 0 ? duration(static_cast<uint32_t>(last)) : "None yet");
 }
 
+// The top bar's left end: the marker beside B (the page, or what B does
+// on the pairing screen), then the title.
+void set_bar(const std::string &mark, const std::string &t)
+{
+    set_text(marker, mark);
+    lv_obj_update_layout(marker);
+    lv_obj_set_x(title, 5 + lv_obj_get_width(marker) + 6);
+    set_text(title, t);
+}
+
 void show_page(int i)
 {
     page = i;
@@ -425,8 +437,352 @@ void show_page(int i)
     }
     char b[24];
     snprintf(b, sizeof(b), "%d/%d", i + 1, page_count);
-    set_text(marker, b);
-    set_text(title, page_titles[i]);
+    set_bar(b, page_titles[i]);
+}
+
+// ---- pairing ----
+// Over the pages from A's double press until pairing ends, as the
+// Core2's (docs/stickc-ui.md, Pairing): the radios found as a list, B
+// moving the highlight and A choosing, with Cancel the last row; then a
+// Kenwood's number, A yes and B no. B's word is at the top left, beside
+// B, and A's at the bottom right, beside A.
+
+constexpr int pair_rows = 4;
+constexpr int pair_row_h = 24;
+constexpr int pair_list_y = bar_h + 4;
+constexpr int foot_y = H - 17;
+const lv_color_t c_choice = lv_color_hex(0x0d2a44); // the highlighted row, as the Core2's chips
+
+lv_obj_t *pair_panel;
+struct {
+    lv_obj_t *row[pair_rows], *name[pair_rows], *desc[pair_rows], *signal[pair_rows];
+    lv_obj_t *a_word, *count, *big, *text;
+} pr;
+
+std::atomic<bool> a_pressed{false}; // from press_a(), for read_b()
+std::atomic<bool> button_pairing{false}; // A's double press started the pairing under way
+std::atomic<int> result_posted{0};       // pairing_result(): 1 paired or selected, 2 didn't pair
+int result_shown = 0;                    // the result on the screen, until A or B
+std::vector<std::string> pair_items; // the radios listed, by address, and "" for Cancel at the end
+std::string pair_choice;            // the highlighted row's address, "" for Cancel
+bool pair_moved = false;            // B has moved the highlight; until then it's on the first radio
+bool pair_picked = false;           // A chose a radio: the search is stopping
+int pair_first = 0;                 // the first item in the top row
+
+void build_pairing(lv_obj_t *scr)
+{
+    pair_panel = box(scr, 0, bar_h + 1, W, H - bar_h - 1);
+    fill(pair_panel, c_bg);
+    for (int i = 0; i < pair_rows; i++) {
+        lv_obj_t *r = box(pair_panel, pad - 2, pair_list_y - bar_h - 1 + i * pair_row_h, line_w + 4, pair_row_h - 2);
+        lv_obj_set_style_radius(r, 4, 0);
+        lv_obj_set_style_border_color(r, c_blue, 0);
+        lv_obj_set_style_bg_color(r, c_choice, 0);
+        pr.row[i] = r;
+        pr.name[i] = label(r, &lv_font_montserrat_14, c_fg, 4, 3, 104);
+        pr.desc[i] = label(r, &lv_font_montserrat_12, c_dim, 112, 4, 64);
+        pr.signal[i] = label(r, &lv_font_montserrat_12, c_dim, 0, 4);
+        lv_obj_align(pr.signal[i], LV_ALIGN_TOP_RIGHT, -4, 4);
+    }
+    pr.a_word = label(pair_panel, &lv_font_montserrat_12, c_fg, 0, 0);
+    // Which TNC is highlighted, of how many found: "2/5 TNCs", in the
+    // middle of the bottom row, since the list can run past the screen.
+    pr.count = label(pair_panel, &lv_font_montserrat_12, c_dim, 0, 0);
+    // The stages after the list, in the middle: a line at 20 px
+    // ("Connecting...", the number), and under it what to do.
+    for (lv_obj_t **l : {&pr.big, &pr.text}) {
+        *l = label(pair_panel, l == &pr.big ? &lv_font_montserrat_20 : &lv_font_montserrat_14,
+                   l == &pr.big ? c_fg : c_dim, pad, 0);
+        lv_obj_set_width(*l, line_w);
+        lv_label_set_long_mode(*l, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_set_style_text_align(*l, LV_TEXT_ALIGN_CENTER, 0);
+    }
+    show(pair_panel, false);
+}
+
+void set_a_word(const char *w)
+{
+    show(pr.a_word, w != nullptr);
+    if (w) {
+        set_text(pr.a_word, std::string(w) + " " LV_SYMBOL_RIGHT);
+        lv_obj_align(pr.a_word, LV_ALIGN_TOP_RIGHT, -pad, foot_y - bar_h - 1);
+    }
+}
+
+int pair_selected()
+{
+    for (size_t i = 0; i < pair_items.size(); i++) {
+        if (pair_items[i] == pair_choice) {
+            return static_cast<int>(i);
+        }
+    }
+    return static_cast<int>(pair_items.size()) - 1; // Cancel
+}
+
+void update_pair_list()
+{
+    radio::SearchView sv = radio::search_view();
+    pair_items.clear();
+    for (auto &r : sv.radios) {
+        pair_items.push_back(r.address);
+    }
+    pair_items.push_back(""); // Cancel
+    if (!pair_moved) {
+        pair_choice = pair_items.front(); // the first radio, or Cancel
+    }
+    int n = static_cast<int>(pair_items.size());
+    int sel = pair_selected();
+    if (sel < pair_first) {
+        pair_first = sel;
+    } else if (sel >= pair_first + pair_rows) {
+        pair_first = sel - pair_rows + 1;
+    }
+    for (int i = 0; i < pair_rows; i++) {
+        int item = pair_first + i;
+        bool on = item >= 0 && item < n;
+        show(pr.row[i], on);
+        if (!on) {
+            continue;
+        }
+        bool hl = item == sel;
+        lv_obj_set_style_bg_opa(pr.row[i], hl ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(pr.row[i], hl ? 1 : 0, 0);
+        if (item == n - 1) {
+            set_text(pr.name[i], "Cancel");
+            set_text(pr.desc[i], "");
+            set_text(pr.signal[i], "");
+            continue;
+        }
+        const radio::FoundRadio &r = sv.radios[item];
+        set_text(pr.name[i], r.name);
+        std::string maker = r.make.substr(0, r.make.find(' '));
+        set_text(pr.desc[i], r.ble ? (maker.empty() ? std::string("BLE TNC") : maker + " BLE")
+                                   : (maker.empty() ? std::string("Unknown") : maker));
+        set_text(pr.signal[i], r.has_rssi ? std::to_string(r.rssi) + " dBm" : std::string(""));
+        lv_obj_align(pr.signal[i], LV_ALIGN_TOP_RIGHT, -4, 4);
+    }
+    int found = n - 1;
+    const char *tncs = found == 1 ? " TNC" : " TNCs";
+    set_text(pr.count, sel < found ? std::to_string(sel + 1) + "/" + std::to_string(found) + tncs
+                                   : std::to_string(found) + tncs); // on Cancel
+    lv_obj_align(pr.count, LV_ALIGN_TOP_MID, 0, foot_y - bar_h - 1);
+    set_a_word("Choose");
+}
+
+// The big line and the text under it, together in the middle of the
+// space above A's word.
+void center_stage(const std::string &big, lv_color_t big_color, const std::string &text,
+                  const lv_font_t *text_font = &lv_font_montserrat_14, lv_color_t text_color = c_dim)
+{
+    set_text(pr.big, big);
+    lv_obj_set_style_text_color(pr.big, big_color, 0);
+    lv_obj_set_style_text_font(pr.text, text_font, 0);
+    lv_obj_set_style_text_color(pr.text, text_color, 0);
+    set_text(pr.text, text);
+    show(pr.text, !text.empty());
+    lv_obj_update_layout(pair_panel);
+    int hb = lv_obj_get_height(pr.big);
+    int ht = text.empty() ? 0 : lv_obj_get_height(pr.text) + 6;
+    int y = (foot_y - bar_h - 1 - hb - ht) / 2;
+    lv_obj_set_y(pr.big, y);
+    lv_obj_set_y(pr.text, y + hb + 6);
+}
+
+// How it ended, as the Core2 says it: until A says OK (or tries again),
+// or B goes back.
+void update_result()
+{
+    for (int i = 0; i < pair_rows; i++) {
+        show(pr.row[i], false);
+    }
+    show(pr.big, true);
+    show(pr.count, false);
+    if (result_shown == 1) {
+        radio::View v = radio::view();
+        // The radio, then in green what happened.
+        center_stage(v.name, c_fg, v.ble ? "Selected" : "Paired", &lv_font_montserrat_20, c_green);
+        set_a_word("OK");
+        set_bar("", "Pairing");
+    } else {
+        std::string why = radio::pairing_failure();
+        if (why.empty()) {
+            why = "Another pairing or scan is running.";
+        } else {
+            why[0] = static_cast<char>(toupper(static_cast<unsigned char>(why[0])));
+            why += ".";
+        }
+        center_stage("Didn't pair", c_amber, why, &lv_font_montserrat_12);
+        set_a_word("Try again");
+        set_bar(LV_SYMBOL_UP " Back", "Pairing");
+    }
+}
+
+void update_pair()
+{
+    if (result_shown) {
+        update_result();
+        return;
+    }
+    radio::PairView v = radio::pairing_view();
+    using S = radio::PairStage;
+    S st = v.stage == S::none ? S::searching : v.stage; // before the task starts, or as it ends
+    bool searching = st == S::searching;
+    for (int i = 0; i < pair_rows; i++) {
+        if (!searching) {
+            show(pr.row[i], false);
+        }
+    }
+    // Once A has chosen, the list gives way to Connecting... while the
+    // search stops.
+    bool list = searching && !pair_picked;
+    if (!list) {
+        for (int i = 0; i < pair_rows; i++) {
+            show(pr.row[i], false);
+        }
+    }
+    show(pr.big, !list);
+    show(pr.count, list && !result_shown);
+    show(pr.text, !list);
+    std::string radio_name = v.name.empty() ? std::string("the radio") : v.name;
+    const char *b_word = "Cancel";
+    switch (st) {
+    case S::searching:
+        if (list) {
+            b_word = "Next";
+            update_pair_list();
+            break;
+        }
+        [[fallthrough]];
+    case S::pairing:
+        center_stage("Connecting...", c_fg, "");
+        set_a_word(nullptr);
+        break;
+    case S::compare:
+        b_word = "No";
+        center_stage(v.number.size() == 6 ? v.number.substr(0, 3) + " " + v.number.substr(3) : v.number, c_blue,
+                     "Does " + radio_name + " show this number?");
+        set_a_word("Yes");
+        break;
+    case S::press_ok:
+        center_stage("Press OK on the radio", c_fg, radio_name + " gives about 30 s");
+        set_a_word(nullptr);
+        break;
+    default: break;
+    }
+    uint32_t left = v.stage == S::none ? radio::pairing_seconds : v.left_s;
+    set_bar(std::string(LV_SYMBOL_UP " ") + b_word, "Pairing  " + std::to_string(left) + " s");
+}
+
+// Shows or hides the pairing screen: from A's double press until the
+// radio posts how it ended (it always does), then that result until A or
+// B. A pairing a management app started isn't shown, nor a result when
+// it was cancelled here. Called each tick.
+void follow_pairing()
+{
+    int r = result_posted.exchange(0);
+    if (r) {
+        button_pairing = false;
+        bool cancelled = r == 2 && radio::pairing_failure() == "cancelled";
+        result_shown = cancelled ? 0 : r;
+        if (result_shown) {
+            wake_screen();
+        }
+    }
+    bool on = result_shown != 0 || button_pairing;
+    if (on == pair_up) {
+        if (on) {
+            update_pair();
+        }
+        return;
+    }
+    pair_up = on;
+    if (on) {
+        pair_moved = false;
+        pair_picked = false;
+        pair_first = 0;
+        pair_choice.clear();
+        for (int j = 0; j < page_count; j++) {
+            show(pages[j], false);
+        }
+        show(pair_panel, true);
+        wake_screen();
+        update_pair();
+    } else {
+        show(pair_panel, false);
+        show_page(page);
+    }
+}
+
+// The result's OK, or Back: the pages again.
+void close_result()
+{
+    result_shown = 0;
+    follow_pairing();
+}
+
+void pair_b()
+{
+    if (result_shown) {
+        if (result_shown == 2) {
+            close_result(); // Back
+        }
+        return;
+    }
+    using S = radio::PairStage;
+    switch (radio::pairing_view().stage) {
+    case S::none:
+    case S::searching: {
+        if (pair_picked) {
+            radio::cancel_pairing(); // B's Cancel, under Connecting...
+            break;
+        }
+        int n = static_cast<int>(pair_items.size());
+        if (n == 0) {
+            return;
+        }
+        pair_choice = pair_items[(pair_selected() + 1) % n];
+        pair_moved = true;
+        break;
+    }
+    case S::compare: radio::answer_pairing(false); break;
+    default: radio::cancel_pairing(); break;
+    }
+    update_pair();
+}
+
+void pair_a()
+{
+    if (result_shown == 1) {
+        close_result(); // OK
+        return;
+    }
+    if (result_shown == 2) {
+        // Try again: the list, looking afresh.
+        result_shown = 0;
+        pair_up = false;
+        button_pairing = true;
+        radio::start_pairing();
+        follow_pairing();
+        return;
+    }
+    using S = radio::PairStage;
+    switch (radio::pairing_view().stage) {
+    case S::none:
+    case S::searching:
+        if (pair_picked) {
+            return;
+        }
+        if (pair_choice.empty()) {
+            radio::cancel_pairing();
+        } else {
+            pair_picked = true;
+            radio::choose_radio(pair_choice);
+        }
+        break;
+    case S::compare: radio::answer_pairing(true); break;
+    default: break;
+    }
+    update_pair();
 }
 
 // ---- the start-up screen ----
@@ -489,6 +845,7 @@ void build(lv_obj_t *scr)
     build_bridge(pages[0]);
     build_tnc(pages[1]);
     build_system(pages[2]);
+    build_pairing(scr);
     build_chrome(scr);
     show_page(0);
 }
@@ -603,6 +960,7 @@ void tick(lv_timer_t *)
         return;
     }
 
+    follow_pairing();
     radio::View v = radio::view();
     update_tnc(v);
     update_system(now);
@@ -704,6 +1062,7 @@ void move_glint(lv_timer_t *)
 void read_b(lv_timer_t *)
 {
     static int down = 0, a_down = 0;
+    static bool a_woke = false; // this press of A woke the screen, so it does nothing else
     if (!is_started || installing) {
         return; // the start-up screen has no pages
     }
@@ -711,7 +1070,11 @@ void read_b(lv_timer_t *)
         if (++down == 2) {
             bool was_off = screen_is_dark();
             wake_screen();
-            if (!was_off) {
+            if (was_off) {
+                // only woken
+            } else if (pair_up) {
+                pair_b();
+            } else {
                 show_page((page + 1) % page_count);
             }
             update_light(now_ms());
@@ -721,11 +1084,19 @@ void read_b(lv_timer_t *)
     }
     if (gpio_get_level(pin_a) == 0) {
         if (++a_down == 2) {
+            a_woke = screen_is_dark();
             wake_screen();
             update_light(now_ms());
         }
     } else {
         a_down = 0;
+    }
+    // A, let go on the pairing screen (press_a(), from the ATOM's UI).
+    if (a_pressed.exchange(false)) {
+        if (!a_woke && pair_up) {
+            pair_a();
+        }
+        a_woke = false;
     }
 }
 
@@ -923,6 +1294,19 @@ void wake()
 {
     if (ready) {
         wake_screen();
+    }
+}
+
+bool takes_a() { return ready && (pair_up || button_pairing); }
+
+void press_a() { a_pressed = true; }
+
+void pairing_started() { button_pairing = true; }
+
+void pairing_result(bool ok)
+{
+    if (button_pairing) {
+        result_posted = ok ? 1 : 2;
     }
 }
 

@@ -2053,7 +2053,7 @@ void do_pair(const Request &req)
     set_pair_stage(PairStage::searching, pairing_seconds);
     if (button) {
         ESP_LOGI(TAG, "pairing: searching for a radio in pairing mode, or a BLE TNC");
-        switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target, board::screen)) {
+        switch (search(xTaskGetTickCount() + pdMS_TO_TICKS(pairing_seconds * 1000), target, board::pair_on_screen)) {
         case SearchResult::found:
             ESP_LOGI(TAG, "pairing: found %s, %s", target.name.c_str(), target.addr.str().c_str());
             if (target.ble) {
@@ -2068,7 +2068,7 @@ void do_pair(const Request &req)
             cancelled = true;
             break;
         case SearchResult::none:
-            failure = board::screen && listed_any ? "no radio was chosen in time"
+            failure = board::pair_on_screen && listed_any ? "no radio was chosen in time"
                                                   : "no radio in pairing mode with a serial port, and no BLE TNC, was found";
             break;
         }
@@ -2170,7 +2170,7 @@ void do_pair(const Request &req)
                     number = num;
                     got_number = true;
                     confirm_at = xTaskGetTickCount();
-                    if (button && !board::screen) {
+                    if (button && !board::pair_on_screen) {
                         ESP_LOGI(TAG, "pairing: the radio shows %s: press OK on it", num);
                         esp_bt_gap_ssp_confirm_reply(target.addr.raw(), true);
                         set_pair_stage(PairStage::press_ok, confirm_left_s(), target.name, number);
