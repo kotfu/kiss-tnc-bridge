@@ -1,13 +1,14 @@
 # The UI is the board's: the LED and the button on the ATOM Lite, the touch
-# screen on the Core2 (board.h). The StickC Plus SE runs the ATOM's UI, with
-# its screen as the LED, until it has its own.
+# screen on the Core2 (board.h). The StickC Plus SE runs the ATOM's UI for
+# button A, with its own pages on its screen (stickc_page.cpp). Both have a
+# status LED (status_led.cpp).
 set(srcs "main.cpp" "console.cpp" "control.cpp" "settings.cpp" "auth.cpp"
          "firmware.cpp" "radio.cpp" "storage.cpp" "control_radio.cpp" "kiss.cpp"
          "phones.cpp" "activity.cpp" "errors.cpp" "power.cpp" "uptime.cpp")
 if(CONFIG_KTB_BOARD_CORE2)
-    list(APPEND srcs "core2_ui.cpp" "core2_hw.cpp" "axp192.cpp")
+    list(APPEND srcs "core2_ui.cpp" "core2_hw.cpp" "axp192.cpp" "status_led.cpp")
 elseif(CONFIG_KTB_BOARD_STICKC_PLUS_SE)
-    list(APPEND srcs "ui.cpp" "stickc_screen.cpp" "axp192.cpp")
+    list(APPEND srcs "ui.cpp" "stickc_page.cpp" "axp192.cpp" "status_led.cpp")
 else()
     list(APPEND srcs "ui.cpp" "led.cpp")
 endif()
@@ -15,7 +16,7 @@ endif()
 idf_component_register(
     SRCS ${srcs}
     INCLUDE_DIRS "."
-    PRIV_REQUIRES nvs_flash esp_driver_gpio esp_driver_rmt esp_driver_uart esp_driver_i2c
+    PRIV_REQUIRES nvs_flash esp_driver_gpio esp_driver_rmt esp_driver_uart esp_driver_i2c esp_driver_ledc
                   esp_driver_spi esp_lcd esp_timer app_update esp_app_format bootloader_support
                   mbedtls bt
 )

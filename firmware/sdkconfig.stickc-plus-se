@@ -1,3 +1,13 @@
 # M5Stack StickC Plus SE: ESP32-PICO-D4, the ATOM Lite's chip, 4 MB flash,
 # no PSRAM. Layered on sdkconfig.defaults, which already fits it.
 CONFIG_KTB_BOARD_STICKC_PLUS_SE=y
+
+# LVGL, for its screen (docs/stickc-ui.md). No PSRAM, so LVGL's memory
+# comes from the ordinary heap (spikes/stickc-plus-se).
+CONFIG_LV_USE_CLIB_MALLOC=y
+CONFIG_LV_USE_CLIB_STRING=y
+CONFIG_LV_USE_CLIB_SPRINTF=y
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_THEME_DEFAULT_DARK=y

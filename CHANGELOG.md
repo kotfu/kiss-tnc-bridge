@@ -12,8 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ktbctl device flash` tells firmware that takes it (from 1.4.0) that an
   install is coming, with `device.install_notice` and the version it's
   installing, just before resetting it into its ROM: the ATOM Lite's LED
-  and the StickC Plus SE's screen show steady white through the install,
-  and the Core2's screen shows the version.
+  shows steady white through the install, and the Core2's and the
+  StickC Plus SE's screens show the version.
 - `ktbctl --device PORT bridge public-name ktbr0 --default` puts a
   device back on its default name, such as `KTB-EF26`, on firmware 1.4.0
   and later; older firmware refuses it, and ktbctl says to update it or

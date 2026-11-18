@@ -23,6 +23,10 @@ bool init(i2c_master_bus_handle_t bus);
 // off switches the rail off.
 enum class Backlight : uint8_t { off, dim, full };
 void backlight(Backlight b);
+
+// The green LED, on the chip's GPIO1 as PWM: 0 is off, 255 full. Writes
+// the chip only on a change.
+void green_led(uint8_t level);
 #else
 // The backlight is the chip's LDO2: 0 switches it off, 1 to 100 sets its
 // voltage (led_brightness). Writes the chip only on a change.

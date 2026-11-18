@@ -14,9 +14,18 @@ namespace ktb::settings {
 // The values are stored in NVS: add new ones at the end.
 enum class LedNormal : uint8_t { bright, breathe, dark, dim };
 
-// A board with a screen (board::screen) has these in place of the LED's
-// (docs/core2-ui.md, The screen). Stored in NVS: add new ones at the end.
+// A board with a screen (board::screen_settings) has these in place of
+// the LED's (docs/core2-ui.md, The screen). Stored in NVS: add new ones
+// at the end.
 enum class ScreenNormal : uint8_t { bright, dim, dark };
+
+// A board with a status LED (board::status_led: the StickC's red, the
+// Core2's green) has
+// these three, each on its own: when it's lit, how, and whether it goes
+// dark for a moment on each frame to or from the radio. Stored in NVS:
+// add new ones at the end.
+enum class LedWhen : uint8_t { always, screen_dark, never };
+enum class LedPattern : uint8_t { bright, dim, breathe };
 
 // Reads the settings from NVS, with defaults for any that aren't there.
 void load();
@@ -28,6 +37,9 @@ uint16_t led_wake_seconds();
 uint8_t led_brightness();
 ScreenNormal screen_normal();
 uint16_t screen_timeout_seconds();
+LedWhen led_when();
+LedPattern led_pattern();
+bool led_activity_blink();
 
 // Every setting, as device.settings.get returns them.
 cJSON *to_json();

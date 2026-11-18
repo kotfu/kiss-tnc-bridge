@@ -223,7 +223,9 @@ as they're found.
 | Scan duty while reconnecting to a BLE radio (TD-H9) | Radio time while the radio is away. The firmware scans for it (a 30 ms window every 50 ms) and connects once it hears it; the spike's direct connect, at Bluedroid's fast rate, took an ATOM Lite from about 50 mA connected to pulses between 50 and 100 mA (`spikes/atom-lite-ble-tnc`). A slower scan is possible | Slower recovery after the radio comes back: with the fast rate, the link was ready within a few seconds of the TD-H9 turning on | The fast rate |
 | BLE connection interval and latency to a BLE radio (TD-H9) | Radio time on the radio link | Latency to and from the radio. The TD-H9 asks for 30 ms with a latency of 10 right after connecting. The firmware drew mostly 60–70 mA bridging a TD-H9 to one phone, with bursts of several seconds up to 100 mA | The TD-H9's choice |
 | LED or screen brightness | LED or backlight current. On a Core2 the backlight is a voltage output of the AXP192 | Visibility | — |
-| Screen timeout (Core2, StickC Plus SE) | Backlight current, the largest draw on a board with a screen, while nobody's looking | A touch or press to see the screen again | — |
+| Screen timeout (Core2, StickC Plus SE) | Backlight current, the largest draw on a board with a screen, while nobody's looking. `screen_normal` `dark` turns the backlight off after the timeout, as the power button does at once | A touch or press to see the screen again | `dim` after 30 s |
+| Status LED (Core2, StickC Plus SE) | The LED's current: `led_when` `never` keeps it off | A dark device can't be told from one that's off | Breathing while the screen is dark |
+| Drawing while the screen is dark (Core2, StickC Plus SE) | CPU time LVGL spends redrawing pages nobody can see | Nothing to see; the pages must be up to date when the screen wakes | Drawing on, to measure |
 | Speaker amplifier (Core2) | The NS4168 amplifier's idle current, by switching it off through the AXP192 between sounds | A few milliseconds to switch it on before a sound | — |
 | 5 V output to the expansion port (Core2) | The AXP192's boost converter, which feeds the expansion port's 5 V from the battery | Nothing plugged into the port gets power | — |
 | Wi-Fi power save (Core2, if Wi-Fi is added) | Wi-Fi radio time | Latency on the TCP port. ESP-IDF may require Wi-Fi modem sleep while Bluetooth is running; to confirm | — |
@@ -488,7 +490,9 @@ what follows. Firmware 1.2's screens are designed in
 ### StickC Plus SE firmware
 
 The StickC Plus SE's hardware has been tried on a device (see [Hardware
-notes](#m5stickc-plus-se)); its UI is still to design.
+notes](#m5stickc-plus-se)). Its own UI, for firmware 1.4, is in
+[stickc-ui.md](stickc-ui.md)
+([#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28)).
 
 **The UI is LVGL**, as on the Core2 (decided 12 November 2026, from
 [spikes/stickc-plus-se](../spikes/stickc-plus-se/README.md#lvgl)): about
@@ -500,14 +504,20 @@ and the UI shares the Core2's toolkit.
 The same firmware core again, on the ATOM Lite's chip and flash layout,
 with the Core2's UI made to fit a 135×240 screen and two buttons:
 
-- [ ] Status screen: TNC state, connected apps and battery, compact.
-- [ ] Buttons A and B drive the same menus as the Core2's touch buttons;
-      the side power button through the AXP192, as on the Core2.
-- [ ] Boot splash, and reset by holding button A at power-on, as the ATOM
-      does with its button.
-- [ ] Battery and charging from the AXP192, as on the Core2.
-- [ ] The red LED for events. No sound: the buzzer is too quiet to use
-      (see [Hardware notes](#m5stickc-plus-se)).
+- [x] Status screens: Bridge, TNC and System pages in landscape, and an
+      Errors page while there's an error.
+- [x] Buttons: A is the ATOM's button, B moves between pages, and the
+      pairing screen lists the radios found, B moving and A choosing.
+      The side power button turns the screen dark, through the AXP192,
+      as on the Core2. Settings are changed from a management app.
+- [x] Boot splash, and reset by holding button A at power-on, as the ATOM
+      does with its button, with its warning on the screen.
+- [x] Battery and charging from the AXP192, as on the Core2.
+- [x] The red LED as a status LED, with the Core2's green: breathing
+      while the screen is dark, so the device can be told from one
+      that's off. No sound: the buzzer is too quiet to use (see
+      [Hardware notes](#m5stickc-plus-se)).
+- [ ] Authorization mode on the screen.
 
 ---
 
@@ -764,8 +774,8 @@ from a browser, with no app.
       power-on. The Core2's for firmware 1.2 is designed in
       [core2-ui.md](core2-ui.md), without authorization mode. The StickC
       Plus SE runs the ATOM Lite's UI in firmware 1.3, with its whole
-      screen as the LED and button A as the button; its own UI is still to
-      design.
+      screen as the LED and button A as the button; its own, in firmware
+      1.4, is in [stickc-ui.md](stickc-ui.md), without authorization mode.
 - [x] Bridging tested on each: pairing, and packets both ways with KISS
       TNC apps, with firmware 1.3.0-rc1 (14 November 2026).
 - [x] The web installer: a choice of the three boards, installing and

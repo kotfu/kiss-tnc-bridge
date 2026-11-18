@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StickC UI Mockups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --page: #f4f4f1; --ink: #1f1f1f; --muted: #5f5f5f; --rule: #d8d8d4;
+  --case: #f1efe9; --case-edge: #c9c6bd; --key: #e2dfd7;
+  /* the device's own palette, as the Core2's */
+  --d-bg: #000; --d-fg: #fff; --d-dim: #9aa0a6; --d-faint: #5c6066; --d-line: #26292d;
+  --d-green: #3ddc84; --d-amber: #ffb300; --d-red: #ff5252; --d-blue: #2196f3; --d-panel: #121417;
+  /* the ATOM's LED colors, on a screen */
+  --l-cyan: #18d2e6; --l-green: #3ddc84; --l-yellow: #ffcc00; --l-blue: #2f7cff; --l-magenta: #e040fb; --l-red: #ff4040; --l-white: #f2f2f2;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --page: #18191b; --ink: #ececec; --muted: #a4a4a4; --rule: #34363a; --case: #e9e7e1; --case-edge: #8d8a82; }
+}
+:root[data-theme="dark"] { --page: #18191b; --ink: #ececec; --muted: #a4a4a4; --rule: #34363a; --case: #e9e7e1; --case-edge: #8d8a82; }
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 15px/1.5 system-ui, -apple-system, sans-serif; }
+main { max-width: 1480px; margin: 0 auto; padding: 24px 16px 64px; }
+h1 { font-size: 22px; margin: 0 0 4px; }
+h2 { font-size: 17px; margin: 36px 0 6px; padding-top: 16px; border-top: 1px solid var(--rule); }
+h3 { font-size: 15px; margin: 22px 0 4px; }
+p.lead, .note { color: var(--muted); max-width: 880px; margin: 4px 0 12px; }
+table.conv { border-collapse: collapse; margin: 8px 0 4px; font-size: 14px; }
+table.conv th, table.conv td { text-align: left; padding: 4px 14px 4px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+table.conv th { color: var(--muted); font-weight: 600; }
+ul.q { max-width: 900px; padding-left: 20px; }
+ul.q li { margin: 6px 0; }
+
+.controls { position: sticky; top: 0; z-index: 5; background: var(--page); padding: 8px 0; border-bottom: 1px solid var(--rule); }
+.crow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; color: var(--muted); font-size: 13px; }
+.crow .lab { width: 92px; }
+.crow button { font: inherit; padding: 3px 9px; border: 1px solid var(--rule); background: transparent; color: var(--ink); border-radius: 6px; cursor: pointer; }
+.crow button[aria-pressed="true"] { background: var(--ink); color: var(--page); border-color: var(--ink); }
+.crow .sep { width: 10px; }
+
+.grid { display: flex; flex-wrap: wrap; gap: 18px 26px; align-items: flex-start; }
+figure { margin: 0; }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 6px; text-align: center; }
+.optdesc { max-width: 900px; color: var(--muted); margin: 2px 0 10px; }
+.optdesc b { color: var(--ink); }
+
+/* ---- the case ---- */
+.dev { zoom: var(--z, 2); position: relative; padding: 14px 22px; }
+.case { position: relative; background: var(--case); border: 1px solid var(--case-edge); border-radius: 12px; }
+.case.p { width: 159px; height: 352px; }
+.case.l { width: 352px; height: 159px; }
+.glass { position: absolute; background: #050505; border-radius: 6px; }
+.case.p .glass { left: 8px; top: 14px; width: 143px; height: 248px; }
+.case.l .glass { left: 14px; top: 8px; width: 248px; height: 143px; }
+.scr { position: absolute; left: 4px; top: 4px; overflow: hidden; background: var(--d-bg); color: var(--d-fg);
+       font-family: Montserrat, sans-serif; font-size: 12px; line-height: 1.25; }
+.case.p .scr { width: 135px; height: 240px; }
+.case.l .scr { width: 240px; height: 135px; }
+
+.keyA { position: absolute; border: 1px solid var(--case-edge); background: var(--key); border-radius: 10px; cursor: pointer;
+        font: 700 13px/1 system-ui, sans-serif; color: #77736a; display: flex; align-items: center; justify-content: center; user-select: none; touch-action: none; }
+.case.p .keyA { left: 39px; top: 282px; width: 80px; height: 50px; }
+.case.l .keyA { left: 282px; top: 39px; width: 50px; height: 80px; }
+.keyA.down { background: #cfcabd; }
+.side { position: absolute; cursor: pointer; user-select: none; touch-action: none; }
+.side i { position: absolute; background: #b9b5ab; border-radius: 2px; }
+.side.down i { background: #8f8a7e; }
+.side em { position: absolute; font: 600 8px/1 system-ui, sans-serif; color: var(--muted); font-style: normal; white-space: nowrap; }
+/* B: portrait, the right side at the top; landscape, the top at the left */
+.case.p .side.b { right: -16px; top: 26px; width: 16px; height: 40px; } .case.p .side.b i { left: 0; top: 3px; width: 5px; height: 34px; } .case.p .side.b em { left: 8px; top: 16px; }
+.case.l .side.b { top: -16px; left: 26px; height: 16px; width: 40px; } .case.l .side.b i { bottom: 0; left: 3px; height: 5px; width: 34px; } .case.l .side.b em { top: 0; left: 16px; }
+/* Power: portrait, the left side near USB; landscape, the bottom near USB */
+.case.p .side.pw { left: -16px; bottom: 38px; width: 16px; height: 32px; } .case.p .side.pw i { right: 0; top: 3px; width: 5px; height: 26px; } .case.p .side.pw em { right: 8px; top: 12px; }
+.case.l .side.pw { bottom: -16px; right: 38px; height: 16px; width: 32px; } .case.l .side.pw i { top: 0; left: 3px; height: 5px; width: 26px; } .case.l .side.pw em { bottom: 0; left: 2px; }
+.usb { position: absolute; background: #555; border-radius: 2px; }
+.case.p .usb { bottom: -3px; left: 66px; width: 26px; height: 3px; }
+.case.l .usb { right: -3px; top: 66px; width: 3px; height: 26px; }
+.rled { position: absolute; background: #5a1a1a; border-radius: 2px; }
+.case.p .rled { top: -3px; right: 22px; width: 7px; height: 3px; }
+.case.l .rled { left: -3px; top: 22px; width: 3px; height: 7px; }
+.rled.on { background: #ff2a2a; box-shadow: 0 0 6px #ff2a2a; }
+.rled.flick { animation: flick 2.4s infinite; }
+.rled.err { animation: err3 2s infinite; }
+@keyframes flick { 0%, 6% { background: #ff2a2a; box-shadow: 0 0 6px #ff2a2a; } 7%, 100% { background: #5a1a1a; box-shadow: none; } }
+
+/* ---- the screen ---- */
+.hdr { position: absolute; left: 0; right: 0; top: 0; height: 20px; display: flex; align-items: center; gap: 5px; padding: 0 5px;
+       font-size: 12px; font-weight: 600; }
+.hdr.quiet { border-bottom: 1px solid var(--d-line); color: var(--d-fg); }
+.hdr .sp { flex: 1; }
+.hdr .ttl { white-space: nowrap; }
+.hdr .mk { color: var(--d-dim); font-weight: 600; white-space: nowrap; }
+.hdr.band .mk { color: inherit; opacity: .7; }
+.dots { display: inline-flex; gap: 3px; vertical-align: middle; }
+.dots i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; opacity: .35; }
+.dots i.on { opacity: 1; }
+.tabs { display: inline-flex; gap: 6px; }
+.tabs span { opacity: .45; } .tabs span.on { opacity: 1; text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 2px; }
+.batt { display: inline-flex; align-items: center; gap: 3px; font-size: 11px; font-weight: 600; }
+.batt .cell { position: relative; width: 16px; height: 8px; border: 1.5px solid currentColor; border-radius: 2px; opacity: .9; }
+.batt .cell::after { content: ""; position: absolute; right: -3.5px; top: 1.5px; width: 1.5px; height: 2px; background: currentColor; }
+.batt .lvl { position: absolute; left: 1px; top: 1px; bottom: 1px; background: currentColor; }
+
+.body { position: absolute; left: 0; right: 0; top: 21px; bottom: 0; padding: 4px 6px; }
+.big { font-size: 20px; font-weight: 700; line-height: 1.15; }
+.mid { font-size: 14px; font-weight: 600; }
+.sm { font-size: 12px; color: var(--d-dim); }
+.fg { color: var(--d-fg); }
+.c-green { color: var(--d-green); } .c-amber { color: var(--d-amber); } .c-red { color: var(--d-red); } .c-blue { color: #6aa9ff; } .c-mag { color: var(--l-magenta); } .c-cyan { color: var(--l-cyan); }
+.hr { height: 1px; background: var(--d-line); margin: 6px 0; }
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 4px; }
+.kv { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; row-gap: 3px; align-items: baseline; }
+.kv .k { color: var(--d-dim); } .kv .v { text-align: right; white-space: nowrap; }
+.light { display: inline-block; width: 7px; height: 7px; border-radius: 2px; border: 1.5px solid var(--d-faint); margin-right: 3px; }
+.light.rx { background: var(--d-green); border-color: var(--d-green); }
+.light.tx { background: var(--d-amber); border-color: var(--d-amber); }
+.hint { position: absolute; left: 6px; right: 6px; bottom: 5px; font-size: 12px; color: var(--d-dim); line-height: 1.3; }
+.hint b { color: var(--d-fg); font-weight: 600; }
+.akey { display: inline-block; min-width: 13px; padding: 0 3px; height: 13px; line-height: 13px; border: 1px solid currentColor; border-radius: 3px; font-size: 10px; font-weight: 700; text-align: center; }
+.abar { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; display: flex; align-items: center; justify-content: center; gap: 5px;
+        font-size: 12px; font-weight: 600; border-top: 1px solid var(--d-line); }
+.abar.l { left: auto; top: 21px; bottom: 0; width: 46px; height: auto; flex-direction: column; border-top: 0; border-left: 1px solid var(--d-line); }
+.center { text-align: center; }
+.digits { font-size: 28px; font-weight: 700; letter-spacing: .04em; line-height: 1.1; }
+.cols { display: flex; gap: 8px; height: 100%; }
+.cols > div { flex: 1; min-width: 0; position: relative; }
+.cols > div + div { border-left: 1px solid var(--d-line); padding-left: 8px; }
+.ell { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.offnote { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 10px system-ui, sans-serif; color: #333; }
+.hold { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--l-magenta); }
+
+/* the LED tile, next to A: the ATOM's LED is its button */
+.tile { position: absolute; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 1px;
+        font-size: 12px; font-weight: 700; color: #000; text-align: center; line-height: 1.1; }
+.tile.p { left: 0; right: 0; bottom: 0; height: 34px; }
+.tile.l { right: 0; top: 0; bottom: 0; width: 54px; font-size: 11px; }
+.tile .sub { font-size: 10px; font-weight: 600; opacity: .75; }
+
+.bg-cyan { background: var(--l-cyan); color: #00262b; } .bg-green { background: var(--l-green); color: #04140a; }
+.bg-yellow { background: var(--l-yellow); color: #1c1400; } .bg-blue { background: var(--l-blue); color: #fff; }
+.bg-magenta { background: var(--l-magenta); color: #fff; } .bg-red { background: var(--l-red); color: #fff; }
+.bg-white { background: var(--l-white); color: #000; } .bg-off { background: #111; color: #555; }
+
+.a-slow { animation: slow 1.6s steps(1) infinite; }
+.a-fast { animation: slow .5s steps(1) infinite; }
+.a-alt { animation: alt 1.6s steps(1) infinite; }
+.a-err { animation: err3 2s steps(1) infinite; }
+@keyframes slow { 0% { filter: none; } 50% { filter: brightness(.22); } }
+@keyframes alt { 0% { background: var(--l-yellow); color: #1c1400; } 50% { background: var(--l-blue); color: #fff; } }
+@keyframes err3 { 0% { filter: none; } 12.5% { filter: brightness(.2); } 25% { filter: none; } 37.5% { filter: brightness(.2); } 50% { filter: none; } 62.5%, 100% { filter: brightness(.2); } }
+.rled.err { animation-name: rerr; }
+@keyframes rerr { 0%, 12% { background: #ff2a2a; } 12.5%, 24% { background: #5a1a1a; } 25%, 37% { background: #ff2a2a; } 37.5%, 49% { background: #5a1a1a; } 50%, 62% { background: #ff2a2a; } 62.5%, 100% { background: #5a1a1a; } }
+@media (prefers-reduced-motion: reduce) { .a-slow, .a-fast, .a-alt, .a-err, .rled.flick, .rled.err { animation: none; } }
+
+.legend { font-size: 13px; color: var(--muted); margin: 6px 0 0; max-width: 900px; }
+</style>
+</head>
+<body>
+<main>
+<h1>StickC Plus SE UI mockups</h1>
+<p class="lead">Round 1 for <a href="https://github.com/kotfu/kiss-tnc-bridge/issues/28">#28</a>: three ways to lay out the
+135×240 screen, in portrait and landscape, at the screen's real pixel size (zoomed). Text is Montserrat at 12, 14, 20 and 28 px,
+the sizes LVGL would use. The devices work: click <b>B</b> for the next page, click <b>A</b> once, twice, or hold it 3 s, and click
+<b>Power</b> to turn the screen off and on. The buttons above set what every device is showing.</p>
+
+<h2>The buttons</h2>
+<table class="conv">
+<tr><th>Name</th><th>What it is</th><th>Portrait (USB at the bottom)</th><th>Landscape (USB at the right)</th><th>Wired to</th></tr>
+<tr><td><b>A</b></td><td>The large button on the face</td><td>Below the screen</td><td>Right of the screen</td><td>G37, low when pressed</td></tr>
+<tr><td><b>B</b></td><td>The side button at the end away from USB</td><td>Right side, at the top</td><td>Top edge, at the left</td><td>G39, low when pressed</td></tr>
+<tr><td><b>Power</b></td><td>The side button near USB</td><td>Left side, at the bottom</td><td>Bottom edge, at the right</td><td>The AXP192: short press and ~1 s press as interrupts; held 6 s it cuts the power, whatever the firmware does</td></tr>
+<tr><td><b>Red LED</b></td><td>On the end away from USB, beside B</td><td>The top end</td><td>The left end</td><td>G10, active low</td></tr>
+</table>
+<p class="note">No reset button: the ESP32's EN pin isn't on a button, so "restart" is Power held 6 s, then pressed. Today's StickC firmware
+reads only A, as the ATOM's button; B and Power are unused.</p>
+
+<h3>Gestures, starting from the ATOM Lite's</h3>
+<table class="conv">
+<tr><th>Gesture</th><th>Does</th><th>As on the ATOM</th></tr>
+<tr><td><b>A</b> twice</td><td>Pair a Kenwood, or select a BLE TNC</td><td>Yes</td></tr>
+<tr><td><b>A</b> held 3 s</td><td>Authorization mode, when you let go</td><td>Yes (the screen says "let go" in place of steady magenta)</td></tr>
+<tr><td><b>A</b> once</td><td>Cancels pairing, ends authorization mode, wakes a dark screen</td><td>Yes</td></tr>
+<tr><td><b>A</b> held at power-on</td><td>Reset</td><td>Yes</td></tr>
+<tr><td><b>B</b> once</td><td>The next page (Bridge, TNC, System, round again); wakes a dark screen</td><td>New</td></tr>
+<tr><td><b>Power</b> short press</td><td>Screen off, or on</td><td>New (as the Core2)</td></tr>
+</table>
+
+<div class="controls">
+  <div class="crow" id="c-state"><span class="lab">State</span></div>
+  <div class="crow" id="c-mode"><span class="lab">Mode</span></div>
+  <div class="crow" id="c-mark"><span class="lab">Page marker</span></div>
+  <div class="crow" id="c-zoom"><span class="lab">Size</span></div>
+</div>
+
+<div id="sections"></div>
+
+<h2>To decide</h2>
+<ul class="q">
+<li><b>Which layout:</b> the state band, quiet, or the LED tile; or a mix (the quiet layout with a thin band, say).</li>
+<li><b>Which page marker:</b> 1/3, dots, an arrow pointing at B, or tabs. Each sits at the end of the top bar nearest B, so it
+points at the button that moves you on: the right end in portrait, the left end in landscape.</li>
+<li><b>Portrait or landscape.</b> Landscape gives two columns and a wider line (about 33 characters at 12 px, against 19), but the
+pages have to be shorter: 115 px under the top bar, against 220.</li>
+<li><b>Three pages or two.</b> Bridge and TNC overlap: both show the radio and its state. Two pages (Bridge with the radio's
+address, then System) would make B a toggle.</li>
+<li><b>The Kenwood's number.</b> The ATOM accepts it without asking. The mockup shows it, so you can check it against the radio,
+but still asks nothing: no yes or no, so A keeps the ATOM's gestures.</li>
+<li><b>B while pairing or in authorization mode:</b> the mockup ignores it (the screen belongs to the mode). It could change
+pages under the mode instead, or cancel it.</li>
+<li><b>The red LED:</b> the mockup flicks it for each frame to the radio (it will transmit) and blinks the ATOM's error pattern,
+since the end with the LED can be seen with the screen off or in a pouch.</li>
+<li><b>Single press of A on an ordinary page:</b> nothing but a wake, as the ATOM, or something of its own (scroll the apps
+list, say).</li>
+</ul>
+</main>
+
+<script>
+const STATES = [
+  ['none', 'No radio'], ['waiting', 'Waiting'], ['connected', 'Connected'], ['bridging', 'Bridging'], ['error', 'Error'],
+];
+const MODES = [
+  ['', 'None'], ['pairing', 'Pairing'], ['number', 'Kenwood number'], ['selected', 'BLE TNC selected'],
+  ['hold', 'Holding A'], ['auth', 'Authorization mode'], ['dark', 'Screen off'],
+];
+const MARKS = [['frac', '1/3'], ['dots', 'Dots'], ['arrow', 'Arrow to B'], ['tabs', 'Tabs']];
+const ZOOMS = [['1.5', '1.5×'], ['2', '2×'], ['3', '3×']];
+const PAGES = ['Bridge', 'TNC', 'System'];
+const OPTS = [
+  { id: 'band', name: 'A: State band',
+    desc: '<b>The top bar is the ATOM\'s LED.</b> Its color is the state, steady: cyan ready, green bridging, yellow waiting or no radio, blue pairing, magenta authorization mode, red an error. It holds the page title, the battery and the page marker. Readable across a room; the page below stays black and white with the Core2\'s colors for state words.' },
+  { id: 'quiet', name: 'B: Quiet',
+    desc: '<b>Like the Core2:</b> a black top bar with the title, battery (with its percentage) and page marker, and color only in the state words. Nothing replaces the LED: the screen wakes for anything that matters, and the red LED does errors and transmit.' },
+  { id: 'tile', name: 'C: LED tile by A',
+    desc: '<b>A copy of the ATOM\'s LED, next to A</b>, with the ATOM\'s blink patterns, since the ATOM\'s LED is its button. The tile names the state, and in a mode it\'s also A\'s label ("A Cancel"). Costs 34 px of a portrait page, or a 54 px column in landscape.' },
+];
+
+const S = { state: 'bridging', mode: '', mark: 'frac', z: '2', pages: {}, };
+
+function tone() {
+  if (S.mode === 'pairing' || S.mode === 'number' || S.mode === 'selected') return { c: 'blue', a: 'a-fast', w: 'Pairing' };
+  if (S.mode === 'hold') return { c: 'magenta', a: '', w: 'Let go' };
+  if (S.mode === 'auth') return { c: 'magenta', a: 'a-slow', w: 'Authorize' };
+  return {
+    none: { c: 'yellow', a: 'a-alt', w: 'No radio' }, waiting: { c: 'yellow', a: 'a-slow', w: 'Waiting' },
+    connected: { c: 'cyan', a: '', w: 'Ready' }, bridging: { c: 'green', a: '', w: 'Bridging' },
+    error: { c: 'red', a: 'a-err', w: 'Error' },
+  }[S.state];
+}
+
+function battery(pct) {
+  return `<span class="batt"><span class="cell"><span class="lvl" style="width:${Math.round(11 * 0.87)}px"></span></span>${pct ? '87%' : ''}</span>`;
+}
+function marker(page, land) {
+  if (S.mark === 'frac') return `<span class="mk">${page + 1}/3</span>`;
+  if (S.mark === 'dots') return `<span class="mk dots">${[0, 1, 2].map(i => `<i class="${i === page ? 'on' : ''}"></i>`).join('')}</span>`;
+  if (S.mark === 'arrow') return `<span class="mk">${land ? '▲' : '▶'}</span>`;
+  return '';
+}
+function header(opt, land, page) {
+  const t = tone();
+  const band = opt === 'band';
+  const inMode = S.mode && S.mode !== 'dark';
+  const title = inMode ? { pairing: 'Pairing', number: 'Pairing', selected: 'Pairing', hold: 'Authorize', auth: 'Authorize' }[S.mode] : PAGES[page];
+  const tabs = !inMode && S.mark === 'tabs'
+    ? `<span class="tabs">${PAGES.map((p, i) => `<span class="${i === page ? 'on' : ''}">${p === 'System' ? 'Sys' : p}</span>`).join('')}</span>` : '';
+  const ttl = tabs || `<span class="ttl">${title}</span>`;
+  const mk = inMode || tabs ? '' : marker(page, land);
+  const bat = battery((opt === 'quiet' && !tabs) || land);
+  const cls = band ? `hdr band bg-${t.c}` : 'hdr quiet';
+  // the marker sits at the end nearest B: right in portrait, left in landscape
+  return land
+    ? `<div class="${cls}">${mk}${ttl}<span class="sp"></span>${bat}</div>`
+    : `<div class="${cls}">${ttl}<span class="sp"></span>${bat}${mk}</div>`;
+}
+
+const RADIO = 'TH-D75', ADDR = 'C8:1A:2E:04:7B:19';
+function radioState() {
+  return {
+    none: ['No radio', 'c-amber', ''], waiting: ['Retrying in 8s', 'c-amber', ''], connected: ['Connected', 'c-green', '2h 14m'],
+    bridging: ['Connected', 'c-green', '2h 14m'], error: ['Not connected', 'c-red', ''],
+  }[S.state];
+}
+function stateLine() {
+  if (S.state === 'none') return '';
+  const [w, c, d] = radioState();
+  return `<div class="mid ${c}">${w}</div>${d ? `<div class="sm">for ${d}</div>` : ''}`;
+}
+function radioName() { return S.state === 'none' ? 'No radio' : RADIO; }
+function apps(land, rows) {
+  const n = S.state === 'bridging' ? 2 : 0;
+  const ok = S.state === 'connected' || S.state === 'bridging';
+  let h = `<div class="row"><span class="mid">${n ? n + ' apps' : 'No apps'}</span><span class="sm">of 2</span></div>`;
+  h += `<div class="sm ell">on KTB-F5B4</div>`;
+  if (n) h += `<div class="fg" style="margin-top:3px">61:66:35:5D:31:1D</div><div class="sm">41m</div>`
+           + (rows > 1 ? `<div class="fg" style="margin-top:2px">4A:0E:91:C2:77:08</div><div class="sm">2h 3m</div>` : `<div class="sm">and 1 more</div>`);
+  if (ok && !land) h += rxtx(false);
+  return h;
+}
+function rxtx(land) {
+  const ok = S.state === 'connected' || S.state === 'bridging';
+  if (!ok) return '';
+  return land ? `<div style="margin-top:4px"><span class="light rx"></span>RX 1,284</div><div><span class="light tx"></span>TX 37</div>`
+    : `<div class="row" style="margin-top:5px"><span><span class="light rx"></span>RX 1,284</span><span><span class="light tx"></span>TX 37</span></div>`;
+}
+function errorBox() {
+  return `<div class="mid c-red">Error</div><div class="fg">Bluetooth didn't start.</div><div class="sm">Connect a management app over USB.</div>`;
+}
+
+function pageBody(opt, land, page) {
+  const err = S.state === 'error';
+  if (page === 0) {
+    const left = `<div class="big">${radioName()}</div>${stateLine()}`
+      + (S.state === 'none' ? `<div class="sm" style="margin-top:4px">Press A twice to pair a radio</div>` : '');
+    if (err) return land ? `<div class="cols"><div>${errorBox()}</div><div>${apps(true, 1)}</div></div>` : `${errorBox()}<div class="hr"></div>${apps(false, opt === 'tile' ? 1 : 2)}`;
+    return land ? `<div class="cols"><div>${left}${rxtx(true)}</div><div>${apps(true, 1)}</div></div>` : `${left}<div class="hr"></div>${apps(false, opt === 'tile' ? 1 : 2)}`;
+  }
+  if (page === 1) {
+    const hint = land ? `<div class="hint"><b>A</b> twice:<br>a new radio</div>`
+      : `<div class="hint"><b>A</b> twice: a new radio<br>${S.state === 'none' ? 'Kenwood in pairing mode, or a BLE TNC on' : 'Replaces ' + RADIO}</div>`;
+    if (S.state === 'none') {
+      const t = `<div class="big">No radio</div><div class="sm" style="margin-top:4px">${land ? 'Nothing paired or selected.' : 'Put a Kenwood in pairing mode, or turn on a BLE TNC with nothing connected.'}</div>`;
+      return land ? `<div class="cols"><div>${t}</div><div>${hint}</div></div>` : t + hint;
+    }
+    const id = `<div class="big">${RADIO}</div><div class="sm">Kenwood · paired</div><div class="sm">${ADDR}</div>`;
+    return land ? `<div class="cols"><div>${id}</div><div>${stateLine()}${hint}</div></div>` : `${id}<div style="margin-top:4px">${stateLine()}</div>${hint}`;
+  }
+  let rows = land ? [['Battery', '87%, charging'], ['Uptime', '3h 2m'], ['Firmware', '1.5.0'], ['Name', 'KTB-F5B4']]
+    : [['Battery', '87%'], ['Power', 'Charging'], ['Uptime', '3h 2m'], ['Firmware', '1.5.0'], ['Name', 'KTB-F5B4']];
+  if (err) rows = rows.filter(r => r[0] !== 'Uptime' && (!land || r[0] !== 'Firmware'));
+  const kv = (rs) => `<div class="kv">${rs.map(([k, v]) => `<span class="k">${k}</span><span class="v">${v}</span>`).join('')}</div>`;
+  if (land) rows.push(['Bluetooth', '1C:8F:57:BC:EF:26']);
+  const bt = land ? '' : `<div class="sm" style="margin-top:3px">Bluetooth</div><div>1C:8F:57:BC:EF:26</div>`;
+  const hint = `<div class="hint"><b>A</b> held 3 s: authorize an app</div>`;
+  const e = err ? `<div class="mid c-red" style="margin-bottom:3px">Error: bluetooth</div>` : '';
+  return `${e}${kv(rows)}${bt}${hint}`;
+}
+
+function modeBody(land) {
+  const m = S.mode;
+  if (m === 'pairing') return `<div class="big c-blue">Looking</div><div class="sm">for radios, 47 s left</div>
+    <div class="sm fg" style="margin-top:6px">Kenwood: pairing mode.</div><div class="sm fg">BLE TNC: on, nothing connected.</div>`;
+  if (m === 'number') return `<div class="sm">Pairing with</div><div class="mid">${RADIO}</div><div class="digits c-blue" style="margin-top:6px">481 207</div>
+    <div class="sm" style="margin-top:4px">Press OK on the radio if it shows this number.</div>`;
+  if (m === 'selected') return `<div class="mid c-green">Selected</div><div class="big">Ailunce HA2</div><div class="sm">34:3E:27:3F:E0:10</div><div class="sm" style="margin-top:4px">Connecting…</div>`;
+  if (m === 'hold') return `<div class="big c-mag" style="margin-top:${land ? 8 : 40}px">Let go</div><div class="fg">to start authorization mode</div><div class="hold" style="width:100%"></div>`;
+  if (m === 'auth') return `<div class="mid c-mag">Authorization mode</div><div class="digits" style="margin-top:4px">4:52</div>
+    <div class="sm" style="margin-top:4px">Authorize the app now, with the device's code.</div>`;
+  return '';
+}
+function aLabel() {
+  return { pairing: 'Cancel', number: 'Cancel', selected: '', hold: '', auth: 'End' }[S.mode] || '';
+}
+
+function render(dev) {
+  const { opt, land } = dev;
+  const page = S.pages[dev.key] || 0;
+  const scr = dev.el.querySelector('.scr');
+  dev.el.querySelector('.rled').className = 'rled' + (S.mode === 'dark' && S.state !== 'error' ? '' : S.state === 'error' ? ' err' : S.state === 'bridging' ? ' flick' : '');
+  if (S.mode === 'dark') { scr.innerHTML = `<div class="offnote">backlight off</div>`; return; }
+  const t = tone();
+  const inMode = !!S.mode;
+  const al = aLabel();
+  let h = header(opt, land, page);
+  let body = inMode ? modeBody(land) : pageBody(opt, land, page);
+  let pad = '';
+  if (opt === 'tile') {
+    pad = land ? 'right:54px;' : 'bottom:34px;';
+    const word = al ? `<span class="akey">A</span><span>${al}</span>` : `<span>${t.w}</span>`;
+    h += `<div class="tile ${land ? 'l' : 'p'} bg-${t.c} ${t.a}" style="${land ? 'top:21px' : ''}">${word}</div>`;
+  } else if (al) {
+    pad = land ? 'right:46px;' : 'bottom:22px;';
+    h += `<div class="abar ${land ? 'l' : ''}"><span class="akey">A</span><span>${al}</span></div>`;
+  }
+  h += `<div class="body" style="${pad}">${body}</div>`;
+  scr.innerHTML = h;
+}
+
+/* ---- gestures ---- */
+let prevMode = '';
+let lastUp = 0, holdTimer = null, held = false;
+function setMode(m) { S.mode = m; renderAll(); syncChips(); }
+function aDown(e) {
+  e.preventDefault(); e.currentTarget.classList.add('down'); held = false;
+  if (S.mode === 'dark') return;
+  holdTimer = setTimeout(() => { held = true; prevMode = S.mode; setMode('hold'); }, 3000);
+}
+function aUp(e) {
+  e.currentTarget.classList.remove('down'); clearTimeout(holdTimer);
+  if (S.mode === 'dark') { setMode(''); return; }
+  if (held) { setMode('auth'); return; }
+  const now = Date.now();
+  if (S.mode === 'pairing' || S.mode === 'number' || S.mode === 'auth') { setMode(''); lastUp = 0; return; }
+  if (now - lastUp < 400) { setMode('pairing'); lastUp = 0; return; }
+  lastUp = now;
+}
+function bPress(dev) {
+  if (S.mode === 'dark') { setMode(''); return; }
+  if (S.mode) return;
+  S.pages[dev.key] = ((S.pages[dev.key] || 0) + 1) % 3; render(dev);
+}
+function pwPress() { setMode(S.mode === 'dark' ? '' : 'dark'); }
+
+/* ---- build ---- */
+const devs = [];
+function makeDev(opt, land, page) {
+  const fig = document.createElement('figure');
+  fig.innerHTML = `<div class="dev"><div class="case ${land ? 'l' : 'p'}">
+    <div class="glass"><div class="scr"></div></div>
+    <div class="keyA" title="A: click, double-click, or hold 3 s">A</div>
+    <div class="side b" title="B: next page"><i></i><em>B</em></div>
+    <div class="side pw" title="Power: screen off or on"><i></i><em>Power</em></div>
+    <div class="usb"></div><div class="rled"></div></div></div><figcaption></figcaption>`;
+  const dev = { opt, land, key: `${opt}-${land ? 'l' : 'p'}-${page}`, el: fig };
+  S.pages[dev.key] = page;
+  const a = fig.querySelector('.keyA');
+  a.addEventListener('pointerdown', aDown);
+  a.addEventListener('pointerup', aUp);
+  a.addEventListener('pointerleave', e => { if (e.currentTarget.classList.contains('down')) aUp(e); });
+  const b = fig.querySelector('.side.b');
+  b.addEventListener('pointerdown', () => b.classList.add('down'));
+  b.addEventListener('pointerup', () => { b.classList.remove('down'); bPress(dev); });
+  const p = fig.querySelector('.side.pw');
+  p.addEventListener('pointerdown', () => p.classList.add('down'));
+  p.addEventListener('pointerup', () => { p.classList.remove('down'); pwPress(); });
+  devs.push(dev);
+  return fig;
+}
+function caption(dev) {
+  const page = S.pages[dev.key] || 0;
+  dev.el.querySelector('figcaption').textContent = S.mode ? MODES.find(m => m[0] === S.mode)[1] : `${PAGES[page]} page`;
+}
+function renderAll() { devs.forEach(d => { render(d); caption(d); }); }
+
+const sections = document.getElementById('sections');
+for (const land of [false, true]) {
+  const h2 = document.createElement('h2');
+  h2.textContent = land ? 'Landscape: USB at the right, A right of the screen, B on top' : 'Portrait: USB at the bottom, A below the screen, B on the right';
+  sections.appendChild(h2);
+  for (const o of OPTS) {
+    const h3 = document.createElement('h3'); h3.textContent = o.name; sections.appendChild(h3);
+    const p = document.createElement('p'); p.className = 'optdesc'; p.innerHTML = o.desc; sections.appendChild(p);
+    const g = document.createElement('div'); g.className = 'grid';
+    for (let i = 0; i < 3; i++) g.appendChild(makeDev(o.id, land, i));
+    sections.appendChild(g);
+  }
+}
+
+function chipRow(id, list, key, after) {
+  const row = document.getElementById(id);
+  for (const [v, label] of list) {
+    const b = document.createElement('button'); b.textContent = label; b.dataset.v = v;
+    b.addEventListener('click', () => { S[key] = v; if (after) after(v); syncChips(); renderAll(); });
+    row.appendChild(b);
+  }
+}
+function syncChips() {
+  for (const [id, key] of [['c-state', 'state'], ['c-mode', 'mode'], ['c-mark', 'mark'], ['c-zoom', 'z']])
+    document.querySelectorAll(`#${id} button`).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.v === S[key])));
+}
+chipRow('c-state', STATES, 'state', () => { S.mode = ''; });
+chipRow('c-mode', MODES, 'mode');
+chipRow('c-mark', MARKS, 'mark');
+chipRow('c-zoom', ZOOMS, 'z', v => document.documentElement.style.setProperty('--z', v));
+syncChips();
+renderAll();
+</script>
+</body>
+</html>

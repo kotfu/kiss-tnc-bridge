@@ -3,288 +3,441 @@
 The M5Stack StickC Plus SE has a 135×240 color screen, two buttons, a
 power button and a red LED (see the roadmap's
 [hardware notes](roadmap.md#m5stickc-plus-se), tried on a device). This
-is the design of what you can do with them in the StickC's first
-firmware, 1.3. It's the Core2's UI ([core2-ui.md](core2-ui.md)) made to
-fit a narrow screen and two buttons, built the same way, with LVGL.
-Everything else is done from a management app over the
-[control API](control-api.md), as on the ATOM Lite and the Core2.
+page is what the StickC's own UI does: three pages to watch the bridge
+(and a fourth while there's an error),
+the Core2's screen and LED settings, and the ATOM Lite's button for what
+you do on the device. Everything else is done from a management app over
+the [control API](control-api.md), as on the ATOM Lite and the Core2.
 
+It's drawn with LVGL, as the Core2's is ([core2-ui.md](core2-ui.md)).
 Where this page says "as on the Core2", the Core2's page has the detail,
 and the StickC does the same.
 
-Status: draft, 12 November 2026, on hold. Firmware 1.3 shipped the
-StickC with the ATOM Lite's UI on its screen instead; the full design is
-[#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28), which starts
-from this draft. Anything marked provisional is to be judged on the
-device.
-
-## What's in 1.3
-
-The same as the Core2's 1.2:
-
-- **Bridge page:** the radio, the KISS TNC apps connected, and the
-  device's name. Where the device starts.
-- **TNC page:** the radio the device has; pairing a Kenwood, selecting a
-  BLE TNC, and forgetting the radio.
-- **System page:** battery, power, uptime, firmware, the name and
-  Bluetooth address, errors, the screen settings, and power off.
-- **The screen's modes** and its timeout, the same settings as the
-  Core2's.
-- **Reset** by holding A at power-on.
-- **The red LED** for what matters while the screen is dark
-  (provisional).
-
-Not in 1.3, as on the Core2: authorization mode on the device, the
-authorization code on the screen, brightness as a setting, and anything
-the microSD card or Wi-Fi would bring (the StickC has neither). **No
-sound:** the buzzer is too quiet to use (see the hardware notes).
+Status: built in
+[#28](https://github.com/kotfu/kiss-tnc-bridge/issues/28) for firmware
+1.4, page by page on the device, 16 and 17 November 2026. Firmware 1.3
+ran the ATOM Lite's UI on the StickC, the whole screen standing in for
+the ATOM's LED. The [mockups](stickc-mockups/index.html) are where the
+layout started; where they and this page differ, this page wins.
 
 ## The device
 
-Held in portrait, with the USB port at the bottom: the screen fills the
-face, with A below it.
+Held in landscape, with the USB port at the right:
 
 | Control | Where | What it does |
 |---|---|---|
-| **A** | The large button on the face, below the screen | Acts: the action named at the bottom of the screen, right above it |
-| **B** | The right side, at the top end | Moves: the next page, or the next row of a list |
-| **Power** | The left side, near the USB end | A short press turns the screen off or wakes it; held, it turns the device on, and off |
-| **Red LED** | The top end, beside B | Errors, and frames going to the radio (see [The LED](#the-led)) |
+| **A** | The large button right of the screen | The ATOM Lite's button (see [The buttons](#the-buttons)) |
+| **B** | The top edge, at the left end | The next page |
+| **Power** | The bottom edge | A short press turns the screen dark, or wakes it; held, it turns the device on, and off |
+| **Red LED** | The left end | By default, breathes while the screen is dark and blinks on radio traffic (see [The red LED](#the-red-led)) |
 
-A and B are GPIOs the firmware reads. The power button is the AXP192's,
-as on the Core2: the chip turns the device on, reports short and long
-presses, and cuts the power when it's held, whatever the firmware is
-doing.
+A and B are GPIOs the firmware reads (A is GPIO37, B GPIO39). The power
+button is the AXP192's, as on the Core2: the chip turns the device on,
+reports short presses, and cuts the power when it's held, whatever the
+firmware is doing.
 
 | Power button | While | What happens | Whose |
 |---|---|---|---|
 | Hold about half a second | Off | Turns the StickC on | The AXP192's |
-| Short press | On | Turns the screen off, or wakes it | The firmware's |
+| Short press | On | Turns the screen dark, or wakes it | The firmware's |
 | Hold 6 s | On | Cuts the power | The AXP192's. The factory firmware sets 4 s; 6 s, as on the Core2, is harder to do by accident in a pocket |
 
-A long press (about 1 s) is reported too; the firmware doesn't use it in
-1.3.
+## The buttons
+
+**A is the ATOM Lite's button,** with its gestures and timings (see
+[atom-lite-ui.md](atom-lite-ui.md#what-you-can-do-on-the-device)):
+
+| Action | Gesture |
+|---|---|
+| Pair a Kenwood or select a BLE TNC | Double press, which opens the [pairing screen](#pairing) |
+| Start authorization mode | Hold 3 s |
+| End authorization mode | A press, in authorization mode |
+| Reset | Hold A while turning the StickC on (see [Reset](#reset)) |
+
+A press of A also wakes the screen, and a double press or a hold does
+what it does whatever the screen shows. On the pairing screen, A does
+what its word at the bottom right says (see [Pairing](#pairing)).
+
+**B moves to the next page:** Bridge, TNC, System, Errors while there's
+an error, and round to Bridge.
+While the screen is dark, a press of B only wakes it, on the page it was
+on (see [The screen](#the-screen)). On the pairing screen, B does what
+its word at the top left says. B is read every 20 ms, and a press
+counts once it's been down for two reads: GPIO39 has a known erratum
+that can glitch it.
 
 ## Layout
 
-| Part | Where | What |
-|---|---|---|
-| Top bar | The top 20 px | The [battery](#the-battery) at the left; at the right, beside B, the page dots: one for each page, the current one lit, so B is the way to the others |
-| Page | Between the bars | The page, or a step of a [flow](#flows) |
-| A bar | The bottom 22 px, when there's something for A | A's label, centered, right above A: "Pair", "Yes" |
+Every page has a **top bar**, 20 px, over a rule:
 
-A page with nothing for A gives the bottom 22 px to the page.
+- At the left, beside B, the page marker, `1/3` (`1/4` while there's
+  an error), then the page's title, so B is the way to the others.
+- At the right, while there's an error, a red warning mark (see
+  [Errors](#errors)); then the battery's percentage and the
+  [battery](#the-battery).
 
-Text is Montserrat, LVGL's built-in font, at 12 to 20 px, and 28 px for
-the pairing number (provisional: the fonts cost flash). About 19
-characters fit across at 12 px, enough for a Bluetooth address. The
-background is black. Colors mean what they mean on the Core2: green
-connected, amber waiting, red an error, blue a selection or the main
-action, grey quiet.
+Pages are stacked top and bottom, never in left and right halves: a
+radio's name or the device's name in half the width is cut off at six or
+seven characters.
 
-## Navigation
+Text is Montserrat, LVGL's built-in font, at 12, 14 and 20 px.
+Bluetooth addresses are in capitals. The background is black. Colors
+mean what they mean on the Core2: green connected, amber waiting, blue
+pairing, grey quiet.
 
-**On a page,** B goes to the next page (Bridge, TNC, System, and round
-again), and A does what the A bar says, if anything.
+## Bridge page
 
-**In a list,** a row is highlighted: B moves to the next row (round to
-the first after the last), and A chooses it. Every list ends with a
-**Back** row, which goes back where the list came from. There are no
-long presses to learn: the way out is always a row you can see.
+Where the device starts. The radio above a rule, KISS TNC apps below:
 
-**In a question** (yes or no), A is the yes: the A bar says what it
-does ("Yes", "Forget", "Power off"). B is the no, and the top bar's page
-dots give way to its label, "No" or "Cancel", at the right beside B.
+```
+1/3 Bridge                    100% [■■]
+---------------------------------------
+TH-D75                           RX ■
+Connected for 2h 14m             TX ■
+---------------------------------------
+KTB StickC
+5C:8D:01:79:49:1A  12m            ■ ■
+A4:C3:F0:2B:77:10  3m             ■ ■
+```
 
-**Flows** (pairing, the screen settings, power off) are as on the
-Core2: while one runs, B no longer changes pages, and every step has a
-way back, a Back row or B's Cancel. A flow keeps the screen lit until it
-ends.
+- **The radio:** its name at 20 px, or "No radio". Under it, its state
+  in color and how long, in the Core2's words: "Connected for 2h 14m",
+  "Connecting for 5s", "Waiting for 5s" (a BLE TNC), "Retrying in 8s
+  for 1m", "Pairing", "Stopped", or with no radio "Press A twice to pair
+  a radio". If Bluetooth didn't start, "Bluetooth didn't start" in red
+  (see [Errors](#errors)).
+- **RX and TX,** at the right at 20 px while the radio is connected,
+  each with a light as tall as the capitals: green for a frame from the
+  radio, amber for a frame to it. A light shows for 300 ms. There are no
+  counts: `ktbctl status` and a management app have them. The radio's
+  name gives way to them.
+- **The name KISS TNC apps see,** at 20 px.
+- **Each app connected,** up to two: its address, how long it's been
+  connected, and two lights at the right, green for a frame from the app
+  and amber for a frame to it. The times start at one column, past the
+  widest an address can be, so they line up whatever the addresses are.
+  With none, "No apps connected (of 2)", or in red "Apps can't find the
+  device" if the BLE KISS service didn't start (see [Errors](#errors)).
 
-A press counts when it's let go (provisional), so a button held while
-the device is picked up does nothing until it's released, and holding A
-at power-on is [reset](#reset), not a press.
+## TNC page
+
+The radio the device has, and how to change it:
+
+```
+2/3 TNC                       100% [■■]
+---------------------------------------
+TH-D75
+Kenwood, paired
+1C:8F:57:BC:EF:26
+Connected for 2h 14m
+---------------------------------------
+  Press A twice to choose another TNC.
+```
+
+- **Its name** at 20 px, or "No radio".
+- **Its make and how the device has it:** the make (or "BLE KISS TNC"),
+  then ", paired" or ", not paired" for a Kenwood, ", selected" for a
+  BLE TNC. With no radio, "Nothing paired or selected".
+- **Its Bluetooth address.**
+- **Its state and how long,** as on the Bridge page.
+- **Under the rule,** one line: "Press A twice to choose another TNC.",
+  or with no radio "Press A twice to choose a TNC."
+
+## Pairing
+
+A's double press opens the pairing screen over the pages, at once, from
+any page. It's the Core2's pairing (see
+[TNC page and pairing](core2-ui.md#tnc-page-and-pairing)), with B and A
+in place of taps:
+
+- **The top bar:** at the left, beside B, what B does ("▲ Next", "▲ No",
+  "▲ Cancel"), then "Pairing" and the time left. The battery stays at the
+  right.
+- **The bottom row:** at the right, beside A, what A does ("Choose ▶",
+  "Yes ▶", "OK ▶").
+- **The screen stays lit** until the pairing screen closes. If the power
+  button turns it dark, a press of A or B only wakes it.
+
+**1. The radios found,** for up to 60 s. The device looks for radios as
+the Core2 does, and lists each one as it's found, with its name, its
+make ("Kenwood", "BLE TNC") and its signal ("-62 dBm"). **Cancel** is
+always the last row.
+
+```
+▲ Next  Pairing  47 s     100% [■■]
+------------------------------------
+▌TH-D75          Kenwood    -62 dBm▐
+ Ailunce HA2     BLE TNC    -71 dBm
+ Cancel
+             2/2 TNCs      Choose ▶
+```
+
+- **B** moves the highlight to the next row, and round to the first
+  after Cancel. **A** chooses the highlighted radio, or Cancel.
+- **The highlight** is on the first radio found until B moves it; then
+  it stays on that radio as others are found.
+- **Four rows** show, and the list scrolls to keep the highlight on the
+  screen.
+- **The count,** in the middle of the bottom row, is the highlighted
+  radio and how many are found, "2/5 TNCs", so a list longer than the
+  screen shows how long it is. On Cancel it's only how many, "5 TNCs".
+- **Only radios are listed.** Devices that aren't radios aren't counted
+  or mentioned, unlike on the Core2: the screen is cramped, and it doesn't
+  help. A management app pairs anything else.
+
+**2. Connecting...,** in the middle, once a radio is chosen, while the
+search stops and the device connects. **B: Cancel.** A BLE TNC goes
+straight to the result.
+
+**3. A Kenwood's number,** in blue at 20 px in the middle, "481 207",
+and under it "Does TH-D75 show this number?" **A: Yes**, **B: No**. The
+device waits for the answer, as the Core2 does. If the radio still knows
+the device, there's no number, and it goes on to the result.
+
+**4. Press OK on the radio,** in the middle, and that the radio gives
+about 30 s. **B: Cancel.**
+
+**5. The result,** until A or B:
+
+| Result | Shows | A | B |
+|---|---|---|---|
+| A Kenwood paired | Its name, then "Paired" in green | OK: the pages | Nothing |
+| A BLE TNC selected | Its name, then "Selected" in green | OK: the pages | Nothing |
+| It didn't pair | "Didn't pair" in amber, and why, as on the Core2: "No radio was chosen in time." | Try again: a new search | Back: the pages |
+
+Cancelling, with the Cancel row or B, goes straight back to the pages,
+with the radio the device had. A pairing a management app starts doesn't
+open the pairing screen: the Bridge page's state says "Pairing", and the
+management app shows the rest.
+
+## System page
+
+Only what's worth seeing on the device, one row each at 14 px, the name
+in grey at the left and the value at the right. A management app reads
+the rest.
+
+| Row | What |
+|---|---|
+| Uptime | How long it's been running |
+| Last run | How long the run before this one lasted, or "None yet" |
+| Firmware | The version, `1.4.0` |
+| Screen | The [screen settings](#the-screen): "Dim after 30 s", "Dark after 1 min", "Bright" |
+| LED | The [red LED's settings](#the-red-led), all three on one line: "Breathe, screen dark, blink", "Dim, always", or "Off" |
+
+The device's own Bluetooth address isn't shown: a management app and
+`ktbctl device info` have it.
 
 ## The battery
 
-At the left of the top bar: the battery with its level, then its
-percentage, as on the Core2:
+At the right of the top bar: the percentage, then the battery with its
+level, as on the Core2:
 
 | Power | The level |
 |---|---|
 | On battery | Grey |
 | On battery, 20% or less | Red |
-| External power, charging | Green, with stripes moving through it |
-| External power, full | Solid green |
+| External power, charging | Green, with a black stripe moving through it |
+| External power, full | Solid green, 100% |
 
 External power is USB, which comes in on the AXP192's VBUS input (on
-the Core2 it's ACIN). The battery is 120 mAh, so it lasts an hour or two
-(provisional: to measure), and the percentage is the same estimate from
-the voltage as the Core2's.
-
-## Bridge page
-
-The Core2's Bridge page, stacked:
-
-1. **The radio:** its name (`TH-D75`, `TD-H9`) at 20 px; its state, in
-   color, with how long ("Connected for 2h 14m", "Retrying in 8s",
-   "Waiting", "Pairing", "No radio"), the states and wording of
-   the Core2's; its Bluetooth address.
-2. **RX and TX** since it connected, each with its activity light, as
-   on the Core2.
-3. **Apps on KTB-F5B4**, "2 of 2": the name KISS TNC apps see, and how
-   many are connected. Then a row for each app: its address and how long
-   it's been connected. The counts for each app are left out: they don't
-   fit, and the Core2 and `ktbctl status` have them.
-
-Nothing for A.
-
-## TNC page and pairing
-
-The radio the device has: its name, its make, whether it's paired (a
-Kenwood) or selected (a BLE TNC), its address, and its state. Under it,
-what to do on the radio before changing it, as on the Core2.
-
-A is **Change**, which opens a list:
-
-- **Pair or select a radio:** the pairing flow.
-- **Forget TH-D75,** while there's a radio: asks first, with the
-  Core2's words. A **Forget**, B **Cancel**.
-- **Back.**
-
-The pairing flow is the Core2's, with lists instead of taps:
-
-1. **Looking for radios.** Up to 60 s, with the time left. Radios are
-   listed as they're found, as on the Core2, each a row; B moves, A
-   chooses, and the last row is **Cancel**, which goes back to the radio
-   the device had. Until a radio turns up, the list says how to put one in
-   pairing mode.
-2. **A Kenwood: the number.** "Pairing with TH-D75", then the six-digit
-   number at 28 px and "Does it show this number?" **A: Yes**, **B: No**.
-   The device waits for your answer, as the Core2 does.
-3. **A Kenwood: Press OK on the radio,** counting down. **B: Cancel.**
-4. **A BLE TNC: Selected,** connecting. **A: OK.**
-5. **Done:** back to the TNC page, with the new radio connecting.
-
-If it fails: **Didn't pair** and why, as on the Core2. **A: Try again**,
-**B: Back**.
-
-## System page
-
-The Core2's rows, one to a line at 12 px: Battery ("87% · 4.05 V"),
-Power ("Charging, 86 mA"), Uptime, Firmware, Name, Bluetooth, and Screen
-("Dim after 30 s"). Errors come first, each with its whole message,
-wrapped. B goes to the next page, so the page doesn't scroll: if the
-errors push the rows off the bottom, the rows that don't fit are left
-off until the errors clear (provisional).
-
-A is **Settings**, which opens a list:
-
-- **Screen:** the screen settings.
-- **Power off:** asks first, with the Core2's words. **A: Power off**,
-  **B: Cancel.**
-- **Back.**
+the Core2 it's ACIN). The percentage is the Core2's estimate from the
+voltage: the AXP192 has no fuel gauge. Once the charger stops on
+external power, it shows 100%: a full StickC battery rests at about
+4.135 V once the charge current stops, which the voltage curve calls
+98%. The battery is 120 mAh, so it lasts an hour or two (provisional: to
+measure).
 
 ## The screen
 
 The Core2's modes and timeout, with the same settings, `screen_normal`
-(`bright`, `dim`, `dark`) and `screen_timeout_seconds`
-(see [The screen](core2-ui.md#the-screen) on the Core2):
+(`bright`, `dim`, `dark`) and `screen_timeout_seconds`, 30 s by default
+(see [The screen](core2-ui.md#the-screen) on the Core2). They're
+[device settings](control-api.md#devicesettingsget-and-devicesettingsset),
+and with the [red LED's](#the-red-led) they replace the ATOM's
+`led_normal`, `led_wake_seconds` and `led_brightness`, which the StickC
+had in firmware 1.3.
 
-- **Brightness** is the AXP192's LDO2 voltage: full and dim are
-  provisional (about 3.0 V and 2.6 V), to judge on the device. The
-  factory firmware runs at 2.8 V.
-- **The wake rule:** while the screen is dark, a press of A or B only
-  wakes it. In dim it acts, since the screen can be read.
-- **The power button:** a short press turns the screen off at once, and
-  the next press of any button wakes it.
-- **What wakes it on its own,** as on the Core2: an error, the radio
+**The settings are changed from a management app** (or `ktbctl --device
+PORT device settings set screen_normal=dark`), not on the device. The
+System page's **Screen** row shows them. The power button is the
+way to turn the screen dark and back on by hand.
+
+- **Brightness** is the AXP192's LDO2 voltage: full is about 3.1 V and
+  dim 2.5 V, the lowest step short of off. The factory firmware runs at
+  2.8 V. Neither is a setting.
+- **The timeout** runs from the last wake, and from the end of the
+  start-up screen.
+- **The wake rule:** while the screen is dark, a press of B only wakes
+  it, and doesn't change the page. Dimmed, B wakes it and goes to the
+  next page, since the screen can be read. A press of A wakes it too, and
+  A's double press and hold do what they do whatever the screen shows.
+- **The power button:** a short press turns the screen dark at once, in
+  any mode, and the next short press, or A or B, wakes it.
+- **What wakes it on its own,** as on the Core2: a new error, the radio
   connecting or disconnecting, an app connecting or disconnecting, and
   `device.identify`.
+- **Installing over USB** lights it, even if the power button had
+  turned it dark (see [Installing over USB](#installing-over-usb)).
 
-**Screen settings,** from System: a list of two rows, **Mode: Dim** and
-**After: 30 s**, and Back. A on a row steps through its values (bright,
-dim, dark; 15 s, 30 s, 1 min, 5 min), taking effect at once; "After" is
-greyed out for bright.
+## The red LED
 
-## The LED
+So a StickC with its screen dark can be told from one that's off. It's
+GPIO10, active low, dimmed by the ESP32's LED PWM. Three
+[device settings](control-api.md#devicesettingsget-and-devicesettingsset),
+each on its own, as the Core2's green LED has:
 
-The red LED is on the top end, so it can be seen when the StickC is in a
-pocket or a pouch with the screen dark. Provisional, for review:
+| Setting | Values | Default |
+|---|---|---|
+| `led_when` | `always`; `screen_dark`, while the screen is dark, whether the timeout or the power button did it (dimmed isn't dark); `never` | `screen_dark` |
+| `led_pattern` | `bright`, 8% of the LED's full; `dim`, 2%; `breathe`, the ATOM's breath, 8 s, starting bright, down to 15%, peaking at `bright` | `breathe` |
+| `led_activity_blink` | `true` or `false`: dark for a moment on each frame to or from the radio, while it's lit | `true` |
 
-| What | The LED |
-|---|---|
-| An error | Three fast blinks, then a pause, over and over, as the ATOM's red |
-| A frame to the radio (it will transmit) | A short flick, as the ATOM's white flick |
-| Identify | Three slow blinks |
-| Anything else | Off |
+**The settings are changed from a management app** (or `ktbctl --device
+PORT device settings set led_when=always led_activity_blink=false`), not
+on the device, as the screen's are. The System page's **LED** row shows
+all three on one line: "Breathe, screen dark, blink", "Dim, always", or
+"Off" for `never`.
 
-It shows these whatever the screen is doing. Frames from the radio don't
-flick it: they're most of the traffic, and the screen shows them.
+- **A blink** is dark for 100 ms, then lit for at least 100 ms before the
+  next, so steady traffic flickers rather than holding it dark. A frame
+  in the lit gap blinks once the gap ends. A breath keeps its time under
+  a blink.
+- **Activity** is frames to and from the radio. Frames to and from the
+  apps are the same traffic, so they'd blink twice.
+- **Full is too bright:** half was, so `bright` is 8%. The Core2's green
+  is much dimmer, so its `bright` is its full.
+- **It's off** through the start-up and installing screens.
 
-## Boot
+The Core2 can change them on the device, with a preview, from its System
+page (see [The green LED](core2-ui.md#the-green-led)).
 
-As on the Core2: the screen stays dark until the AXP192 and the screen
-are set up and the splash is drawn ("kiss-tnc-bridge", the firmware's
-version, a spinner over "Starting…", stacked to fit), then the backlight
-comes on. A step taking longer than about 2 s says which. An error at
-start shows on the Bridge page.
+## Start-up
+
+As on the Core2: the screen is set up first, before the settings load,
+and the start-up screen is drawn before the backlight comes on:
+
+```
+         kiss-tnc-bridge
+       firmware 1.4.0-dev
+               (◠)
+           Starting...
+```
+
+A spinner turns while it starts, and a step taking longer than 2 s says
+which, "Starting Bluetooth...". The Bridge page replaces it once
+everything has started, already filled in. B does nothing until then.
+
+## Installing over USB
+
+When `ktbctl device flash` or the web installer sends
+[`device.install_notice`](control-api.md#deviceinstall_notice), the
+screen changes at once, over any page, to the Core2's installing screen,
+fitted to 135 px:
+
+```
+         kiss-tnc-bridge
+  Installing firmware v1.4.0...
+
+The device will restart when complete.
+```
+
+The backlight comes on, even if the power button had turned the screen
+dark. In download mode no firmware runs, and the ROM leaves the screen
+and the AXP192 alone, so it stays through the whole install, until the
+new firmware's start-up screen replaces it. While it's up, B and the
+power button do nothing, and the pages stop updating.
 
 ## Reset
 
-Reset does what it does on the ATOM Lite and the Core2: every setting
-back to its default, the radio forgotten, and every authorized
-management app removed; the firmware, the device's key and the
-authorization code stay.
+The ATOM Lite's reset (see [atom-lite-ui.md](atom-lite-ui.md#reset)):
+hold A while turning the StickC on with the power button, and keep
+holding it through the 3 s warning. Every setting goes back to its
+default, the radio is forgotten, and every authorized management app is
+removed; the firmware, the device's key and the authorization code stay.
 
-1. Hold A.
-2. Turn the StickC on with the power button. Keep holding A.
-3. **Reset:** "Keep holding A to clear the settings, the radio and the
-   authorized apps", and a bar running out over 3 s. Let go to cancel:
-   the device starts as usual.
-4. Still held at the end: "Settings cleared. Restarting…", and it
-   restarts.
+The screen shows the Core2's words where the ATOM's LED shows white:
 
-A is read before any settings are loaded or Bluetooth starts. It's a
-GPIO, so unlike the Core2's touch circles (issue #20) nothing has to be
-calibrated first.
+```
+              Reset?
+  Clears all settings, TNC, and
+ authorized management apps. The
+firmware and the authorization code
+          are preserved.
+ ━━━━━━━━━━━━━━━━──────────────────
+ Keep holding A. Let go to cancel.
+```
 
-## Power off
+- **The warning:** "Reset?" in amber, what it clears, and an amber bar
+  filling over the 3 s. It's the first thing on the screen: there's no
+  power-on sequence first, as the ATOM's LED has.
+- **Let go** before the bar is full, and the start-up screen comes back
+  and the StickC starts as usual. Nothing is cleared.
+- **Held to the end:** "Settings cleared" and "Restarting...", for
+  1.5 s, then the restart, with no radio.
 
-As on the Core2: **Power off** on System asks first, then the screen goes
-black and the AXP192 cuts the power; the power button turns it on again.
-Whether it stays off with USB plugged in is to check on the device: the
-StickC's USB comes in on VBUS, the Core2's on ACIN.
+A is read before any settings are loaded or Bluetooth starts, and the
+screen is set up before A is read. It's a GPIO, so unlike the Core2's
+touch circles (issue #20) nothing has to be calibrated first.
 
 ## Errors
 
-The Core2's: the same codes and messages, a red line where each happens,
-whole on System, and an error wakes the screen and blinks the LED.
+The errors are the ATOM's (see
+[atom-lite-ui.md](atom-lite-ui.md#errors)), with the codes, titles and
+messages the Core2 shows and `device.info` gives. The Core2's red
+banners have no room here; the StickC shows them in three places:
 
-## Not on the device in 1.3
+- **A red warning mark** in the top bar, left of the battery, on every
+  page while there's an error.
+- **The Errors page,** `4/4`, after System, only while there's an
+  error: each error's title in red at 14 px, and under it its whole
+  message, which says what to do, at 12 px. With more than one, every
+  title shows, and the messages share the rest of the page, cut with dots
+  if they don't fit. When the last error clears, the page goes, and if
+  it was showing, System takes its place.
+- **In place,** where an error stops something on the Bridge and TNC
+  pages:
+
+| Error | Title | In place |
+|---|---|---|
+| `bluetooth` | Bluetooth didn't start | The radio's state, on Bridge and TNC, in place of "Stopped" |
+| `phones` | Apps can't find the device | The apps line on Bridge, in place of "No apps connected (of 2)" |
+| `storage` | Settings can't be saved | The Errors page only |
+| `device_key` | The device has no key | The Errors page only |
+
+A new error wakes the screen, as on the Core2, on the page it was on.
+A development build's `debug.set error=true` (`firmware/tools/ktbdev.py
+debug error=true`) raises a test error, "A test error (debug.set)", to
+see it.
+
+## Not on the screen yet
+
+Some of what A does shows on the ATOM's LED, which the StickC doesn't
+have, and nothing on the screen stands in for it yet:
+
+| What | On the screen now |
+|---|---|
+| Authorization mode | Nothing: the authorization code is over USB (`ktbctl auth code`) or from an authorized management app |
+
+## Not on the device
 
 | Action | Instead |
 |---|---|
-| Authorization mode, the authorization code | Over USB (`ktbctl auth code`), or from an authorized management app; authorizing over BLE comes in Phase E |
-| Change the name, or any setting but the screen's | A management app, or `ktbctl --device` over USB |
-| Brightness | Fixed in 1.3 |
+| Change the name, or any setting | A management app, or `ktbctl --device` over USB |
+| Forget the radio | A management app; pairing or selecting a new one replaces it |
+| Pair anything that isn't listed as a radio | A management app |
+| Brightness | Fixed |
+| Power off | Hold the power button 6 s |
 | Sound | The buzzer is too quiet to use |
 | Disconnect an app | Not offered |
 | Restart | Power off and on |
 
 ## To decide
 
-- The two-button scheme: B moves, A acts, a Back row at the end of every
-  list, and no long presses.
-- Portrait with USB at the bottom, rather than landscape.
-- The LED: errors and frames to the radio, or nothing.
-- The pairing number at 28 px, which costs a font's flash, or 20 px.
-- Forget on the device (the Core2 has it), under TNC's Change list.
+- What the screen shows for authorization mode.
 
 ## To judge on the device
 
-- Full and dim brightness, and the screen's readability at 12 px.
-- Whether a press counting on release feels slow.
-- Power off with USB plugged in.
-- Battery life with the screen dim, and dark.
-- The LED's flick for frames to the radio: too busy, or useful.
+- Battery life with the screen dim and dark, and with the red LED's
+  patterns.
+- Whether LVGL should stop drawing while the screen is dark, to save
+  power.

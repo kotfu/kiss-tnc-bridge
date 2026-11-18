@@ -203,7 +203,7 @@ void button_init()
     gpio_config(&cfg);
 }
 
-void play_blocking(const Sequence &s, uint8_t brightness)
+[[maybe_unused]] void play_blocking(const Sequence &s, uint8_t brightness)
 {
     for (size_t i = 0; i < s.count; i++) {
         led::show(s.steps[i].color, brightness);
@@ -219,6 +219,7 @@ enum class Press : uint8_t {
     ignored,     // installing, updating, or already used (a wake, the second of a double)
     candidate,   // could become a long press, or the first of a double
     cancel_pair, // a press while pairing: cancels it when let go
+    page,        // the StickC's pairing screen's: passed on when let go
     end_authorizing, // a press in authorization mode: ends it when let go
 };
 
@@ -308,6 +309,13 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
             press = Press::ignored;
             return;
         }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+        if (led::takes_a()) {
+            press = Press::page;
+            last_click_up = -10000;
+            return;
+        }
+#endif
         // Every press restarts the wake timer.
         bool was_dark = dark;
         awake_until = now + wake_ms;
@@ -324,6 +332,9 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
             ESP_LOGI(TAG, "double press: pair");
             press = Press::ignored;
             last_click_up = -10000;
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+            led::pairing_started();
+#endif
             radio::start_pairing();
         } else {
             press = Press::candidate;
@@ -346,6 +357,11 @@ void Ui::poll_button(int64_t now, Shown state, bool dark)
         ESP_LOGI(TAG, "press: cancel pairing");
         radio::cancel_pairing();
         break;
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    case Press::page:
+        led::press_a();
+        break;
+#endif
     case Press::end_authorizing:
         ESP_LOGI(TAG, "press: end authorization mode");
         auth::mode_end();
@@ -468,6 +484,11 @@ void ui_task(void *)
 bool reset_requested_at_boot()
 {
     button_init();
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    // The start-up screen, as soon as the device is on.
+    led::init();
+    led_ready = true;
+#endif
     // Held means down for three samples in a row, so a bounce isn't a hold.
     for (int i = 0; i < 3; i++) {
         if (!button_down()) {
@@ -478,22 +499,36 @@ bool reset_requested_at_boot()
     ESP_LOGW(TAG, "button held at power-on");
     led::init();
     led_ready = true;
+#if !CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    // The StickC goes straight to the warning on its screen: it has no LED
+    // to show power-on with.
     play_blocking(sequence_for(Event::power_on), boot_brightness);
+#endif
     power_on_shown = true;
 
     ESP_LOGW(TAG, "reset warning: let go to cancel");
     led::show(led::white, boot_brightness);
-    int64_t end = now_ms() + reset_warning_ms;
+    int64_t start = now_ms();
+    int64_t end = start + reset_warning_ms;
     int up_samples = 0;
     while (now_ms() < end) {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+        led::show_reset_warning(static_cast<float>(now_ms() - start) / reset_warning_ms);
+#endif
         vTaskDelay(pdMS_TO_TICKS(tick_ms));
         up_samples = button_down() ? 0 : up_samples + 1;
         if (up_samples >= 2) {
             ESP_LOGI(TAG, "let go: reset cancelled");
             led::show(led::off, boot_brightness);
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+            led::show_reset_cancelled();
+#endif
             return false;
         }
     }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    led::show_reset_warning(1);
+#endif
     return true;
 }
 
@@ -503,7 +538,12 @@ void show_reset_done_blocking()
         led::init();
         led_ready = true;
     }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    led::show_reset_done();
+    vTaskDelay(pdMS_TO_TICKS(1500)); // long enough to read
+#else
     play_blocking(sequence_for(Event::reset_done), boot_brightness);
+#endif
 }
 
 void start()
@@ -522,6 +562,13 @@ void start()
 
 void post(Event e)
 {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    if (e == Event::identify) {
+        led::wake(); // and the ATOM's sequence runs as before
+    } else if (e == Event::pairing_succeeded || e == Event::pairing_failed) {
+        led::pairing_result(e == Event::pairing_succeeded);
+    }
+#endif
     if (!queue) {
         return;
     }
@@ -542,8 +589,12 @@ void wait_idle(uint32_t timeout_ms)
 
 void set_updating(bool on) { updating_on = on; }
 
-bool show_installing(const char *, uint32_t timeout_ms)
+bool show_installing(const char *version, uint32_t timeout_ms)
 {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    return led::show_installing(version, timeout_ms);
+#endif
+    (void)version;
     installing_on = true;
     int64_t end = now_ms() + timeout_ms;
     while (!installing_shown && now_ms() < end) {
@@ -552,7 +603,12 @@ bool show_installing(const char *, uint32_t timeout_ms)
     return installing_shown;
 }
 
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+void starting(const char *step) { led::starting(step); }
+void started() { led::started(); }
+#else
 void starting(const char *) {}
 void started() {}
+#endif
 
 } // namespace ktb::ui

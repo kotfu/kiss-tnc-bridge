@@ -841,9 +841,26 @@ any that take effect only after `device.reboot`:
 ```
 
 The keys are provisional, from the roadmap's device settings and power
-saving tables. A board has the LED's keys or the screen's, not both: the
-ATOM Lite and StickC Plus SE the `led_*` keys, the Core2 the `screen_*`
-keys (`device.settings.get` shows which):
+saving tables. Besides `public_name`, a board has its UI's keys:
+
+| Board | Keys |
+|---|---|
+| ATOM Lite | Its RGB LED's: `led_normal`, `led_wake_seconds`, `led_brightness` |
+| Core2, StickC Plus SE | The screen's: `screen_normal`, `screen_timeout_seconds`. The status LED's (the Core2's green, the StickC's red): `led_when`, `led_pattern`, `led_activity_blink` |
+
+Both sets of LED keys start `led_`, so tell a board's UI from the keys
+`device.settings.get` returns (`led_normal` or `led_when`), not from the
+prefix. A key another board has fails as unknown, and the error lists
+the keys this board takes. Firmware 1.3.0 gave the StickC the ATOM's
+`led_*` keys, for the ATOM's UI it ran.
+
+`led_activity_blink` is a JSON boolean, not a string:
+
+```jsonc
+→ {"v":1,"id":8,"cmd":"device.settings.set","settings":{"led_when":"always","led_activity_blink":false}}
+```
+
+Every key:
 
 | Key | Values |
 |---|---|
@@ -853,8 +870,11 @@ keys (`device.settings.get` shows which):
 | `led_brightness` | 0–100 |
 | `led_normal` | What the LED shows while bridging: `bright`, `dim` (steady at half brightness), `breathe`, or `dark`, off until a press (see [atom-lite-ui.md](atom-lite-ui.md#normal-and-dark-mode)) |
 | `led_wake_seconds` | In dark mode, how long a press lights the LED |
-| `screen_normal` | The Core2's screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch or the power button (see [core2-ui.md](core2-ui.md#the-screen)) |
-| `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch or an event, on battery and USB alike |
+| `screen_normal` | The screen after the timeout: `bright` (always on), `dim` (the default), or `dark`, off until a touch, a button or the power button (see [core2-ui.md](core2-ui.md#the-screen) and [stickc-ui.md](stickc-ui.md#the-screen)) |
+| `screen_timeout_seconds` | 5–3600 (default 30): how long the screen stays bright after a touch, a press or an event, on battery and USB alike |
+| `led_when` | The status LED: lit `always`, while the screen is dark (`screen_dark`, the default), whether the timeout or the power button did it, or `never` (see [core2-ui.md](core2-ui.md#the-green-led) and [stickc-ui.md](stickc-ui.md#the-red-led)) |
+| `led_pattern` | How it's lit: `bright`, `dim` or `breathe` (the default), which peaks at `bright`. Each board fixes its own levels: the Core2's green is full and 25%, the StickC's red 8% and 2% |
+| `led_activity_blink` | `true` (the default) or `false`: whether it goes dark for 100 ms on each frame to or from the radio, while it's lit |
 
 Unknown keys and bad values fail with `bad_request`, and nothing changes.
 
@@ -871,7 +891,7 @@ Answers `{}` and shows a sequence the device shows for nothing else, so
 you can tell which device you're managing when you own several: on the
 ATOM Lite, magenta, blue, white, three times, then back to its state (see
 [atom-lite-ui.md](atom-lite-ui.md#events)). It shows in dark mode too. On
-the Core2 it wakes the screen.
+the Core2 and the StickC Plus SE it wakes the screen.
 
 ### `device.install_notice`
 
@@ -889,17 +909,20 @@ printable characters with no spaces, or the device answers `bad_request`.
 
 In download mode no firmware runs, so nothing can change what the device
 shows: the LED or screen keeps it through the whole install, until the new
-firmware starts. On the ATOM Lite and the StickC Plus SE it's steady
-white, over every other state and in every `led_normal` mode, dark
-included (see [atom-lite-ui.md](atom-lite-ui.md#states)), and the version
-isn't shown. The Core2 shows "Installing firmware v1.4.0..." with the
-backlight full on (see [core2-ui.md](core2-ui.md#installing-over-usb)).
+firmware starts. On the ATOM Lite it's steady white, over every other
+state and in every `led_normal` mode, dark included (see
+[atom-lite-ui.md](atom-lite-ui.md#states)), and the version isn't shown.
+The Core2 and the StickC Plus SE show "Installing firmware v1.4.0..."
+with the backlight on, even if the power button had turned it off (see
+[core2-ui.md](core2-ui.md#installing-over-usb)). The StickC's firmware
+1.3.0 had no install notice.
 
 - **It lasts until the device restarts.** There's no way to take it back
   and no time limit: a sender that decides not to install resets the
   device.
 - **Nothing else changes.** The device goes on bridging until the reset.
-  On the ATOM Lite and the StickC Plus SE the button does nothing.
+  On the ATOM Lite the button does nothing; on the StickC Plus SE, B and
+  the power button do nothing.
 - **Over USB serial only.** Over BLE a management app updates with
   [`firmware.update`](#firmwareupdate), which shows its own Updating
   state.

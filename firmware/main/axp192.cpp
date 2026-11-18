@@ -34,6 +34,7 @@ constexpr uint8_t REG_CHARGE_I = 0x7A;     // 13 bits, 0.5 mA
 constexpr uint8_t REG_DISCHARGE_I = 0x7C;  // 13 bits, 0.5 mA
 constexpr uint8_t REG_ADC_EN_1 = 0x82;
 constexpr uint8_t REG_GPIO1_CTRL = 0x92;   // the green power LED
+constexpr uint8_t REG_PWM1_DUTY_2 = 0x9a;  // GPIO1's PWM high time, of 0x99's 255
 constexpr uint8_t REG_GPIO2_CTRL = 0x93;   // the speaker amplifier's enable
 constexpr uint8_t REG_GPIO012_DATA = 0x94;
 constexpr uint8_t REG_GPIO34_CTRL = 0x95;  // GPIO4: the screen's reset
@@ -184,6 +185,15 @@ bool init(i2c_master_bus_handle_t bus)
     return true;
 }
 
+void green_led(uint8_t level)
+{
+    // The LED lights while GPIO1 is low: full high time is off (init).
+    static int shown = 0;
+    if (level != shown && write8(REG_PWM1_DUTY_2, static_cast<uint8_t>(255 - level))) {
+        shown = level;
+    }
+}
+
 void backlight(Backlight b)
 {
     if (b == Backlight::off) {
@@ -219,6 +229,8 @@ bool init(i2c_master_bus_handle_t bus)
     // The power button: on after 512 ms, a long press at 1 s, and off
     // after 6 s held, in the chip, as on the Core2 (the factory sets 4 s).
     write8(REG_PEK, 0x4d);
+    update(REG_IRQ_EN_3, 0xff, 0x03);   // report the button's presses
+    write8(REG_IRQ_STATUS_3, 0x03);     // and forget those from before
     update(REG_ADC_EN_1, 0xff, 0xc0);      // battery voltage and current
     update(REG_LDO23_V, 0xf0, 0x0c);       // LDO3 (the screen's logic) at 3.0 V
     // LDO3 on, LDO2 (the backlight) off until something is drawn.
@@ -285,6 +297,12 @@ Power read()
     // topping up (until under 10% of its current): not full until it stops.
     if (p.charging && p.percent > 99) {
         p.percent = 99;
+    }
+    // On external power with the charger stopped, it has finished: the
+    // battery is full, though it rests below the curve's top once the
+    // charge current stops (a StickC read 4.135 V, 98%, with 0 mA flowing).
+    if (p.external && p.battery && !p.charging) {
+        p.percent = 100;
     }
     return p;
 }
