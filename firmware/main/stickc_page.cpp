@@ -205,8 +205,10 @@ int64_t now_ms() { return esp_timer_get_time() / 1000; }
 
 // ---- the pages ----
 
-constexpr int page_count = 3;
-const char *const page_titles[page_count] = {"Bridge", "TNC", "System"};
+// The Errors page is the fourth, and only there while there's an error.
+constexpr int page_count = 4;
+constexpr int errors_page = 3;
+const char *const page_titles[page_count] = {"Bridge", "TNC", "System", "Errors"};
 int page = 0;
 lv_obj_t *pages[page_count];
 lv_obj_t *marker, *title;
@@ -226,6 +228,29 @@ struct {
 struct {
     lv_obj_t *uptime, *last_run, *firmware, *screen, *led;
 } sy;
+
+struct {
+    lv_obj_t *list;   // each error's title and message
+    lv_obj_t *mark;   // the top bar's warning, on every page
+    size_t shown = 0; // how many the list has
+    std::string text; // what they said, to rebuild only on a change
+} er;
+
+// The pages B goes round: the Errors page only while there's an error.
+int pages_now() { return errors::any() ? page_count : page_count - 1; }
+
+// The Core2's words for each error (core2_ui.cpp).
+const char *error_title(errors::Error e)
+{
+    switch (e) {
+    case errors::Error::storage: return "Settings can't be saved";
+    case errors::Error::bluetooth: return "Bluetooth didn't start";
+    case errors::Error::phones: return "Apps can't find the device";
+    case errors::Error::device_key: return "The device has no key";
+    case errors::Error::debug: return "A test error (debug.set)";
+    }
+    return "An error";
+}
 
 struct Seen {
     uint32_t rx = 0, tx = 0;
@@ -284,6 +309,11 @@ void build_chrome(lv_obj_t *scr)
     title = label(scr, &lv_font_montserrat_12, c_fg, 5 + lv_obj_get_width(marker) + 6, 3);
     pg.batt_pct = label(scr, &lv_font_montserrat_12, c_dim, 0, 3);
     lv_obj_align(pg.batt_pct, LV_ALIGN_TOP_RIGHT, -28, 3);
+    // While there's an error, a red warning left of the battery: B goes
+    // round to the Errors page.
+    er.mark = label(scr, &lv_font_montserrat_12, c_red, 0, 3);
+    lv_label_set_text(er.mark, LV_SYMBOL_WARNING);
+    show(er.mark, false);
     lv_obj_t *outline = box(scr, W - 24, 6, 18, 9);
     lv_obj_set_style_border_width(outline, 1, 0);
     lv_obj_set_style_border_color(outline, c_dim, 0);
@@ -397,6 +427,68 @@ void build_system(lv_obj_t *p)
     sy.led = system_row(p, "LED", 107);
 }
 
+// Every error, its title in red and its whole message, which says what to
+// do: as the top of the Core2's System page.
+void build_errors(lv_obj_t *p)
+{
+    er.list = box(p, pad, bar_h + 4, line_w, H - bar_h - 6);
+    lv_obj_set_flex_flow(er.list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(er.list, 2, 0);
+}
+
+void update_errors(const std::vector<errors::Item> &errs)
+{
+    std::string text;
+    for (auto &e : errs) {
+        text += e.message + "\n";
+    }
+    if (errs.size() == er.shown && text == er.text) {
+        return;
+    }
+    er.shown = errs.size();
+    er.text = text;
+    lv_obj_clean(er.list);
+    if (errs.empty()) {
+        return;
+    }
+    // Each title whole; the messages share what's left, cut with dots if
+    // there's more than fits (two errors at once are rare).
+    int title_h = lv_font_get_line_height(&lv_font_montserrat_14);
+    int line_h = lv_font_get_line_height(&lv_font_montserrat_12);
+    int n = static_cast<int>(errs.size());
+    int each = (H - bar_h - 6 - n * (title_h + 2) - (n - 1) * 4) / n;
+    each = std::max(line_h, each / line_h * line_h);
+    for (int i = 0; i < n; i++) {
+        lv_obj_t *t = lv_label_create(er.list);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(t, c_red, 0);
+        lv_obj_set_width(t, line_w);
+        lv_label_set_long_mode(t, LV_LABEL_LONG_MODE_DOTS);
+        lv_label_set_text(t, error_title(errs[i].error));
+        lv_obj_t *m = lv_label_create(er.list);
+        lv_obj_set_style_text_font(m, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(m, c_fg, 0);
+        lv_obj_set_width(m, line_w);
+        std::string msg = errs[i].message;
+        if (!msg.empty()) {
+            msg[0] = static_cast<char>(toupper(static_cast<unsigned char>(msg[0])));
+            if (msg.back() != '.') {
+                msg += ".";
+            }
+        }
+        lv_label_set_text(m, msg.c_str());
+        lv_label_set_long_mode(m, LV_LABEL_LONG_MODE_WRAP);
+        lv_obj_update_layout(m);
+        if (lv_obj_get_height(m) > each) {
+            lv_label_set_long_mode(m, LV_LABEL_LONG_MODE_DOTS);
+            lv_obj_set_height(m, each);
+        }
+        if (i + 1 < n) {
+            lv_obj_set_style_margin_bottom(m, 4, 0);
+        }
+    }
+}
+
 // The screen's settings, as the Core2's System page says them. They're
 // changed from a management app.
 std::string screen_line()
@@ -436,7 +528,7 @@ void show_page(int i)
         show(pages[j], j == i);
     }
     char b[24];
-    snprintf(b, sizeof(b), "%d/%d", i + 1, page_count);
+    snprintf(b, sizeof(b), "%d/%d", i + 1, pages_now());
     set_bar(b, page_titles[i]);
 }
 
@@ -845,6 +937,7 @@ void build(lv_obj_t *scr)
     build_bridge(pages[0]);
     build_tnc(pages[1]);
     build_system(pages[2]);
+    build_errors(pages[errors_page]);
     build_pairing(scr);
     build_chrome(scr);
     show_page(0);
@@ -869,6 +962,12 @@ void update_battery()
 void radio_state(const radio::View &v, std::string &text, lv_color_t &color, std::string &time)
 {
     time.clear();
+    if (errors::is_set(errors::Error::bluetooth)) {
+        // In place of "Stopped", as the Core2's banner under the radio.
+        text = error_title(errors::Error::bluetooth);
+        color = c_red;
+        return;
+    }
     switch (v.state) {
     case radio::State::none:
         text = "Press A twice";
@@ -993,8 +1092,11 @@ void tick(lv_timer_t *)
     int n = static_cast<int>(apps.size());
     char note[32];
     snprintf(note, sizeof(note), "No apps connected (of %d)", phones::max_sessions());
-    set_text(pg.apps_note, note);
-    show(pg.apps_note, n == 0);
+    // Or in its place, as the Core2's banner under Apps.
+    bool phones_error = errors::is_set(errors::Error::phones);
+    set_text(pg.apps_note, phones_error ? error_title(errors::Error::phones) : note);
+    lv_obj_set_style_text_color(pg.apps_note, phones_error ? c_red : c_dim, 0);
+    show(pg.apps_note, n == 0 || phones_error);
     std::map<std::string, Seen> next;
     for (int i = 0; i < 2; i++) {
         bool on = i < n;
@@ -1028,7 +1130,16 @@ void tick(lv_timer_t *)
     // connecting or dropping, an app coming or going, a new error.
     static bool was_connected = false;
     static size_t last_apps = 0, last_errors = 0;
-    size_t errs = errors::list().size();
+    std::vector<errors::Item> err_list = errors::list();
+    size_t errs = err_list.size();
+    update_errors(err_list);
+    show(er.mark, errs > 0);
+    lv_obj_align_to(er.mark, pg.batt_pct, LV_ALIGN_OUT_LEFT_MID, -4, 0);
+    if ((errs > 0) != (last_errors > 0) && !pair_up) {
+        // The Errors page comes or goes: the marker's count changes, and
+        // off the Errors page once there are none.
+        show_page(errs == 0 && page == errors_page ? errors_page - 1 : page);
+    }
     if (connected != was_connected || apps.size() != last_apps || errs > last_errors) {
         wake_screen();
     }
@@ -1075,7 +1186,7 @@ void read_b(lv_timer_t *)
             } else if (pair_up) {
                 pair_b();
             } else {
-                show_page((page + 1) % page_count);
+                show_page((page + 1) % pages_now());
             }
             update_light(now_ms());
         }

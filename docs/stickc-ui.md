@@ -3,7 +3,8 @@
 The M5Stack StickC Plus SE has a 135×240 color screen, two buttons, a
 power button and a red LED (see the roadmap's
 [hardware notes](roadmap.md#m5stickc-plus-se), tried on a device). This
-page is what the StickC's own UI does: three pages to watch the bridge,
+page is what the StickC's own UI does: three pages to watch the bridge
+(and a fourth while there's an error),
 the Core2's screen and LED settings, and the ATOM Lite's button for what
 you do on the device. Everything else is done from a management app over
 the [control API](control-api.md), as on the ATOM Lite and the Core2.
@@ -58,7 +59,8 @@ A press of A also wakes the screen, and a double press or a hold does
 what it does whatever the screen shows. On the pairing screen, A does
 what its word at the bottom right says (see [Pairing](#pairing)).
 
-**B moves to the next page:** Bridge, TNC, System, and round to Bridge.
+**B moves to the next page:** Bridge, TNC, System, Errors while there's
+an error, and round to Bridge.
 While the screen is dark, a press of B only wakes it, on the page it was
 on (see [The screen](#the-screen)). On the pairing screen, B does what
 its word at the top left says. B is read every 20 ms, and a press
@@ -69,9 +71,10 @@ that can glitch it.
 
 Every page has a **top bar**, 20 px, over a rule:
 
-- At the left, beside B, the page marker, `1/3`, then the page's title,
-  so B is the way to the others.
-- At the right, the battery's percentage, then the
+- At the left, beside B, the page marker, `1/3` (`1/4` while there's
+  an error), then the page's title, so B is the way to the others.
+- At the right, while there's an error, a red warning mark (see
+  [Errors](#errors)); then the battery's percentage and the
   [battery](#the-battery).
 
 Pages are stacked top and bottom, never in left and right halves: a
@@ -102,7 +105,8 @@ A4:C3:F0:2B:77:10  3m             ■ ■
   in color and how long, in the Core2's words: "Connected for 2h 14m",
   "Connecting for 5s", "Waiting for 5s" (a BLE TNC), "Retrying in 8s
   for 1m", "Pairing", "Stopped", or with no radio "Press A twice to pair
-  a radio".
+  a radio". If Bluetooth didn't start, "Bluetooth didn't start" in red
+  (see [Errors](#errors)).
 - **RX and TX,** at the right at 20 px while the radio is connected,
   each with a light as tall as the capitals: green for a frame from the
   radio, amber for a frame to it. A light shows for 300 ms. There are no
@@ -113,7 +117,8 @@ A4:C3:F0:2B:77:10  3m             ■ ■
   connected, and two lights at the right, green for a frame from the app
   and amber for a frame to it. The times start at one column, past the
   widest an address can be, so they line up whatever the addresses are.
-  With none, "No apps connected (of 2)".
+  With none, "No apps connected (of 2)", or in red "Apps can't find the
+  device" if the BLE KISS service didn't start (see [Errors](#errors)).
 
 ## TNC page
 
@@ -375,6 +380,36 @@ A is read before any settings are loaded or Bluetooth starts, and the
 screen is set up before A is read. It's a GPIO, so unlike the Core2's
 touch circles (issue #20) nothing has to be calibrated first.
 
+## Errors
+
+The errors are the ATOM's (see
+[atom-lite-ui.md](atom-lite-ui.md#errors)), with the codes, titles and
+messages the Core2 shows and `device.info` gives. The Core2's red
+banners have no room here; the StickC shows them in three places:
+
+- **A red warning mark** in the top bar, left of the battery, on every
+  page while there's an error.
+- **The Errors page,** `4/4`, after System, only while there's an
+  error: each error's title in red at 14 px, and under it its whole
+  message, which says what to do, at 12 px. With more than one, every
+  title shows, and the messages share the rest of the page, cut with dots
+  if they don't fit. When the last error clears, the page goes, and if
+  it was showing, System takes its place.
+- **In place,** where an error stops something on the Bridge and TNC
+  pages:
+
+| Error | Title | In place |
+|---|---|---|
+| `bluetooth` | Bluetooth didn't start | The radio's state, on Bridge and TNC, in place of "Stopped" |
+| `phones` | Apps can't find the device | The apps line on Bridge, in place of "No apps connected (of 2)" |
+| `storage` | Settings can't be saved | The Errors page only |
+| `device_key` | The device has no key | The Errors page only |
+
+A new error wakes the screen, as on the Core2, on the page it was on.
+A development build's `debug.set error=true` (`firmware/tools/ktbdev.py
+debug error=true`) raises a test error, "A test error (debug.set)", to
+see it.
+
 ## Not on the screen yet
 
 Some of what A does shows on the ATOM's LED, which the StickC doesn't
@@ -383,7 +418,6 @@ have, and nothing on the screen stands in for it yet:
 | What | On the screen now |
 |---|---|
 | Authorization mode | Nothing: the authorization code is over USB (`ktbctl auth code`) or from an authorized management app |
-| Errors | Only the screen waking: a management app or `ktbctl device info` shows them |
 
 ## Not on the device
 
@@ -400,7 +434,7 @@ have, and nothing on the screen stands in for it yet:
 
 ## To decide
 
-- What the screen shows for authorization mode and errors.
+- What the screen shows for authorization mode.
 
 ## To judge on the device
 
