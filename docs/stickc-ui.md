@@ -351,9 +351,29 @@ holding it through the 3 s warning. Every setting goes back to its
 default, the radio is forgotten, and every authorized management app is
 removed; the firmware, the device's key and the authorization code stay.
 
-A is read before any settings are loaded or Bluetooth starts. It's a
-GPIO, so unlike the Core2's touch circles (issue #20) nothing has to be
-calibrated first.
+The screen shows the Core2's words where the ATOM's LED shows white:
+
+```
+              Reset?
+  Clears all settings, TNC, and
+ authorized management apps. The
+firmware and the authorization code
+          are preserved.
+ ━━━━━━━━━━━━━━━━──────────────────
+ Keep holding A. Let go to cancel.
+```
+
+- **The warning:** "Reset?" in amber, what it clears, and an amber bar
+  filling over the 3 s. It's the first thing on the screen: there's no
+  power-on sequence first, as the ATOM's LED has.
+- **Let go** before the bar is full, and the start-up screen comes back
+  and the StickC starts as usual. Nothing is cleared.
+- **Held to the end:** "Settings cleared" and "Restarting...", for
+  1.5 s, then the restart, with no radio.
+
+A is read before any settings are loaded or Bluetooth starts, and the
+screen is set up before A is read. It's a GPIO, so unlike the Core2's
+touch circles (issue #20) nothing has to be calibrated first.
 
 ## Not on the screen yet
 
@@ -363,7 +383,6 @@ have, and nothing on the screen stands in for it yet:
 | What | On the screen now |
 |---|---|
 | Authorization mode | Nothing: the authorization code is over USB (`ktbctl auth code`) or from an authorized management app |
-| Reset's warning, and reset done | Nothing: the start-up screen stays up |
 | Errors | Only the screen waking: a management app or `ktbctl device info` shows them |
 
 ## Not on the device
@@ -381,7 +400,7 @@ have, and nothing on the screen stands in for it yet:
 
 ## To decide
 
-- What the screen shows for authorization mode, reset and errors.
+- What the screen shows for authorization mode and errors.
 
 ## To judge on the device
 

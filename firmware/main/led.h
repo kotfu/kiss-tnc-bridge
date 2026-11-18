@@ -58,4 +58,12 @@ void press_a();
 void pairing_started();
 void pairing_result(bool ok);
 
+// The StickC's reset at power-on (ui::reset_requested_at_boot()), as the
+// Core2's words: the warning with its bar, progress 0 to 1, while A is
+// held; the start-up screen again if A is let go; and the reset done,
+// before the restart.
+void show_reset_warning(float progress);
+void show_reset_cancelled();
+void show_reset_done();
+
 } // namespace ktb::led

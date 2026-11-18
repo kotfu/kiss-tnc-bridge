@@ -203,7 +203,7 @@ void button_init()
     gpio_config(&cfg);
 }
 
-void play_blocking(const Sequence &s, uint8_t brightness)
+[[maybe_unused]] void play_blocking(const Sequence &s, uint8_t brightness)
 {
     for (size_t i = 0; i < s.count; i++) {
         led::show(s.steps[i].color, brightness);
@@ -499,22 +499,36 @@ bool reset_requested_at_boot()
     ESP_LOGW(TAG, "button held at power-on");
     led::init();
     led_ready = true;
+#if !CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    // The StickC goes straight to the warning on its screen: it has no LED
+    // to show power-on with.
     play_blocking(sequence_for(Event::power_on), boot_brightness);
+#endif
     power_on_shown = true;
 
     ESP_LOGW(TAG, "reset warning: let go to cancel");
     led::show(led::white, boot_brightness);
-    int64_t end = now_ms() + reset_warning_ms;
+    int64_t start = now_ms();
+    int64_t end = start + reset_warning_ms;
     int up_samples = 0;
     while (now_ms() < end) {
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+        led::show_reset_warning(static_cast<float>(now_ms() - start) / reset_warning_ms);
+#endif
         vTaskDelay(pdMS_TO_TICKS(tick_ms));
         up_samples = button_down() ? 0 : up_samples + 1;
         if (up_samples >= 2) {
             ESP_LOGI(TAG, "let go: reset cancelled");
             led::show(led::off, boot_brightness);
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+            led::show_reset_cancelled();
+#endif
             return false;
         }
     }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    led::show_reset_warning(1);
+#endif
     return true;
 }
 
@@ -524,7 +538,12 @@ void show_reset_done_blocking()
         led::init();
         led_ready = true;
     }
+#if CONFIG_KTB_BOARD_STICKC_PLUS_SE
+    led::show_reset_done();
+    vTaskDelay(pdMS_TO_TICKS(1500)); // long enough to read
+#else
     play_blocking(sequence_for(Event::reset_done), boot_brightness);
+#endif
 }
 
 void start()

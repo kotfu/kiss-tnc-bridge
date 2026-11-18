@@ -1360,6 +1360,84 @@ bool show_installing(const char *version, uint32_t timeout_ms)
     return true;
 }
 
+// ---- reset at power-on ----
+// The Core2's reset screen, fitted to 135 px, with a bar for the ATOM's
+// 3 s warning in place of the Core2's circle to hold.
+lv_obj_t *reset_scr = nullptr;
+lv_obj_t *reset_bar = nullptr;
+
+void show_reset_warning(float progress)
+{
+    if (!ready) {
+        return;
+    }
+    lvgl_port_lock(0);
+    if (!reset_scr) {
+        reset_scr = lv_obj_create(nullptr);
+        fill(reset_scr, c_bg);
+        lv_obj_set_scrollable(reset_scr, false);
+        lv_obj_t *t = label(reset_scr, &lv_font_montserrat_20, c_amber, 0, 0);
+        lv_label_set_text(t, "Reset?");
+        lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
+        lv_obj_t *d = label(reset_scr, &lv_font_montserrat_12, c_fg, 0, 0);
+        lv_obj_set_width(d, line_w);
+        lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
+        lv_label_set_long_mode(d, LV_LABEL_LONG_MODE_WRAP);
+        lv_label_set_text(d, "Clears all settings, TNC, and authorized management apps. The firmware and the "
+                             "authorization code are preserved.");
+        lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 36);
+        reset_bar = lv_bar_create(reset_scr);
+        lv_obj_remove_style_all(reset_bar);
+        lv_obj_set_pos(reset_bar, pad, 94);
+        lv_obj_set_size(reset_bar, line_w, 4);
+        lv_obj_set_style_bg_color(reset_bar, c_line, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(reset_bar, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(reset_bar, 2, LV_PART_MAIN);
+        lv_obj_set_style_bg_color(reset_bar, c_amber, LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(reset_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(reset_bar, 2, LV_PART_INDICATOR);
+        lv_bar_set_range(reset_bar, 0, 1000);
+        lv_obj_t *h = label(reset_scr, &lv_font_montserrat_12, c_dim, 0, 0);
+        lv_label_set_text(h, "Keep holding A. Let go to cancel.");
+        lv_obj_align(h, LV_ALIGN_TOP_MID, 0, 108);
+        lv_screen_load(reset_scr);
+    }
+    lv_bar_set_value(reset_bar, static_cast<int32_t>(std::min(1.0f, progress) * 1000), LV_ANIM_OFF);
+    lvgl_port_unlock();
+}
+
+void show_reset_cancelled()
+{
+    if (!ready || !reset_scr) {
+        return;
+    }
+    lvgl_port_lock(0);
+    lv_screen_load(splash_scr);
+    lv_obj_delete(reset_scr);
+    reset_scr = nullptr;
+    lvgl_port_unlock();
+}
+
+void show_reset_done()
+{
+    if (!ready) {
+        return;
+    }
+    lvgl_port_lock(0);
+    lv_obj_t *scr = lv_obj_create(nullptr);
+    fill(scr, c_bg);
+    lv_obj_set_scrollable(scr, false);
+    lv_obj_t *t = label(scr, &lv_font_montserrat_20, c_fg, 0, 0);
+    lv_label_set_text(t, "Settings cleared");
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 44);
+    lv_obj_t *r = label(scr, &lv_font_montserrat_14, c_dim, 0, 0);
+    lv_label_set_text(r, "Restarting...");
+    lv_obj_align(r, LV_ALIGN_TOP_MID, 0, 74);
+    lv_screen_load(scr);
+    lv_refr_now(display);
+    lvgl_port_unlock();
+}
+
 // The ATOM's LED states and events aren't shown in this trial: the pages
 // are, lit from init().
 void show(Rgb, uint8_t, float) {}
