@@ -5,7 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.4.0 (22 November 2026)
+
+ktbctl for firmware 1.4.0: it tells a device that an install is coming,
+puts a device back on its default name, and shows how long its last run
+lasted. The version follows the firmware's, 1.4.
 
 ### Added
 
