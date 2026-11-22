@@ -8,7 +8,12 @@ CI takes a release's notes from its section here, so each version needs a
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and the firmware adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 1.4.0 (2026-11-22)
+
+The StickC Plus SE has its own UI, with pairing, reset and errors on its
+screen, and it and the Core2 have a status LED that shows a device with
+its screen dark is on. A BLE TNC on the BLE KISS API, such as an Ailunce
+HA2, can be the radio, and a device shows that it's being installed.
 
 ### Added
 
